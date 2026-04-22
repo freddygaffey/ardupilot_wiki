@@ -6,7 +6,7 @@ Brake Mode
 
 This very simple flight mode simply stops the vehicle as soon as
 possible.  Once invoked, this mode does not accept any input from
-the pilot. This mode requires GPS.
+the pilot. This mode requires good position (GPS or other).
 
 Brake mode is subject to acceleration and angle limits imposed by the
 position and attitude controllers. For more aggressive braking, you can
