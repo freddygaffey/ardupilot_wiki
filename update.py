@@ -667,6 +667,39 @@ def copy_common_source_files(start_dir=COMMON_DIR, clean_common=False, site: Opt
     info(f"Common files ({site_label}): {files_copied} copied, {files_skipped} unchanged, {files_removed} removed")
 
 
+def copy_common_templates(site: Optional[str] = None):
+    """
+    Copies the shared Sphinx template overrides in common/_templates into each
+    wiki's source/_templates directory.
+
+    These are kept out of copy_common_source_files() because that function
+    dispatches on file extension (.rst, .css, .js) and routes everything into
+    source/docs or source/_static, neither of which is where Sphinx looks for
+    templates.
+    """
+    template_dir = Path(COMMON_DIR) / "_templates"
+    if not template_dir.is_dir():
+        return
+
+    allowed_wikis = {site} if site else set(ALL_WIKIS)
+    templates = sorted(template_dir.glob("*.html"))
+    if not templates:
+        return
+
+    copied = 0
+    for wiki in allowed_wikis:
+        target_dir = Path(wiki) / "source" / "_templates"
+        target_dir.mkdir(parents=True, exist_ok=True)
+        for template in templates:
+            targetfile = target_dir / template.name
+            if targetfile.exists() and filecmp.cmp(template, targetfile, shallow=False):
+                continue
+            shutil.copy2(template, targetfile)
+            copied += 1
+
+    debug(f"Common templates: {copied} copied into {len(allowed_wikis)} wiki(s)")
+
+
 def get_copy_targets(content):
     p = re.compile(r'\[copywiki.*?destination\=\"(.*?)\".*?\]', flags=re.DOTALL)
     m = p.search(content)
@@ -1186,6 +1219,13 @@ class WikiUpdater:
             help="Build multiple parameters pages for each vehicle based on its firmware repo.",
         )
         parser.add_argument(
+            "--offline",
+            dest="offline",
+            action="store_true",
+            default=False,
+            help="also build the downloadable offline copies and their manifest",
+        )
+        parser.add_argument(
             "--verbose",
             dest="verbose",
             action="store_true",
@@ -1246,6 +1286,7 @@ class WikiUpdater:
         info("=== Step 4: Copying common source files ===")
         info(f"Time elapsed so far: {time.time() - tstart:.2f} seconds")
         copy_common_source_files(clean_common=self.args.clean_common, site=self.args.site)
+        copy_common_templates(site=self.args.site)
 
         info("=== Step 5: Building documentation with Sphinx ===")
         info(f"Time elapsed so far: {time.time() - tstart:.2f} seconds")
@@ -1255,6 +1296,19 @@ class WikiUpdater:
             cache_parameters_files(self.args.site)
 
         check_build(self.args.site)
+
+        # Offline artefacts are produced as part of an ordinary build so that a
+        # maintainer has nothing extra to run or configure. They are assembled
+        # from the html output that already exists, so the cost is packing time
+        # rather than a second Sphinx pass.
+        if self.args.offline:
+            info("=== Step 5b: Building offline artefacts ===")
+            info(f"Time elapsed so far: {time.time() - tstart:.2f} seconds")
+            try:
+                from scripts.build_offline_artifacts import build as build_offline
+                build_offline(ALL_WIKIS, Path(self.args.destdir or "."))
+            except Exception as ex:  # never let this fail an otherwise good build
+                error(f"offline artefact generation failed: {ex}")
 
         if self.args.enablebackups:
             make_backup(building_time, self.args.site, self.args.destdir, self.args.backupdestdir)
