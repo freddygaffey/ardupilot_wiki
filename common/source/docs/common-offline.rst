@@ -113,22 +113,19 @@ Offline Copies
 
      <h2>Download a copy</h2>
 
-     <div class="dl">
-       <div id="archive-links"></div>
-       <div class="hint">Unpack and open <code class="docutils literal">index.html</code>.
-         Pages load instantly; search needs to be served rather than opened
-         straight from disk.</div>
-     </div>
+     <p>Both are built here from the pages saved above, so nothing extra is
+        downloaded and each file contains exactly the wikis you kept &mdash;
+        shared images included.</p>
 
      <div class="dl">
-       <a id="dl-pyz" href="#">Build wiki.pyz from saved pages</a>
+       <a id="dl-pyz" href="#">Save as a single .pyz</a>
        <div class="hint">Built here from the pages you have saved, so nothing extra is downloaded.
          <code class="docutils literal">python3 wiki.pyz</code> serves it locally
          &mdash; instant pages, working search, nothing extracted to disk.</div>
      </div>
 
      <div class="dl">
-       <a id="dl-single" href="#">Build a single HTML file from saved pages</a>
+       <a id="dl-single" href="#">Save as a single .html</a>
        <div class="hint">Double-click, nothing to install. Around 30 seconds to
          open and several hundred megabytes, but Ctrl+F searches every page at
          once and it works from a USB stick.</div>

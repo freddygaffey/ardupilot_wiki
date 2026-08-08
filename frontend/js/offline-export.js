@@ -172,6 +172,10 @@
    * last resort.
    */
   function openDownload(filename) {
+    // Order matters, and none of these may be assumed available. A page can be
+    // uncontrolled for perfectly ordinary reasons - a hard reload, a first
+    // visit before the worker activates, a worker that failed to install - so
+    // the export has to work regardless rather than depend on one path.
     if (navigator.serviceWorker && navigator.serviceWorker.controller &&
         typeof TransformStream !== 'undefined') {
       var ts = new TransformStream();
@@ -200,6 +204,7 @@
       });
     }
 
+    // Needs a user gesture, which the click that got us here provides.
     if (global.showSaveFilePicker) {
       return global.showSaveFilePicker({ suggestedName: filename })
         .then(function (handle) { return handle.createWritable(); })
@@ -238,6 +243,19 @@
     '    z = getattr(_local, "z", None)',
     '    if z is None: z = _local.z = zipfile.ZipFile(_p)',
     '    return z',
+    'import re as _re',
+    'def _candidates(name):',
+    '    yield name',
+    '    yield name.rstrip("/") + "/index.html"',
+    '    # Shared images are stored once at site/_images/, but pages ask',
+    '    # for them under their own wiki: site/rover/_images/x.png.',
+    '    alias = _re.sub(r"^site/[^/]+/_images/", "site/_images/", name)',
+    '    if alias != name: yield alias',
+    '    # A single-wiki archive has no page at the root, so send / to it.',
+    '    if name in ("site/", "site/index.html"):',
+    '        for n in _zip().namelist():',
+    '            if n.count("/") == 2 and n.endswith("/index.html"): yield n; return',
+
     'class H(http.server.BaseHTTPRequestHandler):',
     '    protocol_version = "HTTP/1.1"',
     '    def log_message(self, *a): pass',
@@ -245,10 +263,12 @@
     '        path = self.path.split("?")[0].split("#")[0]',
     '        if path.endswith("/"): path += "index.html"',
     '        name = PREFIX + path.lstrip("/")',
-    '        try: body = _zip().read(name)',
-    '        except KeyError:',
-    '            try: body = _zip().read(name.rstrip("/") + "/index.html")',
-    '            except KeyError: self.send_error(404); return',
+    '        body = None',
+    '        for cand in _candidates(name):',
+    '            try:',
+    '                body = _zip().read(cand); break',
+    '            except KeyError: pass',
+    '        if body is None: self.send_error(404, "Not in archive: " + name); return',
     '        try:',
     '            self.send_response(200)',
     '            self.send_header("Content-Type", mimetypes.guess_type(name)[0] or "application/octet-stream")',
@@ -351,13 +371,70 @@
                        .replace(/[^A-Za-z0-9]+/g, '-').toLowerCase();
   }
 
+  // The shell: a small single-page app rather than a concatenation.
+  //
+  // Pages are written as inert <script type="text/plain"> blocks. The browser
+  // parses them as raw text and does not render them or decode the data URIs
+  // inside, so opening the file costs one parse instead of laying out 747 pages
+  // and decoding several hundred megabytes of images at once. A page is only
+  // materialised when you navigate to it.
+  var SHELL_CSS =
+    'html,body{margin:0;height:100%}' +
+    'body{font-family:Lato,"Helvetica Neue",Helvetica,Arial,sans-serif;' +
+    'color:#404040;line-height:1.65;display:flex}' +
+    '#ap-side{width:300px;flex:none;background:#343131;color:#d9d9d9;' +
+    'display:flex;flex-direction:column;height:100vh}' +
+    '#ap-brand{background:#2980b9;color:#fff;padding:14px 16px;font-weight:700}' +
+    '#ap-brand small{display:block;font-weight:400;opacity:.85;font-size:12px}' +
+    '#ap-search{margin:12px;padding:8px 10px;border:0;border-radius:3px;' +
+    'font:inherit;width:calc(100% - 24px)}' +
+    '#ap-list{overflow-y:auto;flex:1;padding-bottom:20px}' +
+    '#ap-list a{display:block;color:#d9d9d9;text-decoration:none;padding:6px 16px;' +
+    'font-size:14px;border-left:3px solid transparent}' +
+    '#ap-list a:hover{background:#2e2b2b}' +
+    '#ap-list a.on{background:#2e2b2b;border-left-color:#2980b9;color:#fff}' +
+    '#ap-main{flex:1;min-width:0;overflow-y:auto;height:100vh;background:#fcfcfc}' +
+    '#ap-doc{max-width:800px;padding:26px 40px 80px}' +
+    '#ap-doc img{max-width:100%;height:auto}' +
+    '#ap-doc a{color:#2980b9}' +
+    '#ap-bar{background:#2980b9;color:#fff;padding:8px 16px;font-size:13px}' +
+    '@media(max-width:800px){body{flex-direction:column}#ap-side{width:auto;height:auto}' +
+    '#ap-main{height:auto}}';
+
+  var SHELL_JS =
+    '(function(){' +
+    'var idx=JSON.parse(document.getElementById("ap-index").textContent);' +
+    'var list=document.getElementById("ap-list");' +
+    'var doc=document.getElementById("ap-doc");' +
+    'var search=document.getElementById("ap-search");' +
+    'var links=idx.map(function(p,i){' +
+    'var a=document.createElement("a");a.href="#"+i;a.textContent=p.t;' +
+    'a.dataset.i=i;list.appendChild(a);return a;});' +
+    // Rendering pulls the text out of its inert script block. Until this runs,
+    // the page is just characters in the document and costs nothing to keep.
+    'function show(i){' +
+    'var el=document.getElementById("p"+i);if(!el)return;' +
+    'doc.innerHTML=el.textContent;doc.parentNode.scrollTop=0;' +
+    'links.forEach(function(a,j){a.className=(j===i)?"on":"";});' +
+    'var on=links[i];if(on&&on.scrollIntoView)on.scrollIntoView({block:"nearest"});}' +
+    'function route(){var i=parseInt((location.hash||"#0").slice(1),10);show(isNaN(i)?0:i);}' +
+    'window.addEventListener("hashchange",route);' +
+    // Filtering the sidebar is title-only on purpose: a full-text index over
+    // every page would have to be built at export time and would add weight to
+    // a file that is already large. Ctrl+F still searches the open page.
+    'search.addEventListener("input",function(){' +
+    'var q=search.value.toLowerCase();' +
+    'links.forEach(function(a){' +
+    'a.style.display=a.textContent.toLowerCase().indexOf(q)===-1?"none":"";});});' +
+    'route();})();';
+
   /**
    * Assemble one self-contained HTML file from the cached pages.
    *
-   * Images are inlined as data URIs, including the shared common set - a single
-   * file cannot reference an archive alongside it, so everything it needs has
-   * to be in it. Written straight to the stream page by page: the finished file
-   * runs to hundreds of megabytes and cannot be built as a string first.
+   * Images are inlined as data URIs, the shared common set included: a single
+   * file cannot reference an archive beside it, so everything it needs has to
+   * be in it. Written straight to the stream page by page, because the finished
+   * file runs to hundreds of megabytes and cannot be built as a string first.
    */
   function exportHtml(wikiIds, filename, onProgress) {
     var enc = new TextEncoder();
@@ -380,41 +457,32 @@
       pages.sort(function (a, b) { return a.path < b.path ? -1 : 1; });
 
       return openDownload(filename).then(function (sink) {
-        var done = 0;
+        var done = 0, index = [];
         var write = function (text) { return sink.write(enc.encode(text)); };
 
         return write(
           '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
-          '<meta name="viewport" content="width=device-width, initial-scale=1">' +
-          '<title>ArduPilot wiki (offline)</title><style>' +
-          'body{margin:0;font-family:Lato,Helvetica,Arial,sans-serif;color:#404040;' +
-          'line-height:1.65}.ap-wrap{max-width:900px;margin:0 auto;padding:0 20px}' +
-          '.ap-page{border-top:1px solid #e1e4e5;padding-top:24px;margin-top:40px}' +
-          'img{max-width:100%;height:auto}a{color:#2980b9}' +
-          '</style></head><body><div class="ap-wrap">' +
-          '<div style="background:#2980b9;color:#fff;padding:10px 16px;margin:0 -20px">' +
-          'Offline copy of the ArduPilot wiki, built from the pages saved on this ' +
-          'device. Self-contained - it does not update itself.</div><h1>Contents</h1><ul>'
+          '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+          '<title>ArduPilot wiki (offline)</title><style>' + SHELL_CSS +
+          '</style></head><body>' +
+          '<nav id="ap-side"><div id="ap-brand">ArduPilot' +
+          '<small>offline copy</small></div>' +
+          '<input id="ap-search" placeholder="Filter pages" autocomplete="off">' +
+          '<div id="ap-list"></div></nav>' +
+          '<main id="ap-main"><div id="ap-bar">Offline copy built from pages saved ' +
+          'on your device. It does not update itself.</div><div id="ap-doc"></div></main>'
         ).then(function () {
           var chain = Promise.resolve();
-          pages.forEach(function (p) {
-            chain = chain.then(function () {
-              return write('<li><a href="#' + anchorFor(p.path) + '">' +
-                           p.path.replace(/^\//, '') + '</a></li>');
-            });
-          });
-          return chain;
-        }).then(function () {
-          return write('</ul>');
-        }).then(function () {
-          var chain = Promise.resolve();
-          pages.forEach(function (p) {
+          pages.forEach(function (p, i) {
             chain = chain.then(function () {
               return p.cache.match(p.path)
                 .then(function (res) { return res.text(); })
                 .then(function (html) {
-                  // Keep only the article body; the theme chrome around it is
-                  // navigation that means nothing in a single flat file.
+                  var title = (html.match(/<title>([^<]*)<\/title>/i) || [])[1] ||
+                              p.path.replace(/^\//, '');
+                  title = title.replace(/\s*&mdash;.*$/, '').trim();
+                  index.push({ t: title, p: p.path });
+
                   var m = html.match(/<div[^>]*itemprop="articleBody"[^>]*>([\s\S]*?)<\/div>\s*<footer/i);
                   var body = m ? m[1] : html;
                   return inlineImages(body, assets);
@@ -422,14 +490,18 @@
                 .then(function (body) {
                   done++;
                   if (onProgress && done % 10 === 0) { onProgress(done, pages.length); }
-                  return write('<div class="ap-page" id="' + anchorFor(p.path) + '">' +
-                               body + '</div>');
+                  // </script> anywhere in the payload would end the block early.
+                  body = body.split('</script>').join('<\\/script>');
+                  return write('<script type="text/plain" id="p' + i + '">' +
+                               body + '<\/script>');
                 });
             });
           });
           return chain;
         }).then(function () {
-          return write('</div></body></html>');
+          return write('<script type="application/json" id="ap-index">' +
+                       JSON.stringify(index).split('</').join('<\\/') +
+                       '<\/script><script>' + SHELL_JS + '<\/script></body></html>');
         }).then(function () { return sink.close(); })
           .then(function () { return { pages: done }; });
       });
