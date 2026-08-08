@@ -121,18 +121,14 @@ Offline Copies
      </div>
 
      <div class="dl">
-       <a id="dl-pyz" href="#" aria-disabled="true">wiki.pyz &mdash; not yet published</a>
-       <div class="hint">One file.
+       <a id="dl-pyz" href="#">Build wiki.pyz from saved pages</a>
+       <div class="hint">Built here from the pages you have saved, so nothing extra is downloaded.
          <code class="docutils literal">python3 wiki.pyz</code> serves it locally
          &mdash; instant pages, working search, nothing extracted to disk.</div>
      </div>
 
      <div class="dl">
-       <p style="margin-bottom:6px"><strong>Save as a single file</strong></p>
-       <div class="actions" style="margin-top:0">
-         <select id="single-wiki"></select>
-         <span id="dl-single-wrap"></span>
-       </div>
+       <a id="dl-single" href="#">Build a single HTML file from saved pages</a>
        <div class="hint">Double-click, nothing to install. Around 30 seconds to
          open and several hundred megabytes, but Ctrl+F searches every page at
          once and it works from a USB stick.</div>
@@ -154,6 +150,7 @@ Offline Copies
 
    </div>
 
+   <script src="/js/offline-export.js" defer></script>
    <script src="/js/offline-page.js" defer></script>
 
 [copywiki destination="copter,plane,rover,sub,blimp,antennatracker,dev,planner,planner2,ardupilot,mavproxy"]
