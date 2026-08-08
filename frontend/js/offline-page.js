@@ -639,6 +639,21 @@
    * export contains exactly the wikis this reader chose to keep.
    */
   /**
+   * What an export should contain: what you selected, limited to what is
+   * actually saved - you cannot export pages you do not have.
+   *
+   * Reading the stored set alone (the previous behaviour) silently ignored the
+   * selection, so ticking every wiki and getting one of them back looked like
+   * corruption rather than a missing download.
+   */
+  function exportSelection() {
+    var chosen = selected().map(function (c) { return c.value; });
+    var have = chosen.filter(function (id) { return storedIds[id]; });
+    var missing = chosen.filter(function (id) { return !storedIds[id]; });
+    return { ids: have, missing: missing, chosen: chosen };
+  }
+
+  /**
    * Name an export after what it actually contains, plus the build date.
    *
    *   one wiki     copter-2026-08-08.html
@@ -665,7 +680,14 @@
     var link = el('dl-pyz');
     if (!global.ArduPilotExport) { return; }
 
-    var ids = Object.keys(storedIds).filter(function (id) { return id !== 'common'; });
+    var sel = exportSelection();
+    if (!sel.ids.length) {
+      link.textContent = sel.chosen.length
+        ? 'Save those wikis first - none of the selected ones are downloaded yet'
+        : 'Select a wiki first';
+      return;
+    }
+    var ids = sel.ids;
     var name = exportName(ids, '.pyz');
     var original = link.textContent;
 
@@ -691,7 +713,14 @@
     var link = el('dl-single');
     if (!global.ArduPilotExport || !link) { return; }
 
-    var ids = Object.keys(storedIds).filter(function (id) { return id !== 'common'; });
+    var sel = exportSelection();
+    if (!sel.ids.length) {
+      link.textContent = sel.chosen.length
+        ? 'Save those wikis first - none of the selected ones are downloaded yet'
+        : 'Select a wiki first';
+      return;
+    }
+    var ids = sel.ids;
     var name = exportName(ids, '.html');
     var original = link.textContent;
 
