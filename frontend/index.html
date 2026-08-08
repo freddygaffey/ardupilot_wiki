@@ -76,11 +76,12 @@
 
                 <ul class="navbar-nav ms-auto fs-5">
 
-                    <!-- Revealed by js/pwa.js only when the browser reports the
-                         site is installable. Hidden everywhere else. -->
+                    <!-- Deliberately a link, not an install button. Throwing the
+                         browser's install dialog at somebody who has not been told
+                         what installing does - and that it downloads nothing - is
+                         no way to ask. /offline/ explains it and installs from there. -->
                     <li class="nav-item">
-                        <button id="ap-install-app" type="button" class="btn btn-outline-light btn-sm my-2 me-2"
-                                hidden>Install app</button>
+                        <a class="nav-link" href="/offline/">OFFLINE</a>
                     </li>
 
                     <li class="nav-item">

@@ -20,24 +20,18 @@
      otherwise and assume "Install" downloaded the wiki. #}
   <div id="ap-offline-panel" hidden>
 
-    <p style="font-weight:bold; margin-bottom:6px">App</p>
-    <p id="ap-app-status" style="font-size:12px; line-height:1.5; margin:0 0 6px 0"></p>
-    <p id="ap-app-note" hidden
-       style="font-size:11px; line-height:1.45; margin:0 0 8px 0; padding:6px 8px;
-              border-left:3px solid #6ab0de; background:rgba(0,0,0,0.15)"></p>
-    <button id="ap-install-app" type="button" hidden
-            style="width:100%; margin-bottom:10px; padding:6px; cursor:pointer">
-      Install app
-    </button>
-
-    <p style="font-weight:bold; margin-bottom:6px">Offline content</p>
+    <p style="font-weight:bold; margin-bottom:6px">Offline</p>
     <p id="ap-offline-status" style="font-size:12px; line-height:1.5; margin:0 0 8px 0">
       Checking&hellip;
     </p>
-    <button id="ap-offline-persist" type="button" hidden
-            style="width:100%; margin-bottom:6px; padding:6px; cursor:pointer">
-      Keep offline copy
-    </button>
+
+    {# A link, never an install button. The sidebar is the wrong place to spring
+       a system dialog: /offline/ explains what installing does - and does not -
+       before offering it. #}
+    <a href="/offline/" style="display:block; text-align:center; padding:6px;
+       border:1px solid rgba(255,255,255,0.3); border-radius:3px; margin-bottom:6px">
+      Manage offline copies
+    </a>
   </div>
 
   <hr />
