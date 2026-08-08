@@ -23,18 +23,19 @@
  * Bumping CACHE_VERSION discards every cache and starts clean.
  */
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2';
 const PAGE_CACHE = `ardupilot-pages-${CACHE_VERSION}`;
 const IMAGE_CACHE = `ardupilot-images-${CACHE_VERSION}`;
 const STATIC_CACHE = `ardupilot-static-${CACHE_VERSION}`;
 const CURRENT_CACHES = [PAGE_CACHE, IMAGE_CACHE, STATIC_CACHE];
+// Downloaded wikis, deliberately unversioned so they outlive worker updates.
+const OFFLINE_CACHE_PREFIX = 'ardupilot-offline-';
 
 // Kept deliberately short. Anything else is cached as it is visited, so a fresh
 // install does not pull down a pile of files somebody may never look at.
 const SHELL = [
   '/',
   '/offline-fallback.html',
-  '/offline/',
   '/manifest.json',
   '/android-icon-192x192.png',
   '/icon-512x512.png',
@@ -64,9 +65,15 @@ self.addEventListener('install', (event) => {
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
+    // Only the versioned shell caches are disposable. Downloaded wikis live in
+    // ardupilot-offline-* and must survive a version bump: those are hundreds
+    // of megabytes the reader chose to store, and deleting them because the
+    // service worker changed would be indefensible.
     await Promise.all(
       names
-        .filter((name) => name.startsWith('ardupilot-') && !CURRENT_CACHES.includes(name))
+        .filter((name) => name.startsWith('ardupilot-') &&
+                          !name.startsWith(OFFLINE_CACHE_PREFIX) &&
+                          !CURRENT_CACHES.includes(name))
         .map((name) => caches.delete(name))
     );
     await self.clients.claim();
@@ -124,22 +131,23 @@ async function staleWhileRevalidate(request, cacheName, announceChanges) {
     return cached;
   }
 
-  // Pages unpacked from a downloaded archive live in their own cache, so look
-  // across every cache before deciding this page is unavailable. Without this a
-  // reader who downloaded a whole wiki would still be told pages are missing
-  // simply because they had not visited them individually first.
-  const anywhere = await caches.match(request, { ignoreSearch: true });
-  if (anywhere) {
-    return anywhere;
-  }
-
-  // Nothing cached yet, so this navigation has to wait for the network - but
-  // not forever on a bad link.
+  // Nothing in the page cache, so try the network - but not forever on a bad
+  // link.
   const timeout = new Promise((resolve) => setTimeout(resolve, NETWORK_TIMEOUT_MS));
   const response = await Promise.race([network, timeout]);
   if (response) {
     return response;
   }
+
+  // Only once the network has failed do we fall back to a downloaded archive.
+  // Checking it earlier would let a wiki downloaded weeks ago permanently
+  // shadow the live site: the reader would be served stale pages online, with
+  // no indication why, and no amount of redeploying would reach them.
+  const downloaded = await caches.match(request, { ignoreSearch: true });
+  if (downloaded) {
+    return downloaded;
+  }
+
   return (await caches.match('/offline-fallback.html')) ||
          new Response('Offline and this page has not been saved.', {
            status: 503,
