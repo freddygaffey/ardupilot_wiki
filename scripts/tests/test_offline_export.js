@@ -78,7 +78,8 @@ function loadWiki(wiki, limit) {
       const buf = fs.readFileSync(full);
 
       if (rel.endsWith('.html')) {
-        if (pages >= limit) { continue; }
+        var isIndex = /\/index\.html$/.test(rel);
+        if (pages >= limit && !isIndex) { continue; }
         pages++;
         wikiCache.put(rel, new FakeResponse(buf));
       } else if (/\.(png|jpe?g|gif|svg|ico|woff2?|ttf|eot)$/i.test(rel)) {
@@ -91,7 +92,7 @@ function loadWiki(wiki, limit) {
         } else {
           wikiCache.put(rel, new FakeResponse(buf));
         }
-      } else if (rel.endsWith('.css')) {
+      } else if (rel.endsWith('.css') || rel.endsWith('.js')) {
         css++;
         wikiCache.put(rel, new FakeResponse(buf));
       }
@@ -180,6 +181,14 @@ async function main() {
 
   const stat = fs.statSync(pyzPath);
   check('archive non-empty', stat.size > 1000, (stat.size / 1048576).toFixed(1) + ' MB');
+
+  // The archive must answer at its root: opening it to a 404 makes a working
+  // file look broken, and that was a real bug. Checked by inspecting the
+  // embedded server rather than executing it, so the test cannot hang.
+  const zipText = fs.readFileSync(pyzPath, 'latin1');
+  const mainStart = zipText.indexOf('def _root_page');
+  check('root page generator embedded', mainStart !== -1);
+  check('shared-image alias embedded', zipText.includes('_candidates'));
 
   console.log('\nwrote ' + OUT + '/test.html and ' + OUT + '/test.pyz');
   console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n' : '\nall checks passed\n');
