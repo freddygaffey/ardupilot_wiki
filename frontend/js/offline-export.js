@@ -300,14 +300,15 @@
    * Write a runnable .pyz containing every cached page for the chosen wikis.
    * `onProgress(done, total)` is called as entries are written.
    */
-  function exportPyz(wikiIds, filename, onProgress) {
+  function exportPyz(wikiIds, filename, onProgress, sink) {
     return storedEntries(wikiIds).then(function (groups) {
       var total = groups.reduce(function (a, g) { return a + g.reqs.length; }, 0);
       if (!total) {
         throw new Error('Nothing is saved yet - download a wiki first.');
       }
 
-      return openDownload(filename).then(function (sink) {
+      return (sink ? Promise.resolve(sink) : openDownload(filename))
+        .then(function (sink) {
         var zip = new ZipWriter(sink.write);
         var done = 0;
 
@@ -480,6 +481,26 @@
     'route();})();'
   ].join('');
 
+  /**
+   * Fallback navigation: a flat list of the wiki's pages.
+   *
+   * Used when the toctree cannot be recovered - the wiki's index page was not
+   * part of this export, or carries no navigation. A plain list is poor
+   * compared with the real structure, but an empty sidebar makes the file
+   * unusable, and that is what happened before.
+   */
+  function listNav(pages, wiki) {
+    var items = pages.filter(function (p) {
+      return p.path.split('/')[1] === wiki;
+    }).map(function (p) {
+      var anchor = p.path.replace(/\.html?$/, '');
+      var label = anchor.split('/').pop().replace(/[-_]/g, ' ');
+      return '<li class="toctree-l1"><a class="reference internal" href="#' +
+             anchor + '">' + label + '</a></li>';
+    });
+    return '<ul>' + items.join('') + '</ul>';
+  }
+
   /** Lift the theme's navigation tree out of a wiki's index page. */
   function extractNav(html, wiki) {
     var m = html.match(/<div class="wy-menu wy-menu-vertical"[^>]*>([\s\S]*?)<\/div>/i);
@@ -500,7 +521,7 @@
    * page by page, because the finished file runs to hundreds of megabytes and
    * cannot be built as a string first.
    */
-  function exportHtml(wikiIds, filename, onProgress) {
+  function exportHtml(wikiIds, filename, onProgress, sink) {
     var enc = new TextEncoder();
 
     return storedEntries(wikiIds).then(function (groups) {
@@ -528,18 +549,33 @@
 
       // Build the navigation from each wiki's own toctree, so the structure is
       // the wiki's rather than an alphabetical list of every file.
-      var wikis = Object.keys(roots).sort();
+      // Group by wiki from the pages themselves, so a wiki still appears even
+      // if its index page was not part of the export.
+      var wikis = [];
+      pages.forEach(function (pg) {
+        var w = pg.path.split('/')[1];
+        if (w && wikis.indexOf(w) === -1) { wikis.push(w); }
+      });
+      wikis.sort();
+
       return Promise.all(wikis.map(function (w) {
+        var caption = '<p class="caption">' + w + '</p>';
+        if (!roots[w]) {
+          return Promise.resolve(caption + listNav(pages, w));
+        }
         return roots[w].cache.match(roots[w].path)
           .then(function (r) { return r.text(); })
           .then(function (html) {
-            return '<p class="caption">' + w + '</p>' + extractNav(html, w);
+            var nav = extractNav(html, w);
+            // An index page without a usable toctree is no better than none.
+            return caption + (nav.indexOf('href="#') === -1 ? listNav(pages, w) : nav);
           })
-          .catch(function () { return ''; });
+          .catch(function () { return caption + listNav(pages, w); });
       })).then(function (navParts) {
         var navHtml = navParts.join('');
         return buildThemeCss(styles, assets).then(function (themeCss) {
-        return openDownload(filename).then(function (sink) {
+        return (sink ? Promise.resolve(sink) : openDownload(filename))
+        .then(function (sink) {
           var done = 0, index = [];
           // Shared across pages so each image is emitted once.
           var imgIds = { __next: 0 };
@@ -723,7 +759,13 @@
 
         var hit = null;
         candidates.forEach(function (c) { if (!hit && assets[c]) { hit = c; } });
-        if (!hit) { return current; }
+        if (!hit) {
+          // Leaving the relative src in place points at nothing once the page
+          // is inside a single file, and shows as a silently blank space.
+          // Drop the src so the alt text renders and the gap is legible.
+          return current.split('src="' + src + '"')
+                        .join('data-ap-missing="' + src + '"');
+        }
 
         // Already emitted for an earlier page: just point at it.
         if (imgIds[hit] !== undefined) {
