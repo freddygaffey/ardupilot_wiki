@@ -124,6 +124,15 @@ async function staleWhileRevalidate(request, cacheName, announceChanges) {
     return cached;
   }
 
+  // Pages unpacked from a downloaded archive live in their own cache, so look
+  // across every cache before deciding this page is unavailable. Without this a
+  // reader who downloaded a whole wiki would still be told pages are missing
+  // simply because they had not visited them individually first.
+  const anywhere = await caches.match(request, { ignoreSearch: true });
+  if (anywhere) {
+    return anywhere;
+  }
+
   // Nothing cached yet, so this navigation has to wait for the network - but
   // not forever on a bad link.
   const timeout = new Promise((resolve) => setTimeout(resolve, NETWORK_TIMEOUT_MS));
@@ -138,11 +147,31 @@ async function staleWhileRevalidate(request, cacheName, announceChanges) {
          });
 }
 
+/*
+ * Images shared between wikis are stored once, under /_common/_images/, rather
+ * than copied into every wiki that references them - the shared set is around
+ * 433 MB and every vehicle uses most of it, so per-wiki copies would multiply
+ * that several times over. Pages still ask for /rover/_images/x.png, so a miss
+ * on the per-wiki path falls back to the canonical one.
+ */
+async function matchSharedImage(url) {
+  const shared = url.pathname.replace(/^\/[^/]+\/_images\//, '/_common/_images/');
+  if (shared === url.pathname) {
+    return undefined;
+  }
+  return caches.match(shared);
+}
+
 async function cacheFirst(request, cacheName) {
   const cache = await caches.open(cacheName);
   const cached = await cache.match(request);
   if (cached) {
     return cached;
+  }
+
+  const shared = await matchSharedImage(new URL(request.url));
+  if (shared) {
+    return shared;
   }
   try {
     const response = await fetch(request);
@@ -151,7 +180,8 @@ async function cacheFirst(request, cacheName) {
     }
     return response;
   } catch (err) {
-    return new Response('', { status: 504 });
+    const shared = await matchSharedImage(new URL(request.url));
+    return shared || new Response('', { status: 504 });
   }
 }
 

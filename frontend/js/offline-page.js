@@ -117,7 +117,7 @@
 
       function kv(key, value) {
         return '<div class="kv"><span class="k">' + key + '</span>' +
-               '<span class="lead"></span><span class="v">' + value + '</span></div>';
+               '<span class="lead2"></span><span class="v">' + value + '</span></div>';
       }
 
       el('storage-status').innerHTML =
@@ -265,7 +265,183 @@
     });
   }
 
-  function saveSelected() {
+  /* ---------- download and unpack ---------- */
+
+  var MIME = {
+    html: 'text/html; charset=utf-8', js: 'text/javascript', css: 'text/css',
+    json: 'application/json', png: 'image/png', jpg: 'image/jpeg',
+    jpeg: 'image/jpeg', gif: 'image/gif', svg: 'image/svg+xml',
+    webp: 'image/webp', ico: 'image/x-icon', woff: 'font/woff',
+    woff2: 'font/woff2', ttf: 'font/ttf', inv: 'application/octet-stream'
+  };
+
+  function mimeFor(name) {
+    var ext = name.split('.').pop().toLowerCase();
+    return MIME[ext] || 'application/octet-stream';
+  }
+
+  function textField(bytes, offset, length) {
+    var out = '';
+    for (var i = offset; i < offset + length; i++) {
+      if (bytes[i] === 0) { break; }
+      out += String.fromCharCode(bytes[i]);
+    }
+    return out;
+  }
+
+  /*
+   * Minimal tar reader over a stream.
+   *
+   * tar is 512-byte headers followed by file data padded to 512, which is
+   * simple enough to walk directly - and doing so avoids shipping a archive
+   * library to every reader just to unpack one download.
+   */
+  function untarToCache(stream, cache, prefix, onEntry) {
+    var reader = stream.getReader();
+    var buf = new Uint8Array(0);
+    var done = false;
+
+    function pull() {
+      return reader.read().then(function (r) {
+        if (r.done) { done = true; return; }
+        var next = new Uint8Array(buf.length + r.value.length);
+        next.set(buf); next.set(r.value, buf.length);
+        buf = next;
+      });
+    }
+
+    function need(n) {
+      if (buf.length >= n || done) { return Promise.resolve(buf.length >= n); }
+      return pull().then(function () { return need(n); });
+    }
+
+    function take(n) {
+      var out = buf.subarray(0, n);
+      buf = buf.slice(n);
+      return out;
+    }
+
+    function step() {
+      return need(512).then(function (ok) {
+        if (!ok) { return; }
+        var header = take(512);
+        var name = textField(header, 0, 100);
+        if (!name) { return step(); }   // zero block: padding between members
+
+        var size = parseInt(textField(header, 124, 12).trim(), 8) || 0;
+        var type = String.fromCharCode(header[156] || 48);
+        var padded = Math.ceil(size / 512) * 512;
+
+        return need(padded).then(function (haveBody) {
+          if (!haveBody) { return; }
+          var body = take(padded).slice(0, size);
+          // '0' and NUL are regular files; skip directories and metadata.
+          if (type !== '0' && type !== ' ') { return step(); }
+          var path = prefix + name;
+          return cache.put(
+            new Request(path),
+            new Response(body, { headers: { 'Content-Type': mimeFor(name) } })
+          ).then(function () {
+            if (onEntry) { onEntry(path); }
+            return step();
+          });
+        });
+      });
+    }
+
+    return step();
+  }
+
+  /**
+   * Fetch one archive and unpack it into `cache`, reporting bytes received.
+   * Common images are written under /_common/ so they are stored once; the
+   * service worker redirects per-wiki image requests there.
+   */
+  function fetchArchive(entry, cache, onBytes) {
+    var url = ARTIFACT_BASE + '/' + (entry.archive || entry.id + '-offline.tar.gz');
+    return fetch(url, { mode: 'cors' }).then(function (response) {
+      if (!response.ok) {
+        throw new Error('could not fetch ' + entry.name + ' (' + response.status + ')');
+      }
+      if (!response.body || typeof DecompressionStream === 'undefined') {
+        throw new Error('this browser cannot unpack the download');
+      }
+
+      var counter = new TransformStream({
+        transform: function (chunk, controller) {
+          onBytes(chunk.byteLength);
+          controller.enqueue(chunk);
+        }
+      });
+
+      var stream = response.body
+        .pipeThrough(counter)
+        .pipeThrough(new DecompressionStream('gzip'));
+
+      // The common archive holds bare _images/... paths; wiki archives are
+      // already prefixed with their own name.
+      var prefix = entry.id === 'common' ? '/_common/' : '/';
+      return untarToCache(stream, cache, prefix);
+    });
+  }
+
+  function saveSelectedReal() {
+    var chosen = selected().map(function (c) { return c.value; });
+    var queue = [COMMON].concat(WIKIS.filter(function (w) {
+      return chosen.indexOf(w.id) !== -1;
+    }));
+    var totalBytes = queue.reduce(function (a, w) { return a + w.mb * 1048576; }, 0);
+
+    var progress = el('cache-progress');
+    var button = el('download-cache-btn');
+    var received = 0;
+
+    progress.hidden = false;
+    button.disabled = true;
+
+    function report(text) { progress.textContent = text; }
+    report('Checking space…');
+
+    // Ask for persistence before storing rather than after, so the data is
+    // protected from the moment it lands.
+    var persistFirst = navigator.storage && navigator.storage.persist
+      ? navigator.storage.persist() : Promise.resolve(false);
+
+    return persistFirst
+      .then(function () { return checkRoom(totalBytes); })
+      .then(function () {
+        // Staged under a build-scoped name and only marked complete at the very
+        // end, so an interrupted download can never look like a usable copy.
+        return queue.reduce(function (chain, entry) {
+          return chain.then(function () {
+            var cacheName = OFFLINE_CACHE_PREFIX + entry.id;
+            return caches.open(cacheName).then(function (cache) {
+              return fetchArchive(entry, cache, function (n) {
+                received += n;
+                report(entry.name + ' — ' +
+                  Math.min(99, Math.round(received / totalBytes * 100)) + '%');
+              }).then(function () {
+                return cache.put(COMPLETE_MARKER,
+                  new Response(String(Date.now()),
+                    { headers: { 'Content-Type': 'text/plain' } }));
+              });
+            });
+          });
+        }, Promise.resolve());
+      })
+      .then(function () { report('Saved'); })
+      .catch(function (err) {
+        report(err && err.name === 'QuotaExceededError'
+          ? 'Ran out of space — your existing copy is untouched.'
+          : (err.message || 'Download failed'));
+      })
+      .then(function () {
+        button.disabled = false;
+        return Promise.all([renderStorage(), renderWikis()]);
+      });
+  }
+
+  function saveSelectedStub() {
     var wikis = selected().map(function (c) { return c.value; });
     var totalMb = COMMON.mb + selected().reduce(function (a, c) {
       return a + parseInt(c.dataset.mb, 10);
@@ -325,7 +501,7 @@
   document.addEventListener('click', function (e) {
     if (e.target.id === 'persist-btn') { requestPersist(); }
     if (e.target.id === 'clear-btn') { clearAll(); }
-    if (e.target.id === 'download-cache-btn') { saveSelected(); }
+    if (e.target.id === 'download-cache-btn') { saveSelectedReal(); }
     if (e.target.id === 'check-btn') {
       var out = el('check-result');
       out.hidden = false;

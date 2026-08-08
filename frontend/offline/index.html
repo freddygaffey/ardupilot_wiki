@@ -5,189 +5,228 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Offline copies &mdash; ArduPilot Documentation</title>
 <link rel="manifest" href="/manifest.json">
-<meta name="theme-color" content="#1c2b36">
+<meta name="theme-color" content="#212529">
 <link rel="icon" href="/favicon.ico">
 <!--
-  Everything is inline: this page must render with no connection at all, which
-  rules out external stylesheets and webfonts. Type is a system monospace stack
-  for the same reason - it is the only characterful face guaranteed present.
-
-  The layout is deliberately instrument-panel rather than marketing page:
-  aligned numeric columns, one frame, no decoration that does not carry data.
+  Styles are inline and Bootstrap is not loaded here: this page has to render
+  with no connection, and the site's Bootstrap comes from a CDN. What follows
+  reproduces the parts of the ArduPilot look it needs - the dark header, the
+  Oxygen face declared in css/main.css, and the brand yellow (#fcd94c, sampled
+  from the logo) - without depending on anything external.
 -->
 <style>
   :root {
-    --bg:#f4f4f2; --panel:#fffefb; --ink:#1b1b1a; --dim:#6d6c66;
-    --rule:#d8d6cf; --accent:#1c6a9e; --warn:#a8620f; --warnbg:#fdf3e6;
-    --ok:#3f7a3f; --okbg:#eef5ee; --stored:#2f6f3f;
+    --yellow:#fcd94c;
+    --dark:#212529;
+    --ink:#212529;
+    --dim:#6c757d;
+    --rule:#dee2e6;
+    --bg:#ffffff;
+    --panel:#ffffff;
+    --soft:#f8f9fa;
+    --warn:#b3801a; --warnbg:#fff9e6;
+    --ok:#2f6f3f; --okbg:#f0f7f1;
+    --link:#2980b9;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg:#131513; --panel:#1a1c1a; --ink:#dcdcd4; --dim:#8a8a80;
-      --rule:#2e312e; --accent:#5fa8d8; --warn:#d9a05a; --warnbg:#2a2016;
-      --ok:#7fb37f; --okbg:#18231a; --stored:#8ec49a;
+      --ink:#e9ecef; --dim:#9aa0a6; --rule:#343a40;
+      --bg:#16181a; --panel:#1d2023; --soft:#212529;
+      --warnbg:#2b2415; --okbg:#18231a; --link:#6ab0de;
     }
   }
   * { box-sizing:border-box; }
-  html { -webkit-text-size-adjust:100%; }
-  body {
-    margin:0; background:var(--bg); color:var(--ink);
-    font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
-    font-size:13px; line-height:1.55;
-    padding:28px 16px 60px;
-  }
-  .panel {
-    max-width:720px; margin:0 auto; background:var(--panel);
-    border:1px solid var(--rule);
-  }
-  .bar {
-    display:flex; align-items:baseline; justify-content:space-between;
-    gap:12px; padding:11px 16px; border-bottom:1px solid var(--rule);
-  }
-  .bar h1 { margin:0; font-size:12px; letter-spacing:.16em; text-transform:uppercase; font-weight:600; }
-  .bar a { color:var(--dim); text-decoration:none; font-size:11px; }
-  .bar a:hover { color:var(--accent); }
+  html { font-family:Oxygen,"Helvetica Neue",Helvetica,Arial,sans-serif;
+         font-weight:400; line-height:1.6; -webkit-font-smoothing:antialiased; }
+  body { margin:0; background:var(--bg); color:var(--ink); font-size:16px; }
 
-  .block { padding:14px 16px; border-bottom:1px solid var(--rule); }
-  .block:last-child { border-bottom:0; }
-  .label { font-size:10px; letter-spacing:.15em; text-transform:uppercase;
-           color:var(--dim); margin:0 0 9px 0; }
+  /* Header mirrors the site's sticky navbar-dark */
+  header { position:sticky; top:0; z-index:20; background:var(--dark);
+           border-bottom:3px solid var(--yellow); }
+  .nav { display:flex; align-items:center; justify-content:space-between;
+         gap:16px; padding:8px 24px; max-width:1320px; margin:0 auto; }
+  .nav img { max-height:52px; height:auto; display:block; }
+  .nav a.home { color:#fff; text-decoration:none; font-size:1.05rem;
+                letter-spacing:.02em; }
+  .nav a.home:hover { color:var(--yellow); }
 
-  /* key/value rows at the top - label left, value right, dotted leader between */
-  .kv { display:flex; align-items:baseline; gap:8px; margin:0 0 4px 0; }
-  .kv .k { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim);
-           white-space:nowrap; }
-  .kv .lead { flex:1; border-bottom:1px dotted var(--rule); transform:translateY(-3px); }
-  .kv .v { white-space:nowrap; }
+  main { max-width:1320px; margin:0 auto; padding:28px 24px 72px; }
+  .lead { margin:0 0 24px 0; color:var(--dim); max-width:62ch; }
+  h1 { font-size:1.9rem; margin:0 0 4px 0; font-weight:700; }
+  h1 span { color:var(--yellow); -webkit-text-stroke:.4px var(--dark); }
+
+  /* Panel — the layout survives, dressed in the site's palette */
+  .panel { border:1px solid var(--rule); background:var(--panel); }
+  .grid { display:grid; grid-template-columns:1fr 1fr; }
+  @media (max-width:900px) { .grid { grid-template-columns:1fr; } }
+  .block { padding:20px 24px; border-bottom:1px solid var(--rule); }
+  .grid > .block { border-right:1px solid var(--rule); }
+  .grid > .block:last-child { border-right:0; }
+  .panel > .block:last-child { border-bottom:0; }
+  .label { font-size:.72rem; letter-spacing:.16em; text-transform:uppercase;
+           color:var(--dim); margin:0 0 12px 0; font-weight:700; }
+
+  .kv { display:flex; align-items:baseline; gap:10px; margin:0 0 6px 0; }
+  .kv .k { font-size:.78rem; letter-spacing:.06em; text-transform:uppercase;
+           color:var(--dim); white-space:nowrap; }
+  .kv .lead2 { flex:1; border-bottom:1px dotted var(--rule); transform:translateY(-4px); }
+  .kv .v { white-space:nowrap; font-weight:600; font-variant-numeric:tabular-nums; }
 
   table { width:100%; border-collapse:collapse; }
-  td { padding:3px 0; vertical-align:baseline; }
-  td.num { text-align:right; white-space:nowrap; padding-left:14px;
-           font-variant-numeric:tabular-nums; }
-  label { cursor:pointer; display:inline-flex; align-items:baseline; gap:8px; }
-  input[type=checkbox] { accent-color:var(--accent); margin:0; transform:translateY(1px); }
-  tr:hover td { background:rgba(127,127,127,.06); }
+  td { padding:6px 0; vertical-align:baseline; border-bottom:1px solid var(--rule); }
+  tr:last-child td { border-bottom:0; }
+  td.num { text-align:right; white-space:nowrap; padding-left:16px;
+           font-variant-numeric:tabular-nums; color:var(--dim); }
+  tr:hover td { background:var(--soft); }
+  label { cursor:pointer; display:inline-flex; align-items:baseline; gap:9px; }
+  input[type=checkbox] { accent-color:var(--yellow); margin:0; width:15px; height:15px; }
+  select { font:inherit; font-size:.95rem; padding:5px 8px; color:var(--ink);
+           background:var(--panel); border:1px solid var(--rule); }
 
-  .pill { color:var(--dim); }
-  .pill.stored { color:var(--stored); }
-  .pill.stored::before { content:"\25CF  "; }
+  .pill { color:var(--dim); font-size:.85rem; }
+  .pill.stored { color:var(--ink); font-weight:600; }
+  .pill.stored::before { content:"\25CF"; color:var(--yellow);
+                         margin-right:6px; -webkit-text-stroke:.5px var(--dim); }
 
-  .total { display:flex; justify-content:space-between; margin-top:10px;
-           padding-top:9px; border-top:1px solid var(--rule); }
+  .total { display:flex; justify-content:space-between; margin-top:14px;
+           padding-top:12px; border-top:2px solid var(--yellow); font-weight:600; }
 
   button {
-    font:inherit; font-size:11px; letter-spacing:.1em; text-transform:uppercase;
-    padding:7px 13px; color:var(--ink); background:transparent;
-    border:1px solid var(--rule); cursor:pointer; transition:.12s;
+    font:inherit; font-size:.85rem; font-weight:700; letter-spacing:.06em;
+    text-transform:uppercase; padding:10px 18px; cursor:pointer;
+    color:var(--ink); background:transparent; border:1px solid var(--rule);
+    transition:.14s;
   }
-  button:hover:not([disabled]) { border-color:var(--accent); color:var(--accent); }
-  button.primary { border-color:var(--accent); color:var(--accent); }
-  button.primary:hover { background:var(--accent); color:var(--panel); }
-  button[disabled] { opacity:.4; cursor:not-allowed; }
-  .actions { display:flex; flex-wrap:wrap; gap:8px; }
+  button:hover:not([disabled]) { border-color:var(--yellow); background:var(--soft); }
+  button.primary { background:var(--yellow); border-color:var(--yellow); color:#212529; }
+  button.primary:hover { filter:brightness(1.07); background:var(--yellow); }
+  button[disabled] { opacity:.45; cursor:not-allowed; }
+  .actions { display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
 
-  .warn, .ok { padding:8px 11px; margin-top:9px; font-size:12px; }
-  .warn { border-left:2px solid var(--warn); background:var(--warnbg); }
-  .ok { border-left:2px solid var(--ok); background:var(--okbg); }
+  .warn, .ok { padding:11px 14px; margin-top:12px; font-size:.9rem; }
+  .warn { border-left:4px solid var(--yellow); background:var(--warnbg); color:var(--warn); }
+  .ok { border-left:4px solid var(--ok); background:var(--okbg); color:var(--ok); }
+  @media (prefers-color-scheme: dark) {
+    .warn { color:var(--yellow); } .ok { color:#9ccfa4; }
+  }
 
-  .dl { margin-bottom:13px; }
-  .dl a { color:var(--accent); text-decoration:none; }
+  .dl { margin-bottom:20px; }
+  .dl:last-child { margin-bottom:0; }
+  .dl a { color:var(--link); text-decoration:none; font-weight:600; }
   .dl a:hover { text-decoration:underline; }
-  .dl a::before { content:"\2193  "; }
-  .dl .hint { color:var(--dim); font-size:11px; margin-top:1px; }
-  #archive-links a { display:block; }
-
-  .foot { color:var(--dim); font-size:11px; }
-  code { font:inherit; color:var(--accent); }
+  .dl a::before { content:"\2193"; margin-right:7px; color:var(--yellow);
+                  -webkit-text-stroke:.5px var(--dim); font-weight:700; }
+  #archive-links a { display:block; margin-bottom:3px; }
+  .hint { color:var(--dim); font-size:.87rem; margin-top:3px; }
+  code { font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;
+         font-size:.9em; background:var(--soft); padding:1px 5px;
+         border:1px solid var(--rule); }
+  .foot { color:var(--dim); font-size:.9rem; }
 </style>
 </head>
 <body>
 
-<div class="panel">
-
-  <div class="bar">
-    <h1>Offline copies</h1>
-    <a href="/">&larr; ArduPilot Documentation</a>
+<header>
+  <div class="nav">
+    <a href="/"><picture>
+      <source type="image/webp" srcset="/images/ArduPilot-Motto.webp">
+      <img src="/images/ArduPilot-Motto.png" alt="ArduPilot"></picture></a>
+    <a class="home" href="/">Documentation &rarr;</a>
   </div>
+</header>
 
-  <!-- Storage first: whether the copy will survive matters more than its size -->
-  <div class="block">
-    <div id="storage-status">Checking&hellip;</div>
-    <div class="kv" style="margin-top:6px">
-      <span class="k">Build</span><span class="lead"></span>
-      <span class="v" id="build-date">&mdash;</span>
-    </div>
-    <div id="storage-warning"></div>
-    <div class="actions" style="margin-top:11px">
-      <button id="persist-btn" hidden>Make permanent</button>
-      <button id="clear-btn" hidden>Remove all</button>
-    </div>
-  </div>
+<main>
 
-  <div class="block">
-    <p class="label">Keep offline</p>
-    <table><tbody id="wiki-rows"></tbody></table>
-    <div class="total">
-      <span id="selection-total"></span>
-    </div>
-  </div>
+  <h1>Offline <span>copies</span></h1>
+  <p class="lead">Keep the documentation readable with no connection &mdash; in a
+    hangar, in a field, or anywhere the signal runs out.</p>
 
-  <div class="block">
-    <div class="actions">
-      <button id="download-cache-btn" class="primary">Save in browser</button>
-      <button id="check-btn">Check now</button>
-      <span id="cache-progress" class="pill" hidden></span>
-      <span id="check-result" class="pill" hidden></span>
-    </div>
-    <label style="margin-top:12px; font-size:12px">
-      <input type="checkbox" id="autoupdate" checked>
-      <span>Update saved pages automatically</span>
-    </label>
-  </div>
+  <div class="panel">
 
-  <div class="block">
-    <p class="label">Or download</p>
-
-    <div class="dl">
-      <div id="archive-links"></div>
-      <div class="hint">Unpack and open <code>index.html</code>. Pages load instantly;
-        search needs to be served rather than opened from disk.</div>
-    </div>
-
-    <div class="dl">
-      <a id="dl-pyz" href="#" aria-disabled="true">wiki.pyz &mdash; not yet published</a>
-      <div class="hint">One file. <code>python3 wiki.pyz</code> serves it locally &mdash;
-        instant pages, working search, nothing extracted to disk.</div>
-    </div>
-
-    <div class="dl">
-      <!-- One file holds one wiki: it is self-contained by definition, so it
-           cannot share the common images the way the archives do. Hence a
-           picker rather than the checkbox list above. -->
-      <div style="display:flex; align-items:baseline; gap:8px; flex-wrap:wrap">
-        <label for="single-wiki" style="display:inline">Save as a single file</label>
-        <select id="single-wiki"></select>
-        <span id="dl-single-wrap"></span>
+    <div class="grid">
+      <!-- Storage first: whether a copy survives matters more than its size -->
+      <div class="block">
+        <p class="label">On this device</p>
+        <div id="storage-status">Checking&hellip;</div>
+        <div class="kv" style="margin-top:8px">
+          <span class="k">Build</span><span class="lead2"></span>
+          <span class="v" id="build-date">&mdash;</span>
+        </div>
+        <div id="storage-warning"></div>
+        <div class="actions" style="margin-top:14px">
+          <button id="persist-btn" hidden>Make permanent</button>
+          <button id="clear-btn" hidden>Remove all</button>
+        </div>
       </div>
-      <div class="hint">Double-click, no tools needed. Around 30 seconds to open, but
-        Ctrl+F searches every page at once.</div>
+
+      <div class="block">
+        <p class="label">Keep offline</p>
+        <table><tbody id="wiki-rows"></tbody></table>
+        <div class="total"><span id="selection-total"></span></div>
+      </div>
     </div>
+
+    <div class="block">
+      <div class="actions">
+        <button id="download-cache-btn" class="primary">Save in browser</button>
+        <button id="check-btn">Check now</button>
+        <span id="cache-progress" class="pill" hidden></span>
+        <span id="check-result" class="pill" hidden></span>
+        <label style="margin-left:auto; font-size:.92rem">
+          <input type="checkbox" id="autoupdate" checked>
+          <span>Update saved pages automatically</span>
+        </label>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="block">
+        <p class="label">Or download</p>
+
+        <div class="dl">
+          <div id="archive-links"></div>
+          <div class="hint">Unpack and open <code>index.html</code>. Pages load
+            instantly; search needs to be served rather than opened from disk.</div>
+        </div>
+
+        <div class="dl">
+          <a id="dl-pyz" href="#" aria-disabled="true">wiki.pyz &mdash; not yet published</a>
+          <div class="hint">One file. <code>python3 wiki.pyz</code> serves it locally
+            &mdash; instant pages, working search, nothing extracted to disk.</div>
+        </div>
+      </div>
+
+      <div class="block">
+        <p class="label">Save as a single file</p>
+        <!-- One file holds one wiki: it inlines its own images, so unlike the
+             archives it cannot share the common set. Hence a picker. -->
+        <div class="actions" style="margin-bottom:6px">
+          <select id="single-wiki"></select>
+          <span id="dl-single-wrap" class="dl" style="margin:0"></span>
+        </div>
+        <div class="hint">Double-click, nothing to install. Around 30 seconds to
+          open and several hundred megabytes, but Ctrl+F searches every page at
+          once and it works from a USB stick.</div>
+      </div>
+    </div>
+
+    <div class="block">
+      <div class="actions" style="justify-content:space-between">
+        <p class="label" style="margin:0">Install as an app &mdash; optional</p>
+        <button id="ap-install-app" hidden>Install</button>
+      </div>
+      <p class="foot" style="margin:10px 0 0 0; max-width:78ch">
+        Installing downloads nothing, and is not needed to read offline &mdash; saving
+        pages works in an ordinary browser tab. It gives the wiki its own window and a
+        launcher icon, and makes your browser far less likely to delete your saved
+        pages when the device runs low on space.
+        <span id="install-state"></span>
+      </p>
+    </div>
+
   </div>
 
-  <div class="block">
-    <div class="actions" style="justify-content:space-between; align-items:baseline">
-      <p class="label" style="margin:0">Install as app</p>
-      <button id="ap-install-app" hidden>Install</button>
-    </div>
-    <p class="foot" style="margin:9px 0 0 0">
-      Downloads nothing, and is not needed to read offline &mdash; saving pages works in
-      an ordinary tab. It gives the wiki its own window, and makes your browser far less
-      likely to delete your saved pages.
-      <span id="install-state"></span>
-    </p>
-  </div>
-
-</div>
+</main>
 
 <script src="/js/pwa.js" defer></script>
 <script src="/js/offline-page.js" defer></script>

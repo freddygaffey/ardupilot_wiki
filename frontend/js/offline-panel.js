@@ -104,7 +104,6 @@
   }
 
   function render() {
-    renderAppState();
     return Promise.all([countCachedPages(), storageState()]).then(function (results) {
       var pages = results[0];
       var estimate = results[1].estimate;
@@ -150,11 +149,6 @@
                           'line-height:1.45; border-left:3px solid ' +
                           (persisted ? '#5a9e5a' : '#d9822b') + ';' +
                           'background:rgba(0,0,0,0.15)">' + warning + '</div>';
-
-      var persistButton = el('ap-offline-persist');
-      if (persistButton) {
-        persistButton.hidden = persisted || !(navigator.storage && navigator.storage.persist);
-      }
 
       var panel = el('ap-offline-panel');
       if (panel) {
