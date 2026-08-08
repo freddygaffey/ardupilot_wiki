@@ -159,7 +159,7 @@ async function staleWhileRevalidate(request, cacheName, announceChanges) {
   const timeout = new Promise((resolve) => setTimeout(resolve, NETWORK_TIMEOUT_MS));
   const response = await Promise.race([network, timeout]);
   if (response) {
-    return response;
+    return unredirect(response);
   }
 
   // Only once the network has failed do we fall back to a downloaded archive.
@@ -193,15 +193,42 @@ async function matchSharedImage(url) {
   return caches.match(shared);
 }
 
+/*
+ * Returning a redirected response for a navigation is rejected by the browser
+ * ("a redirected response was used for a request whose redirect mode is not
+ * follow"). It fails the same silent way as everything else here: the page
+ * still loads via the browser's own fallback, but that client is left with no
+ * controlling worker.
+ *
+ * This site redirects - Pages 308s /x.html to /x - so any navigation we
+ * intercept can come back redirected. Rebuilding the response drops the flag
+ * while keeping the body, status and headers.
+ */
+function unredirect(response) {
+  if (!response || !response.redirected) {
+    return response;
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers
+  });
+}
+
 /** Always ask the network; use a cached copy only if there is no network. */
 async function networkOnly(request) {
   try {
-    const response = await fetch(request, { cache: 'no-store' });
+    // fetch(request, init) builds a *new* Request from this one, and
+    // constructing a Request whose mode is 'navigate' throws a TypeError. The
+    // handler then rejects, the browser quietly falls back to its own network
+    // load, and - the part that actually bites - the page ends up with no
+    // controlling service worker at all. Pass the request through untouched.
+    const response = await fetch(request);
     if (response && response.ok) {
       const cache = await caches.open(PAGE_CACHE);
       await cache.put(request, response.clone());
     }
-    return response;
+    return unredirect(response);
   } catch (err) {
     return (await caches.match(request, { ignoreSearch: true })) ||
            (await caches.match('/offline-fallback.html')) ||
@@ -230,6 +257,29 @@ async function cacheFirst(request, cacheName) {
     const shared = await matchSharedImage(new URL(request.url));
     return shared || new Response('', { status: 504 });
   }
+}
+
+/*
+ * Any handler that throws makes respondWith reject. The browser then falls back
+ * to its own network load, which looks harmless - the page still appears - but
+ * that client ends up with NO controlling service worker, so offline support
+ * and streaming downloads silently stop working for it.
+ *
+ * That is exactly what a single bad fetch() call did here. So every strategy is
+ * wrapped: whatever goes wrong, we always resolve to a Response, and a mistake
+ * in a caching strategy can never cost us control of the page.
+ */
+function safely(handler, request) {
+  return handler.catch(async (err) => {
+    console.warn('[sw] handler failed, passing through', err);
+    try {
+      return await fetch(request);
+    } catch (netErr) {
+      return (await caches.match(request, { ignoreSearch: true })) ||
+             (await caches.match('/offline-fallback.html')) ||
+             new Response('Offline.', { status: 503 });
+    }
+  });
 }
 
 self.addEventListener('fetch', (event) => {
@@ -267,21 +317,21 @@ self.addEventListener('fetch', (event) => {
   // other renders as garbage. Never serve it from cache while there is a
   // network - fall back only when genuinely offline.
   if (/common-offline(\.html)?$/.test(url.pathname)) {
-    event.respondWith(networkOnly(request));
+    event.respondWith(safely(networkOnly(request), request));
     return;
   }
 
   if (request.mode === 'navigate' || request.destination === 'document') {
-    event.respondWith(staleWhileRevalidate(request, PAGE_CACHE, true));
+    event.respondWith(safely(staleWhileRevalidate(request, PAGE_CACHE, true), request));
     return;
   }
 
   if (isImage(url)) {
-    event.respondWith(cacheFirst(request, IMAGE_CACHE));
+    event.respondWith(safely(cacheFirst(request, IMAGE_CACHE), request));
     return;
   }
 
   if (isStatic(url)) {
-    event.respondWith(staleWhileRevalidate(request, STATIC_CACHE, false));
+    event.respondWith(safely(staleWhileRevalidate(request, STATIC_CACHE, false), request));
   }
 });

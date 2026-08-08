@@ -214,11 +214,12 @@
     var chosen = selected().map(function (c) { return c.value; });
     var wanted = WIKIS.filter(function (w) { return chosen.indexOf(w.id) !== -1; });
 
+    // Show the filename that will land in their downloads folder, not the
+    // wiki's display name - that is what they will be looking at later.
     target.innerHTML = wanted.map(function (w) {
       var file = w.archive || (w.id + '-offline.tar.gz');
-      return '<a href="' + ARTIFACT_BASE + '/' + file + '" download ' +
-             'style="display:inline-block;margin:0 8px 6px 0">' +
-             w.name + ' <span class="pill">' + w.mb + ' MB</span></a>';
+      return '<a href="' + ARTIFACT_BASE + '/' + file + '" download>' +
+             file + ' <span class="pill">' + w.mb + ' MB</span></a>';
     }).join('');
   }
 
