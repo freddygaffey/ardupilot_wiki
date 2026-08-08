@@ -555,7 +555,7 @@
                     index.push({ t: title, p: p.path.replace(/\.html?$/, '') });
 
                     var m = html.match(/<div[^>]*itemprop="articleBody"[^>]*>([\s\S]*?)<\/div>\s*<footer/i);
-                    return inlineImages(m ? m[1] : html, assets);
+                    return inlineImages(m ? m[1] : html, assets, p.path);
                   })
                   .then(function (body) {
                     done++;
@@ -579,28 +579,60 @@
     });
   }
 
-  /** Replace <img src> with data URIs drawn from the cache. */
-  function inlineImages(html, assets) {
+  /** Resolve a relative href against a page path, as a browser would. */
+  function resolvePath(basePath, href) {
+    var parts = basePath.split('/');
+    parts.pop();                       // drop the page's own filename
+    href.split('/').forEach(function (seg) {
+      if (seg === '..') { parts.pop(); }
+      else if (seg && seg !== '.') { parts.push(seg); }
+    });
+    return parts.join('/');
+  }
+
+  /**
+   * Replace <img src> with data URIs drawn from the cache.
+   *
+   * The src has to be resolved against the page it appears in - a docs page
+   * says "../_images/x.png", which is /rover/_images/x.png, not /_images/x.png.
+   * Getting that wrong misses every lookup and silently leaves the relative
+   * path in place, which points at nothing once the page is inside one file.
+   *
+   * Shared images are stored once under /_common/, so that is tried too.
+   */
+  function inlineImages(html, assets, pagePath) {
     var srcs = [];
-    html.replace(/<img[^>]+src="([^"]+)"/gi, function (_, src) {
-      srcs.push(src); return _;
+    html.replace(/<img[^>]+src="([^"]+)"/gi, function (all, src) {
+      if (srcs.indexOf(src) === -1) { srcs.push(src); }
+      return all;
     });
     if (!srcs.length) { return Promise.resolve(html); }
 
     var chain = Promise.resolve(html);
     srcs.forEach(function (src) {
       chain = chain.then(function (current) {
-        var path = src.replace(/^\.\.\//, '/').split('?')[0];
-        // Images referenced per wiki are stored once under /_common/.
-        var candidates = [path, path.replace(/^\/[^/]+\/_images\//, '/_common/_images/')];
-        var cache = null, found = null;
-        candidates.forEach(function (c) { if (!found && assets[c]) { found = c; cache = assets[c]; } });
-        if (!found) { return current; }
-        return cache.match(found)
+        if (/^(data:|https?:|\/\/)/.test(src)) { return current; }
+
+        var clean = src.split('?')[0].split('#')[0];
+        var resolved = clean.charAt(0) === '/'
+          ? clean
+          : resolvePath(pagePath, clean);
+
+        var candidates = [
+          resolved,
+          resolved.replace(/^\/[^/]+\/_images\//, '/_common/_images/')
+        ];
+
+        var hit = null;
+        candidates.forEach(function (c) {
+          if (!hit && assets[c]) { hit = c; }
+        });
+        if (!hit) { return current; }
+
+        return assets[hit].match(hit)
           .then(function (res) { return res.arrayBuffer(); })
           .then(function (buf) {
-            var uri = 'data:' + mimeFor(found) + ';base64,' +
-                      base64(new Uint8Array(buf));
+            var uri = 'data:' + mimeFor(hit) + ';base64,' + base64(new Uint8Array(buf));
             return current.split('"' + src + '"').join('"' + uri + '"');
           })
           .catch(function () { return current; });
