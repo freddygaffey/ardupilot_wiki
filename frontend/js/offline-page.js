@@ -152,11 +152,26 @@
     });
   }
 
+  /**
+   * Two different numbers, and conflating them is what made the total wrong:
+   * how much the selection amounts to, and how much of it still has to be
+   * fetched. Anything already stored counts towards the first and not the
+   * second.
+   */
   function selectionBytes() {
-    var total = 0;
-    selected().forEach(function (c) { total += parseInt(c.dataset.mb, 10) * 1048576; });
-    if (!storedIds.common) { total += (COMMON.mb || 0) * 1048576; }
-    return total;
+    var selectedTotal = 0, toDownload = 0;
+
+    selected().forEach(function (c) {
+      var b = parseInt(c.dataset.mb, 10) * 1048576;
+      selectedTotal += b;
+      if (!storedIds[c.value]) { toDownload += b; }
+    });
+
+    var commonBytes = (COMMON.mb || 0) * 1048576;
+    selectedTotal += commonBytes;
+    if (!storedIds.common) { toDownload += commonBytes; }
+
+    return { total: selectedTotal, toDownload: toDownload };
   }
 
   var storedIds = {};
@@ -188,13 +203,21 @@
   }
 
   function updateTotal() {
-    var bytes = selectionBytes();
+    var b = selectionBytes();
     var total = el('selection-total');
-    if (total) {
-      total.innerHTML = bytes
-        ? 'Selected: <strong>' + fmt(bytes) + '</strong> including the required ' +
-          'common files.'
-        : 'Nothing selected.';
+    if (!total) { return; }
+
+    if (!b.total) {
+      total.textContent = 'Nothing selected.';
+    } else if (!b.toDownload) {
+      total.innerHTML = '<strong>' + fmt(b.total) + '</strong> selected &mdash; ' +
+                        'all of it is already saved on this device.';
+    } else {
+      total.innerHTML = '<strong>' + fmt(b.toDownload) + '</strong> to download' +
+                        (b.toDownload === b.total ? '' :
+                          ' &middot; ' + fmt(b.total - b.toDownload) +
+                          ' of the ' + fmt(b.total) + ' selected is already saved') +
+                        '.';
     }
   }
 
@@ -434,7 +457,10 @@
     var queue = [COMMON].concat(WIKIS.filter(function (w) {
       return chosen.indexOf(w.id) !== -1;
     }));
-    var totalBytes = queue.reduce(function (a, w) { return a + w.mb * 1048576; }, 0);
+    // Only what actually has to come down counts against the space check.
+    var totalBytes = queue.reduce(function (a, w) {
+      return a + (storedIds[w.id] ? 0 : w.mb * 1048576);
+    }, 0) || queue.reduce(function (a, w) { return a + w.mb * 1048576; }, 0);
 
     var progress = el('cache-progress');
     var button = el('download-cache-btn');
