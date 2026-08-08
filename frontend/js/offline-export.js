@@ -371,13 +371,13 @@
                        .replace(/[^A-Za-z0-9]+/g, '-').toLowerCase();
   }
 
-  // The shell: a small single-page app rather than a concatenation.
+  // The shell: a single-page app, not a concatenation.
   //
   // Pages are written as inert <script type="text/plain"> blocks. The browser
-  // parses them as raw text and does not render them or decode the data URIs
-  // inside, so opening the file costs one parse instead of laying out 747 pages
-  // and decoding several hundred megabytes of images at once. A page is only
-  // materialised when you navigate to it.
+  // parses them as text but never renders them or decodes the data URIs inside,
+  // so opening the file costs one parse rather than laying out hundreds of
+  // pages and decoding several hundred megabytes of images at once. A page is
+  // materialised only when you navigate to it.
   var SHELL_CSS =
     'html,body{margin:0;height:100%}' +
     'body{font-family:Lato,"Helvetica Neue",Helvetica,Arial,sans-serif;' +
@@ -388,66 +388,123 @@
     '#ap-brand small{display:block;font-weight:400;opacity:.85;font-size:12px}' +
     '#ap-search{margin:12px;padding:8px 10px;border:0;border-radius:3px;' +
     'font:inherit;width:calc(100% - 24px)}' +
-    '#ap-list{overflow-y:auto;flex:1;padding-bottom:20px}' +
-    '#ap-list a{display:block;color:#d9d9d9;text-decoration:none;padding:6px 16px;' +
-    'font-size:14px;border-left:3px solid transparent}' +
-    '#ap-list a:hover{background:#2e2b2b}' +
-    '#ap-list a.on{background:#2e2b2b;border-left-color:#2980b9;color:#fff}' +
+    '#ap-nav{overflow-y:auto;flex:1;padding-bottom:24px;font-size:14px}' +
+    '#ap-nav ul{list-style:none;margin:0;padding:0}' +
+    '#ap-nav a{display:block;color:#d9d9d9;text-decoration:none;padding:6px 16px;' +
+    'border-left:3px solid transparent}' +
+    '#ap-nav a:hover{background:#2e2b2b}' +
+    '#ap-nav a.on{background:#2e2b2b;border-left-color:#2980b9;color:#fff;font-weight:700}' +
+    '#ap-nav .toctree-l2 a{padding-left:32px;font-size:13px}' +
+    '#ap-nav .toctree-l3 a{padding-left:48px;font-size:13px}' +
+    '#ap-nav p.caption{color:#55a5d9;font-size:12px;font-weight:700;' +
+    'text-transform:uppercase;letter-spacing:.04em;margin:14px 0 4px;padding:0 16px}' +
     '#ap-main{flex:1;min-width:0;overflow-y:auto;height:100vh;background:#fcfcfc}' +
-    '#ap-doc{max-width:800px;padding:26px 40px 80px}' +
-    '#ap-doc img{max-width:100%;height:auto}' +
-    '#ap-doc a{color:#2980b9}' +
+    '#ap-doc{max-width:800px;padding:20px 40px 80px}' +
+    '#ap-doc img{max-width:100%;height:auto}#ap-doc a{color:#2980b9}' +
+    '#ap-crumb{color:#757575;font-size:13px;padding:14px 40px 0}' +
     '#ap-bar{background:#2980b9;color:#fff;padding:8px 16px;font-size:13px}' +
-    '@media(max-width:800px){body{flex-direction:column}#ap-side{width:auto;height:auto}' +
-    '#ap-main{height:auto}}';
+    '#ap-miss{display:none;padding:10px 40px;color:#a8620f;background:#ffedcc;' +
+    'font-size:13px}' +
+    '@media(max-width:800px){body{flex-direction:column}' +
+    '#ap-side{width:auto;height:auto}#ap-main{height:auto}}';
 
-  var SHELL_JS =
-    '(function(){' +
-    'var idx=JSON.parse(document.getElementById("ap-index").textContent);' +
-    'var list=document.getElementById("ap-list");' +
-    'var doc=document.getElementById("ap-doc");' +
-    'var search=document.getElementById("ap-search");' +
-    'var links=idx.map(function(p,i){' +
-    'var a=document.createElement("a");a.href="#"+i;a.textContent=p.t;' +
-    'a.dataset.i=i;list.appendChild(a);return a;});' +
-    // Rendering pulls the text out of its inert script block. Until this runs,
-    // the page is just characters in the document and costs nothing to keep.
-    'function show(i){' +
-    'var el=document.getElementById("p"+i);if(!el)return;' +
-    'doc.innerHTML=el.textContent;doc.parentNode.scrollTop=0;' +
-    'links.forEach(function(a,j){a.className=(j===i)?"on":"";});' +
-    'var on=links[i];if(on&&on.scrollIntoView)on.scrollIntoView({block:"nearest"});}' +
-    'function route(){var i=parseInt((location.hash||"#0").slice(1),10);show(isNaN(i)?0:i);}' +
-    'window.addEventListener("hashchange",route);' +
-    // Filtering the sidebar is title-only on purpose: a full-text index over
-    // every page would have to be built at export time and would add weight to
-    // a file that is already large. Ctrl+F still searches the open page.
-    'search.addEventListener("input",function(){' +
-    'var q=search.value.toLowerCase();' +
-    'links.forEach(function(a){' +
-    'a.style.display=a.textContent.toLowerCase().indexOf(q)===-1?"none":"";});});' +
-    'route();})();';
+  var SHELL_JS = [
+    '(function(){',
+    'var D=JSON.parse(document.getElementById("ap-index").textContent);',
+    'var doc=document.getElementById("ap-doc");',
+    'var nav=document.getElementById("ap-nav");',
+    'var crumb=document.getElementById("ap-crumb");',
+    'var miss=document.getElementById("ap-miss");',
+    'var search=document.getElementById("ap-search");',
+    // Anchors are page paths, not ordinals. An ordinal shifts whenever the set
+    // of exported pages changes, so a bookmark into last month's file would
+    // land somewhere else in this month's.
+    'var byPath={};D.pages.forEach(function(p,i){byPath[p.p]=i;});',
+    'nav.innerHTML=D.nav;',
+    'var links=[].slice.call(nav.querySelectorAll("a[href^=\\"#\\"]"));',
+    'function current(){return (location.hash||"").replace(/^#/,"")||D.pages[0].p;}',
+    'function show(path){',
+    'var i=byPath[path];',
+    'if(i===undefined){miss.style.display="block";',
+    'miss.textContent="That page is not in this file: "+path;return;}',
+    'miss.style.display="none";',
+    'var el=document.getElementById("p"+i);if(!el)return;',
+    'doc.innerHTML=el.textContent;',
+    'document.getElementById("ap-main").scrollTop=0;',
+    'crumb.textContent=D.pages[i].t;',
+    'document.title=D.pages[i].t+" - ArduPilot (offline)";',
+    'links.forEach(function(a){',
+    'var on=a.getAttribute("href")==="#"+path;',
+    'a.className=on?"on":"";',
+    'if(on&&a.scrollIntoView)a.scrollIntoView({block:"nearest"});});}',
+    'function route(){show(current());}',
+    'window.addEventListener("hashchange",route);',
+    // Links inside page content still point at the original files
+    // (docs/x.html, ../index.html). Resolve them against the current page and
+    // route internally; without this every cross-reference dead-ends.
+    'function resolve(base,href){',
+    'var parts=base.split("/");parts.pop();',
+    'href.split("/").forEach(function(seg){',
+    'if(seg===".."){parts.pop();}else if(seg!=="."&&seg!==""){parts.push(seg);}});',
+    'return parts.join("/").replace(/\\.html?$/,"");}',
+    'doc.addEventListener("click",function(e){',
+    'var a=e.target.closest?e.target.closest("a[href]"):null;if(!a)return;',
+    'var href=a.getAttribute("href");',
+    'if(!href||/^(https?:|mailto:|#)/.test(href))return;',
+    'var frag="";var h=href;var hi=h.indexOf("#");',
+    'if(hi>=0){frag=h.slice(hi);h=h.slice(0,hi);}',
+    'var target=resolve(current(),h);',
+    'if(byPath[target]!==undefined){e.preventDefault();location.hash="#"+target;',
+    'if(frag){var t=doc.querySelector(frag);if(t&&t.scrollIntoView)t.scrollIntoView();}}',
+    '});',
+    // Filter the real navigation tree rather than a flat list.
+    'search.addEventListener("input",function(){',
+    'var q=search.value.toLowerCase();',
+    'links.forEach(function(a){',
+    'var li=a.parentNode;',
+    'li.style.display=a.textContent.toLowerCase().indexOf(q)===-1?"none":"";});});',
+    'document.addEventListener("keydown",function(e){',
+    'if(e.key==="/"&&document.activeElement!==search){e.preventDefault();search.focus();}});',
+    'route();})();'
+  ].join('');
+
+  /** Lift the theme's navigation tree out of a wiki's index page. */
+  function extractNav(html, wiki) {
+    var m = html.match(/<div class="wy-menu wy-menu-vertical"[^>]*>([\s\S]*?)<\/div>/i);
+    if (!m) { return ''; }
+    // Hrefs in the root index are relative to the wiki root, so they map
+    // straight onto our anchors once the extension is dropped.
+    return m[1].replace(/href="([^"#]+)(#[^"]*)?"/g, function (all, href) {
+      if (/^(https?:|mailto:)/.test(href)) { return all; }
+      return 'href="#/' + wiki + '/' + href.replace(/\.html?$/, '') + '"';
+    });
+  }
 
   /**
    * Assemble one self-contained HTML file from the cached pages.
    *
    * Images are inlined as data URIs, the shared common set included: a single
-   * file cannot reference an archive beside it, so everything it needs has to
-   * be in it. Written straight to the stream page by page, because the finished
-   * file runs to hundreds of megabytes and cannot be built as a string first.
+   * file cannot reference an archive beside it. Written straight to the stream
+   * page by page, because the finished file runs to hundreds of megabytes and
+   * cannot be built as a string first.
    */
   function exportHtml(wikiIds, filename, onProgress) {
     var enc = new TextEncoder();
 
     return storedEntries(wikiIds).then(function (groups) {
-      var pages = [], assets = {};
+      var pages = [], assets = {}, roots = {};
 
       groups.forEach(function (g) {
         g.reqs.forEach(function (req) {
           var path = new URL(req.url).pathname;
           if (path === COMPLETE_MARKER) { return; }
           if (BINARY.test(path)) { assets[path] = g.cache; }
-          else if (/\.html?$/.test(path)) { pages.push({ path: path, cache: g.cache }); }
+          else if (/\.html?$/.test(path)) {
+            pages.push({ path: path, cache: g.cache });
+            if (/^\/[^/]+\/index\.html$/.test(path)) {
+              roots[path.split('/')[1]] = { cache: g.cache, path: path };
+            }
+          }
         });
       });
 
@@ -456,54 +513,68 @@
       }
       pages.sort(function (a, b) { return a.path < b.path ? -1 : 1; });
 
-      return openDownload(filename).then(function (sink) {
-        var done = 0, index = [];
-        var write = function (text) { return sink.write(enc.encode(text)); };
+      // Build the navigation from each wiki's own toctree, so the structure is
+      // the wiki's rather than an alphabetical list of every file.
+      var wikis = Object.keys(roots).sort();
+      return Promise.all(wikis.map(function (w) {
+        return roots[w].cache.match(roots[w].path)
+          .then(function (r) { return r.text(); })
+          .then(function (html) {
+            return '<p class="caption">' + w + '</p>' + extractNav(html, w);
+          })
+          .catch(function () { return ''; });
+      })).then(function (navParts) {
+        var navHtml = navParts.join('');
 
-        return write(
-          '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
-          '<meta name="viewport" content="width=device-width,initial-scale=1">' +
-          '<title>ArduPilot wiki (offline)</title><style>' + SHELL_CSS +
-          '</style></head><body>' +
-          '<nav id="ap-side"><div id="ap-brand">ArduPilot' +
-          '<small>offline copy</small></div>' +
-          '<input id="ap-search" placeholder="Filter pages" autocomplete="off">' +
-          '<div id="ap-list"></div></nav>' +
-          '<main id="ap-main"><div id="ap-bar">Offline copy built from pages saved ' +
-          'on your device. It does not update itself.</div><div id="ap-doc"></div></main>'
-        ).then(function () {
-          var chain = Promise.resolve();
-          pages.forEach(function (p, i) {
-            chain = chain.then(function () {
-              return p.cache.match(p.path)
-                .then(function (res) { return res.text(); })
-                .then(function (html) {
-                  var title = (html.match(/<title>([^<]*)<\/title>/i) || [])[1] ||
-                              p.path.replace(/^\//, '');
-                  title = title.replace(/\s*&mdash;.*$/, '').trim();
-                  index.push({ t: title, p: p.path });
+        return openDownload(filename).then(function (sink) {
+          var done = 0, index = [];
+          var write = function (text) { return sink.write(enc.encode(text)); };
 
-                  var m = html.match(/<div[^>]*itemprop="articleBody"[^>]*>([\s\S]*?)<\/div>\s*<footer/i);
-                  var body = m ? m[1] : html;
-                  return inlineImages(body, assets);
-                })
-                .then(function (body) {
-                  done++;
-                  if (onProgress && done % 10 === 0) { onProgress(done, pages.length); }
-                  // </script> anywhere in the payload would end the block early.
-                  body = body.split('</script>').join('<\\/script>');
-                  return write('<script type="text/plain" id="p' + i + '">' +
-                               body + '<\/script>');
-                });
+          return write(
+            '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
+            '<meta name="viewport" content="width=device-width,initial-scale=1">' +
+            '<title>ArduPilot wiki (offline)</title><style>' + SHELL_CSS +
+            '</style></head><body>' +
+            '<nav id="ap-side"><div id="ap-brand">ArduPilot' +
+            '<small>offline copy &middot; ' + wikis.join(', ') + '</small></div>' +
+            '<input id="ap-search" placeholder="Filter pages  ( / )" autocomplete="off">' +
+            '<div id="ap-nav"></div></nav>' +
+            '<main id="ap-main"><div id="ap-bar">Offline copy built from pages saved ' +
+            'on your device. It does not update itself.</div>' +
+            '<div id="ap-miss"></div><div id="ap-crumb"></div><div id="ap-doc"></div></main>'
+          ).then(function () {
+            var chain = Promise.resolve();
+            pages.forEach(function (p, i) {
+              chain = chain.then(function () {
+                return p.cache.match(p.path)
+                  .then(function (res) { return res.text(); })
+                  .then(function (html) {
+                    var title = (html.match(/<title>([^<]*)<\/title>/i) || [])[1] ||
+                                p.path.replace(/^\//, '');
+                    title = title.split('&mdash;')[0].split(' — ')[0].trim();
+                    index.push({ t: title, p: p.path.replace(/\.html?$/, '') });
+
+                    var m = html.match(/<div[^>]*itemprop="articleBody"[^>]*>([\s\S]*?)<\/div>\s*<footer/i);
+                    return inlineImages(m ? m[1] : html, assets);
+                  })
+                  .then(function (body) {
+                    done++;
+                    if (onProgress && done % 10 === 0) { onProgress(done, pages.length); }
+                    body = body.split('</script>').join('<\\/script>');
+                    return write('<script type="text/plain" id="p' + i + '">' +
+                                 body + '<\/script>');
+                  });
+              });
             });
-          });
-          return chain;
-        }).then(function () {
-          return write('<script type="application/json" id="ap-index">' +
-                       JSON.stringify(index).split('</').join('<\\/') +
-                       '<\/script><script>' + SHELL_JS + '<\/script></body></html>');
-        }).then(function () { return sink.close(); })
-          .then(function () { return { pages: done }; });
+            return chain;
+          }).then(function () {
+            var payload = { pages: index, nav: navHtml, wikis: wikis };
+            return write('<script type="application/json" id="ap-index">' +
+                         JSON.stringify(payload).split('</').join('<\\/') +
+                         '<\/script><script>' + SHELL_JS + '<\/script></body></html>');
+          }).then(function () { return sink.close(); })
+            .then(function () { return { pages: done }; });
+        });
       });
     });
   }
