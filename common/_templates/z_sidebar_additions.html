@@ -1,0 +1,54 @@
+{# Overrides the theme's sidebar additions to add the offline/install panel.
+
+   The donate block below is reproduced from sphinx_rtd_theme's own
+   z_sidebar_additions.html. Overriding replaces the theme's version outright,
+   so if the theme changes that block this copy has to be updated to match.
+
+   Copied into each wiki by update.py; edit common/_templates, not the copies.
+#}
+
+<div style="margin: auto; padding-left:20px; padding-right:20px; width=100%">
+
+  <hr />
+
+  {# Populated by js/offline-panel.js. Hidden until the script confirms the
+     browser supports service workers, so unsupported browsers see nothing
+     rather than a dead panel. #}
+  {# Two independent things, deliberately shown apart: installing gives you an
+     app window and a launcher icon but saves no pages, while saved pages work
+     in an ordinary browser tab with nothing installed. Readers conflate them
+     otherwise and assume "Install" downloaded the wiki. #}
+  <div id="ap-offline-panel" hidden>
+
+    <p style="font-weight:bold; margin-bottom:6px">App</p>
+    <p id="ap-app-status" style="font-size:12px; line-height:1.5; margin:0 0 6px 0"></p>
+    <p id="ap-app-note" hidden
+       style="font-size:11px; line-height:1.45; margin:0 0 8px 0; padding:6px 8px;
+              border-left:3px solid #6ab0de; background:rgba(0,0,0,0.15)"></p>
+    <button id="ap-install-app" type="button" hidden
+            style="width:100%; margin-bottom:10px; padding:6px; cursor:pointer">
+      Install app
+    </button>
+
+    <p style="font-weight:bold; margin-bottom:6px">Offline content</p>
+    <p id="ap-offline-status" style="font-size:12px; line-height:1.5; margin:0 0 8px 0">
+      Checking&hellip;
+    </p>
+    <button id="ap-offline-persist" type="button" hidden
+            style="width:100%; margin-bottom:6px; padding:6px; cursor:pointer">
+      Keep offline copy
+    </button>
+  </div>
+
+  <hr />
+
+  <form style="margin:auto;" action="https://ardupilot.org/donate">
+  <input type="image" src="https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif" border="0" name="submit" title="PayPal - The safer, easier way to pay online!" alt="Donate" />
+  </form>
+  <br>
+  <a href="{{ pathto('docs/common-donation') }}">Individual</a>
+  <a href="{{ pathto('docs/common-partners') }}">Partners</a>
+  <a href="https://ardupilot.org/shop">SWAG Shop</a>
+
+  <hr />
+</div>

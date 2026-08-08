@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Offline copies &mdash; ArduPilot Documentation</title>
+<link rel="manifest" href="/manifest.json">
+<meta name="theme-color" content="#1c2b36">
+<link rel="icon" href="/favicon.ico">
+<!--
+  Everything is inline: this page must render with no connection at all, which
+  rules out external stylesheets and webfonts. Type is a system monospace stack
+  for the same reason - it is the only characterful face guaranteed present.
+
+  The layout is deliberately instrument-panel rather than marketing page:
+  aligned numeric columns, one frame, no decoration that does not carry data.
+-->
+<style>
+  :root {
+    --bg:#f4f4f2; --panel:#fffefb; --ink:#1b1b1a; --dim:#6d6c66;
+    --rule:#d8d6cf; --accent:#1c6a9e; --warn:#a8620f; --warnbg:#fdf3e6;
+    --ok:#3f7a3f; --okbg:#eef5ee; --stored:#2f6f3f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg:#131513; --panel:#1a1c1a; --ink:#dcdcd4; --dim:#8a8a80;
+      --rule:#2e312e; --accent:#5fa8d8; --warn:#d9a05a; --warnbg:#2a2016;
+      --ok:#7fb37f; --okbg:#18231a; --stored:#8ec49a;
+    }
+  }
+  * { box-sizing:border-box; }
+  html { -webkit-text-size-adjust:100%; }
+  body {
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    font-size:13px; line-height:1.55;
+    padding:28px 16px 60px;
+  }
+  .panel {
+    max-width:720px; margin:0 auto; background:var(--panel);
+    border:1px solid var(--rule);
+  }
+  .bar {
+    display:flex; align-items:baseline; justify-content:space-between;
+    gap:12px; padding:11px 16px; border-bottom:1px solid var(--rule);
+  }
+  .bar h1 { margin:0; font-size:12px; letter-spacing:.16em; text-transform:uppercase; font-weight:600; }
+  .bar a { color:var(--dim); text-decoration:none; font-size:11px; }
+  .bar a:hover { color:var(--accent); }
+
+  .block { padding:14px 16px; border-bottom:1px solid var(--rule); }
+  .block:last-child { border-bottom:0; }
+  .label { font-size:10px; letter-spacing:.15em; text-transform:uppercase;
+           color:var(--dim); margin:0 0 9px 0; }
+
+  /* key/value rows at the top - label left, value right, dotted leader between */
+  .kv { display:flex; align-items:baseline; gap:8px; margin:0 0 4px 0; }
+  .kv .k { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim);
+           white-space:nowrap; }
+  .kv .lead { flex:1; border-bottom:1px dotted var(--rule); transform:translateY(-3px); }
+  .kv .v { white-space:nowrap; }
+
+  table { width:100%; border-collapse:collapse; }
+  td { padding:3px 0; vertical-align:baseline; }
+  td.num { text-align:right; white-space:nowrap; padding-left:14px;
+           font-variant-numeric:tabular-nums; }
+  label { cursor:pointer; display:inline-flex; align-items:baseline; gap:8px; }
+  input[type=checkbox] { accent-color:var(--accent); margin:0; transform:translateY(1px); }
+  tr:hover td { background:rgba(127,127,127,.06); }
+
+  .pill { color:var(--dim); }
+  .pill.stored { color:var(--stored); }
+  .pill.stored::before { content:"\25CF  "; }
+
+  .total { display:flex; justify-content:space-between; margin-top:10px;
+           padding-top:9px; border-top:1px solid var(--rule); }
+
+  button {
+    font:inherit; font-size:11px; letter-spacing:.1em; text-transform:uppercase;
+    padding:7px 13px; color:var(--ink); background:transparent;
+    border:1px solid var(--rule); cursor:pointer; transition:.12s;
+  }
+  button:hover:not([disabled]) { border-color:var(--accent); color:var(--accent); }
+  button.primary { border-color:var(--accent); color:var(--accent); }
+  button.primary:hover { background:var(--accent); color:var(--panel); }
+  button[disabled] { opacity:.4; cursor:not-allowed; }
+  .actions { display:flex; flex-wrap:wrap; gap:8px; }
+
+  .warn, .ok { padding:8px 11px; margin-top:9px; font-size:12px; }
+  .warn { border-left:2px solid var(--warn); background:var(--warnbg); }
+  .ok { border-left:2px solid var(--ok); background:var(--okbg); }
+
+  .dl { margin-bottom:13px; }
+  .dl a { color:var(--accent); text-decoration:none; }
+  .dl a:hover { text-decoration:underline; }
+  .dl a::before { content:"\2193  "; }
+  .dl .hint { color:var(--dim); font-size:11px; margin-top:1px; }
+  #archive-links a { display:block; }
+
+  .foot { color:var(--dim); font-size:11px; }
+  code { font:inherit; color:var(--accent); }
+</style>
+</head>
+<body>
+
+<div class="panel">
+
+  <div class="bar">
+    <h1>Offline copies</h1>
+    <a href="/">&larr; ArduPilot Documentation</a>
+  </div>
+
+  <!-- Storage first: whether the copy will survive matters more than its size -->
+  <div class="block">
+    <div id="storage-status">Checking&hellip;</div>
+    <div class="kv" style="margin-top:6px">
+      <span class="k">Build</span><span class="lead"></span>
+      <span class="v" id="build-date">&mdash;</span>
+    </div>
+    <div id="storage-warning"></div>
+    <div class="actions" style="margin-top:11px">
+      <button id="persist-btn" hidden>Make permanent</button>
+      <button id="clear-btn" hidden>Remove all</button>
+    </div>
+  </div>
+
+  <div class="block">
+    <p class="label">Keep offline</p>
+    <table><tbody id="wiki-rows"></tbody></table>
+    <div class="total">
+      <span id="selection-total"></span>
+    </div>
+  </div>
+
+  <div class="block">
+    <div class="actions">
+      <button id="download-cache-btn" class="primary">Save in browser</button>
+      <button id="check-btn">Check now</button>
+      <span id="cache-progress" class="pill" hidden></span>
+      <span id="check-result" class="pill" hidden></span>
+    </div>
+    <label style="margin-top:12px; font-size:12px">
+      <input type="checkbox" id="autoupdate" checked>
+      <span>Update saved pages automatically</span>
+    </label>
+  </div>
+
+  <div class="block">
+    <p class="label">Or download</p>
+
+    <div class="dl">
+      <div id="archive-links"></div>
+      <div class="hint">Unpack and open <code>index.html</code>. Pages load instantly;
+        search needs to be served rather than opened from disk.</div>
+    </div>
+
+    <div class="dl">
+      <a id="dl-pyz" href="#" aria-disabled="true">wiki.pyz &mdash; not yet published</a>
+      <div class="hint">One file. <code>python3 wiki.pyz</code> serves it locally &mdash;
+        instant pages, working search, nothing extracted to disk.</div>
+    </div>
+
+    <div class="dl">
+      <!-- One file holds one wiki: it is self-contained by definition, so it
+           cannot share the common images the way the archives do. Hence a
+           picker rather than the checkbox list above. -->
+      <div style="display:flex; align-items:baseline; gap:8px; flex-wrap:wrap">
+        <label for="single-wiki" style="display:inline">Save as a single file</label>
+        <select id="single-wiki"></select>
+        <span id="dl-single-wrap"></span>
+      </div>
+      <div class="hint">Double-click, no tools needed. Around 30 seconds to open, but
+        Ctrl+F searches every page at once.</div>
+    </div>
+  </div>
+
+  <div class="block">
+    <div class="actions" style="justify-content:space-between; align-items:baseline">
+      <p class="label" style="margin:0">Install as app</p>
+      <button id="ap-install-app" hidden>Install</button>
+    </div>
+    <p class="foot" style="margin:9px 0 0 0">
+      Downloads nothing, and is not needed to read offline &mdash; saving pages works in
+      an ordinary tab. It gives the wiki its own window, and makes your browser far less
+      likely to delete your saved pages.
+      <span id="install-state"></span>
+    </p>
+  </div>
+
+</div>
+
+<script src="/js/pwa.js" defer></script>
+<script src="/js/offline-page.js" defer></script>
+</body>
+</html>

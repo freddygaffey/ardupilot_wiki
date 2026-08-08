@@ -1,0 +1,23 @@
+{# Adds the PWA hooks to every wiki page.
+
+   The ArduPilot sphinx_rtd_theme fork exposes a single hook inside <head>
+   ({% block extrahead %}, layout.html:124), which is all we need: the manifest
+   link makes the site installable and pwa.js registers the service worker.
+
+   Paths are absolute because the service worker is scoped to the site root and
+   therefore has to be served from there, while these pages live under
+   /copter/, /plane/ and so on.
+
+   This file is copied into each wiki's source/_templates/ by update.py. Edit it
+   here, not in the copies.
+#}
+{% extends "!layout.html" %}
+
+{% block extrahead %}
+  {{ super() }}
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#2980b9">
+  <link rel="apple-touch-icon" href="/apple-icon.png">
+  <script src="/js/pwa.js" defer></script>
+  <script src="/js/offline-panel.js" defer></script>
+{% endblock %}
