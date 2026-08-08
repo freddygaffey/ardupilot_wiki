@@ -232,8 +232,10 @@
 
   /* ---------------------------------------------------------- exports: pyz */
 
-  // Kept in step with scripts/wiki_pyz_main.py. Embedded rather than fetched
-  // so an export works with no connection.
+  // The server that runs inside a generated .pyz. Embedded rather than
+  // fetched so an export works with no connection, and the only copy -
+  // there was a fuller version under scripts/ that nothing called, and two
+  // copies of the same server that had to be kept in step was a trap.
   var PYZ_MAIN = [
     '"""ArduPilot wiki, offline. Run: python3 <this file>"""',
     'import http.server, mimetypes, socketserver, sys, threading, zipfile, webbrowser',
