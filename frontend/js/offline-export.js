@@ -496,8 +496,24 @@
     'var frag="";var h=href;var hi=h.indexOf("#");',
     'if(hi>=0){frag=h.slice(hi);h=h.slice(0,hi);}',
     'var target=resolve(current(),h);',
-    'if(lookup(target)!==undefined){e.preventDefault();location.hash="#"+target;',
-    'if(frag){var t=doc.querySelector(frag);if(t&&t.scrollIntoView)t.scrollIntoView();}}',
+    // Never let a relative link leave the file. Outside it there is nothing to
+    // resolve against, so following one lands on a broken URL and the reader
+    // loses the document entirely - Sphinx links thumbnails to full-size
+    // images, so this is easy to hit by accident.
+    'e.preventDefault();',
+    'var found=lookup(target);',
+    'if(found!==undefined){location.hash="#"+target;',
+    'if(frag){setTimeout(function(){var t=doc.querySelector(frag);',
+    'if(t&&t.scrollIntoView)t.scrollIntoView();},50);}return;}',
+    // A linked image we hold: show it rather than reporting it missing.
+    'var im=doc.querySelector(\'[data-ap-img]\');',
+    'var block=null;',
+    '[].forEach.call(doc.querySelectorAll("[data-ap-img]"),function(x){',
+    'if(!block&&x.src&&h.indexOf(x.getAttribute("data-ap-name")||"\\u0000")>=0)block=x.src;});',
+    'if(block){window.open(block,"_blank");return;}',
+    'miss.style.display="block";',
+    'miss.textContent="Not included in this file: "+target;',
+    'setTimeout(function(){miss.style.display="none";},4000);',
     '});',
     // Filter the real navigation tree rather than a flat list.
     'search.addEventListener("input",function(){',
