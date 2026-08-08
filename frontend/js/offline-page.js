@@ -118,43 +118,30 @@
       var est = r[0].estimate, persisted = r[0].persisted, pages = r[1];
       var used = est.usage || 0, quota = est.quota || 0;
 
-      // Gauge segments are a share of total quota, so the bar answers "how much
-      // room is left" rather than "how big is this download".
-      var usedPct = quota ? Math.min(100, (used / quota) * 100) : 0;
-      setGauge(usedPct, pendingPct(quota, used));
+      function kv(key, value) {
+        return '<div class="kv"><span class="k">' + key + '</span>' +
+               '<span class="lead2"></span><span class="v">' + value + '</span></div>';
+      }
 
       el('storage-status').innerHTML =
-        '<span><span class="sw sw-used"></span><b>' + fmt(used) + '</b> used</span>' +
-        '<span><span class="sw sw-pending"></span><b id="pending-label">' +
-          fmt(0) + '</b> selected</span>' +
-        '<span><span class="sw sw-free"></span><b>' +
-          fmt(Math.max(quota - used, 0)) + '</b> free</span>' +
-        '<span>' + pages + ' page' + (pages === 1 ? '' : 's') + ' cached</span>';
+        kv('On this device',
+           pages + ' page' + (pages === 1 ? '' : 's') + ' &middot; ' +
+           fmt(used) + ' used &middot; ' +
+           fmt(Math.max(quota - used, 0)) + ' free') +
+        kv('Storage', persisted ? 'permanent' : '&#9888; temporary');
 
       el('storage-warning').innerHTML = persisted
-        ? '<div class="apx-note ok">Storage is <strong>permanent</strong>. Saved ' +
-          'pages will not be removed automatically, though clearing your browser ' +
-          'data still deletes them.</div>'
-        : '<div class="apx-note">Storage is <strong>temporary</strong>. Your ' +
-          'browser can delete these saved pages without warning if this device ' +
-          'runs low on space. Do not rely on this copy in the field until you ' +
-          'make it permanent.</div>';
+        ? '<div class="ok">Storage is <strong>permanent</strong>. Saved pages will ' +
+          'not be removed automatically, though clearing your browser data still ' +
+          'deletes them.</div>'
+        : '<div class="warn">&#9888; Storage is <strong>temporary</strong>. Your ' +
+          'browser can delete these saved pages without warning if this device runs ' +
+          'low on space. Do not rely on this copy in the field until you make it ' +
+          'permanent.</div>';
 
       el('persist-btn').hidden = persisted || !(navigator.storage && navigator.storage.persist);
       updateTotal();
     });
-  }
-
-  function setGauge(usedPct, pendPct) {
-    var u = el('gauge-used'), p = el('gauge-pending');
-    if (u) { u.style.width = usedPct.toFixed(2) + '%'; }
-    if (p) { p.style.width = Math.min(pendPct, Math.max(0, 100 - usedPct)).toFixed(2) + '%'; }
-  }
-
-  /** Bytes the current selection would add, as a share of quota. */
-  function pendingPct(quota, used) {
-    if (!quota) { return 0; }
-    return (selectionBytes() / quota) * 100;
   }
 
   function selectionBytes() {
@@ -169,22 +156,19 @@
   function renderWikis() {
     return storedWikis().then(function (stored) {
       storedIds = stored;
-      var rows = [COMMON].concat(WIKIS).map(function (w, i) {
+      var rows = [COMMON].concat(WIKIS).map(function (w) {
         var isStored = !!stored[w.id];
-        var locked = !!w.required;
-        return '<label class="apx-row' + (locked ? ' is-locked' : '') +
-               '" style="animation-delay:' + (i * 22) + 'ms">' +
-                 '<input type="checkbox"' +
-                   (locked ? ' checked disabled' : ' class="wiki-check" value="' + w.id +
-                     '" data-mb="' + w.mb + '"' + (isStored ? ' checked' : '')) + '>' +
-                 '<span class="apx-box"></span>' +
-                 '<span class="apx-name">' + w.name +
-                   (locked ? '<span class="apx-req">required</span>' : '') + '</span>' +
-                 '<span class="apx-num">' + w.mb + ' MB</span>' +
-                 '<span class="apx-num apx-pages">' + (w.pages || '&mdash;') + '</span>' +
-                 '<span class="apx-state' + (isStored ? ' on' : '') + '">' +
-                   (isStored ? 'stored' : '&mdash;') + '</span>' +
-               '</label>';
+        var box = w.required
+          ? '<input type="checkbox" checked disabled>'
+          : '<input type="checkbox" class="wiki-check" value="' + w.id +
+            '" data-mb="' + w.mb + '"' + (isStored ? ' checked' : '') + '>';
+        return '<tr><td class="name"><label>' + box + '<span>' + w.name +
+                 '</span></label></td>' +
+               '<td class="num">' + w.mb + ' MB</td>' +
+               '<td class="num">' + (w.pages || '&mdash;') + '</td>' +
+               '<td class="num">' + (isStored
+                 ? '<span class="pill stored">Stored</span>'
+                 : '<span class="pill">&mdash;</span>') + '</td></tr>';
       });
       el('wiki-rows').innerHTML = rows.join('');
       updateTotal();
@@ -197,16 +181,13 @@
 
   function updateTotal() {
     var bytes = selectionBytes();
-    var label = el('pending-label');
-    if (label) { label.textContent = fmt(bytes); }
     var total = el('selection-total');
     if (total) {
-      total.textContent = bytes ? fmt(bytes) + ' to download' : 'nothing selected';
+      total.innerHTML = bytes
+        ? 'Selected: <strong>' + fmt(bytes) + '</strong> including the required ' +
+          'common files.'
+        : 'Nothing selected.';
     }
-    return storage().then(function (r) {
-      var est = r.estimate, quota = est.quota || 0, used = est.usage || 0;
-      setGauge(quota ? Math.min(100, (used / quota) * 100) : 0, pendingPct(quota, used));
-    });
   }
 
   /*
@@ -452,15 +433,11 @@
     progress.hidden = false;
     activeDownload = new AbortController();
     button.classList.add('busy');
-    setLabel('Cancel');
+    setLabel('Cancel download');
 
     function setLabel(text) {
       var lbl = button.querySelector('.lbl');
       if (lbl) { lbl.textContent = text; } else { button.textContent = text; }
-    }
-    function setFill(pct) {
-      var fill = el('dl-fill');
-      if (fill) { fill.style.width = Math.max(0, Math.min(100, pct)) + '%'; }
     }
     function report(text) { progress.textContent = text; }
     report('Checking space…');
@@ -482,7 +459,6 @@
               return fetchArchive(entry, cache, function (n) {
                 received += n;
                 var pct = Math.min(99, Math.round(received / totalBytes * 100));
-                setFill(pct);
                 report(entry.name + ' · ' + pct + '%');
               }).then(function () {
                 // The marker records the build, not just the time: an update
@@ -496,7 +472,7 @@
           });
         }, Promise.resolve());
       })
-      .then(function () { setFill(100); report('Saved'); })
+      .then(function () { report('Saved'); })
       .catch(function (err) {
         if (err && err.name === 'AbortError') {
           report('Cancelled — anything already saved is kept.');
@@ -509,8 +485,7 @@
       .then(function () {
         activeDownload = null;
         button.classList.remove('busy');
-        setLabel('Save selected');
-        setFill(0);
+        setLabel('Save in browser');
         return Promise.all([renderStorage(), renderWikis()]);
       });
   }
