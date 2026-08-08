@@ -378,35 +378,22 @@
   // so opening the file costs one parse rather than laying out hundreds of
   // pages and decoding several hundred megabytes of images at once. A page is
   // materialised only when you navigate to it.
+  // Only what the app itself needs. Everything else - type, headings,
+  // admonitions, code blocks, tables - comes from the theme's own stylesheet,
+  // embedded at export time, so this looks like the site rather than like an
+  // approximation of it.
   var SHELL_CSS =
-    'html,body{margin:0;height:100%}' +
-    'body{font-family:Lato,"Helvetica Neue",Helvetica,Arial,sans-serif;' +
-    'color:#404040;line-height:1.65;display:flex}' +
-    '#ap-side{width:300px;flex:none;background:#343131;color:#d9d9d9;' +
-    'display:flex;flex-direction:column;height:100vh}' +
-    '#ap-brand{background:#2980b9;color:#fff;padding:14px 16px;font-weight:700}' +
-    '#ap-brand small{display:block;font-weight:400;opacity:.85;font-size:12px}' +
+    'html,body{height:100%}' +
+    '.wy-nav-side{overflow-y:auto}' +
     '#ap-search{margin:12px;padding:8px 10px;border:0;border-radius:3px;' +
     'font:inherit;width:calc(100% - 24px)}' +
-    '#ap-nav{overflow-y:auto;flex:1;padding-bottom:24px;font-size:14px}' +
-    '#ap-nav ul{list-style:none;margin:0;padding:0}' +
-    '#ap-nav a{display:block;color:#d9d9d9;text-decoration:none;padding:6px 16px;' +
-    'border-left:3px solid transparent}' +
-    '#ap-nav a:hover{background:#2e2b2b}' +
-    '#ap-nav a.on{background:#2e2b2b;border-left-color:#2980b9;color:#fff;font-weight:700}' +
-    '#ap-nav .toctree-l2 a{padding-left:32px;font-size:13px}' +
-    '#ap-nav .toctree-l3 a{padding-left:48px;font-size:13px}' +
-    '#ap-nav p.caption{color:#55a5d9;font-size:12px;font-weight:700;' +
-    'text-transform:uppercase;letter-spacing:.04em;margin:14px 0 4px;padding:0 16px}' +
-    '#ap-main{flex:1;min-width:0;overflow-y:auto;height:100vh;background:#fcfcfc}' +
-    '#ap-doc{max-width:800px;padding:20px 40px 80px}' +
-    '#ap-doc img{max-width:100%;height:auto}#ap-doc a{color:#2980b9}' +
-    '#ap-crumb{color:#757575;font-size:13px;padding:14px 40px 0}' +
-    '#ap-bar{background:#2980b9;color:#fff;padding:8px 16px;font-size:13px}' +
-    '#ap-miss{display:none;padding:10px 40px;color:#a8620f;background:#ffedcc;' +
+    '#ap-nav a.on{background:#2e2b2b;border-left:3px solid #2980b9;color:#fff;' +
+    'font-weight:700}' +
+    '#ap-miss{display:none;padding:10px 16px;color:#a8620f;background:#ffedcc;' +
     'font-size:13px}' +
-    '@media(max-width:800px){body{flex-direction:column}' +
-    '#ap-side{width:auto;height:auto}#ap-main{height:auto}}';
+    '#ap-bar{background:#2980b9;color:#fff;padding:8px 16px;font-size:13px}' +
+    '#ap-brand{background:#2980b9;color:#fff;padding:14px 16px;font-weight:700}' +
+    '#ap-brand small{display:block;font-weight:400;opacity:.85;font-size:12px}';
 
   var SHELL_JS = [
     '(function(){',
@@ -430,7 +417,12 @@
     'miss.style.display="none";',
     'var el=document.getElementById("p"+i);if(!el)return;',
     'doc.innerHTML=el.textContent;',
-    'document.getElementById("ap-main").scrollTop=0;',
+// Images are stored once and referenced by id; attach them only
+// for the page being shown, so nothing else decodes.
+'[].forEach.call(doc.querySelectorAll("[data-ap-img]"),function(im){',
+'var b=document.getElementById("i"+im.getAttribute("data-ap-img"));',
+'if(b)im.src=b.textContent;});',
+    'var sc=document.querySelector(".wy-nav-content-wrap");if(sc)sc.scrollTop=0;',
     'crumb.textContent=D.pages[i].t;',
     'document.title=D.pages[i].t+" - ArduPilot (offline)";',
     'links.forEach(function(a){',
@@ -492,13 +484,14 @@
     var enc = new TextEncoder();
 
     return storedEntries(wikiIds).then(function (groups) {
-      var pages = [], assets = {}, roots = {};
+      var pages = [], assets = {}, styles = {}, roots = {};
 
       groups.forEach(function (g) {
         g.reqs.forEach(function (req) {
           var path = new URL(req.url).pathname;
           if (path === COMPLETE_MARKER) { return; }
           if (BINARY.test(path)) { assets[path] = g.cache; }
+          else if (/\.css$/.test(path)) { styles[path] = g.cache; assets[path] = g.cache; }
           else if (/\.html?$/.test(path)) {
             pages.push({ path: path, cache: g.cache });
             if (/^\/[^/]+\/index\.html$/.test(path)) {
@@ -525,23 +518,33 @@
           .catch(function () { return ''; });
       })).then(function (navParts) {
         var navHtml = navParts.join('');
-
+        return buildThemeCss(styles, assets).then(function (themeCss) {
         return openDownload(filename).then(function (sink) {
           var done = 0, index = [];
+          // Shared across pages so each image is emitted once.
+          var imgIds = { __next: 0 };
           var write = function (text) { return sink.write(enc.encode(text)); };
 
           return write(
-            '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
+            '<!DOCTYPE html><html lang="en" class="writer-html5"><head>' +
+            '<meta charset="utf-8">' +
             '<meta name="viewport" content="width=device-width,initial-scale=1">' +
-            '<title>ArduPilot wiki (offline)</title><style>' + SHELL_CSS +
-            '</style></head><body>' +
-            '<nav id="ap-side"><div id="ap-brand">ArduPilot' +
-            '<small>offline copy &middot; ' + wikis.join(', ') + '</small></div>' +
+            '<title>ArduPilot wiki (offline)</title>' +
+            '<style>' + themeCss + '</style><style>' + SHELL_CSS + '</style>' +
+            '</head><body class="wy-body-for-nav">' +
+            '<div class="wy-grid-for-nav">' +
+            '<nav data-toggle="wy-nav-shift" class="wy-nav-side">' +
+            '<div id="ap-brand">ArduPilot<small>offline copy &middot; ' +
+            wikis.join(', ') + '</small></div>' +
             '<input id="ap-search" placeholder="Filter pages  ( / )" autocomplete="off">' +
-            '<div id="ap-nav"></div></nav>' +
-            '<main id="ap-main"><div id="ap-bar">Offline copy built from pages saved ' +
-            'on your device. It does not update itself.</div>' +
-            '<div id="ap-miss"></div><div id="ap-crumb"></div><div id="ap-doc"></div></main>'
+            '<div class="wy-menu wy-menu-vertical" id="ap-nav"></div></nav>' +
+            '<section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">' +
+            '<div class="wy-nav-content"><div class="rst-content">' +
+            '<div id="ap-bar">Offline copy built from pages saved on your device. ' +
+            'It does not update itself.</div>' +
+            '<div id="ap-miss"></div><div id="ap-crumb"></div>' +
+            '<div itemprop="articleBody" id="ap-doc"></div>' +
+            '</div></div></section></div>'
           ).then(function () {
             var chain = Promise.resolve();
             pages.forEach(function (p, i) {
@@ -555,13 +558,18 @@
                     index.push({ t: title, p: p.path.replace(/\.html?$/, '') });
 
                     var m = html.match(/<div[^>]*itemprop="articleBody"[^>]*>([\s\S]*?)<\/div>\s*<footer/i);
-                    return inlineImages(m ? m[1] : html, assets, p.path);
+                    return referenceImages(m ? m[1] : html, assets, p.path, imgIds);
                   })
-                  .then(function (body) {
+                  .then(function (r) {
                     done++;
                     if (onProgress && done % 10 === 0) { onProgress(done, pages.length); }
-                    body = body.split('</script>').join('<\\/script>');
-                    return write('<script type="text/plain" id="p' + i + '">' +
+                    var body = r.html.split('</script>').join('<\\/script>');
+                    // Images seen for the first time are written now, once.
+                    var blocks = r.fresh.map(function (f) {
+                      return '<script type="text/plain" id="i' + f.id + '">' +
+                             f.uri + '<\/script>';
+                    }).join('');
+                    return write(blocks + '<script type="text/plain" id="p' + i + '">' +
                                  body + '<\/script>');
                   });
               });
@@ -575,8 +583,77 @@
           }).then(function () { return sink.close(); })
             .then(function () { return { pages: done }; });
         });
+        });
       });
     });
+  }
+
+  /**
+   * Rebuild the theme's stylesheet with its fonts inlined.
+   *
+   * Without this the export approximates the theme: admonitions, code blocks,
+   * tables and inline literals all render plain, and the type falls back to
+   * Helvetica because Lato and Roboto Slab are loaded by @font-face. All of it
+   * is already in the cache, so using it is a few hundred kilobytes on a file
+   * that is already hundreds of megabytes.
+   */
+  function buildThemeCss(styles, assets) {
+    var wanted = Object.keys(styles).filter(function (p) {
+      return /_static\/css\/(theme|badge_only)\.css$/.test(p) ||
+             /_static\/(ardupilot|custom)\.css$/.test(p);
+    }).sort();
+    if (!wanted.length) { return Promise.resolve(''); }
+
+    // One wiki's copy is enough - they are identical across wikis.
+    var seen = {};
+    wanted = wanted.filter(function (p) {
+      var base = p.replace(/^\/[^/]+\//, '');
+      if (seen[base]) { return false; }
+      seen[base] = 1;
+      return true;
+    });
+
+    var chain = Promise.resolve('');
+    wanted.forEach(function (path) {
+      chain = chain.then(function (acc) {
+        return styles[path].match(path)
+          .then(function (r) { return r.text(); })
+          .then(function (css) { return inlineCssUrls(css, path, assets); })
+          .then(function (css) { return acc + '\n' + css; })
+          .catch(function () { return acc; });
+      });
+    });
+    return chain;
+  }
+
+  /** Replace url(...) in a stylesheet with data URIs from the cache. */
+  function inlineCssUrls(css, cssPath, assets) {
+    var refs = [];
+    css.replace(/url\(\s*['"]?([^'")]+)['"]?\s*\)/g, function (all, ref) {
+      if (!/^(data:|https?:|\/\/)/.test(ref) && refs.indexOf(ref) === -1) {
+        refs.push(ref);
+      }
+      return all;
+    });
+    if (!refs.length) { return Promise.resolve(css); }
+
+    var chain = Promise.resolve(css);
+    refs.forEach(function (ref) {
+      chain = chain.then(function (current) {
+        var clean = ref.split('?')[0].split('#')[0];
+        var resolved = clean.charAt(0) === '/' ? clean : resolvePath(cssPath, clean);
+        if (!assets[resolved]) { return current; }
+        return assets[resolved].match(resolved)
+          .then(function (r) { return r.arrayBuffer(); })
+          .then(function (buf) {
+            var uri = 'data:' + mimeFor(resolved) + ';base64,' +
+                      base64(new Uint8Array(buf));
+            return current.split(ref).join(uri);
+          })
+          .catch(function () { return current; });
+      });
+    });
+    return chain;
   }
 
   /** Resolve a relative href against a page path, as a browser would. */
@@ -591,54 +668,65 @@
   }
 
   /**
-   * Replace <img src> with data URIs drawn from the cache.
+   * Point each <img> at a shared image block instead of inlining it.
    *
-   * The src has to be resolved against the page it appears in - a docs page
-   * says "../_images/x.png", which is /rover/_images/x.png, not /_images/x.png.
-   * Getting that wrong misses every lookup and silently leaves the relative
-   * path in place, which points at nothing once the page is inside one file.
+   * Inlining per page encodes the same picture once for every page that shows
+   * it - a diagram used on forty pages was written forty times, which is what
+   * made a full export enormous. Each image is now emitted once as its own
+   * inert block and referenced by id, so the file holds one copy of each
+   * regardless of how many pages use it.
    *
-   * Shared images are stored once under /_common/, so that is tried too.
+   * Returns the rewritten html plus any images seen for the first time, which
+   * the caller writes out as it streams.
    */
-  function inlineImages(html, assets, pagePath) {
+  function referenceImages(html, assets, pagePath, imgIds) {
     var srcs = [];
     html.replace(/<img[^>]+src="([^"]+)"/gi, function (all, src) {
       if (srcs.indexOf(src) === -1) { srcs.push(src); }
       return all;
     });
-    if (!srcs.length) { return Promise.resolve(html); }
+    if (!srcs.length) { return Promise.resolve({ html: html, fresh: [] }); }
 
+    var fresh = [];
     var chain = Promise.resolve(html);
+
     srcs.forEach(function (src) {
       chain = chain.then(function (current) {
         if (/^(data:|https?:|\/\/)/.test(src)) { return current; }
 
         var clean = src.split('?')[0].split('#')[0];
-        var resolved = clean.charAt(0) === '/'
-          ? clean
-          : resolvePath(pagePath, clean);
-
+        var resolved = clean.charAt(0) === '/' ? clean : resolvePath(pagePath, clean);
         var candidates = [
           resolved,
           resolved.replace(/^\/[^/]+\/_images\//, '/_common/_images/')
         ];
 
         var hit = null;
-        candidates.forEach(function (c) {
-          if (!hit && assets[c]) { hit = c; }
-        });
+        candidates.forEach(function (c) { if (!hit && assets[c]) { hit = c; } });
         if (!hit) { return current; }
 
+        // Already emitted for an earlier page: just point at it.
+        if (imgIds[hit] !== undefined) {
+          return current.split('src="' + src + '"')
+                        .join('data-ap-img="' + imgIds[hit] + '"');
+        }
+
+        var id = imgIds[hit] = imgIds.__next++;
         return assets[hit].match(hit)
           .then(function (res) { return res.arrayBuffer(); })
           .then(function (buf) {
-            var uri = 'data:' + mimeFor(hit) + ';base64,' + base64(new Uint8Array(buf));
-            return current.split('"' + src + '"').join('"' + uri + '"');
+            fresh.push({
+              id: id,
+              uri: 'data:' + mimeFor(hit) + ';base64,' + base64(new Uint8Array(buf))
+            });
+            return current.split('src="' + src + '"')
+                          .join('data-ap-img="' + id + '"');
           })
           .catch(function () { return current; });
       });
     });
-    return chain;
+
+    return chain.then(function (out) { return { html: out, fresh: fresh }; });
   }
 
   global.ArduPilotExport = {

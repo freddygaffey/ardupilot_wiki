@@ -115,7 +115,9 @@ function isImage(url) {
 }
 
 function isStatic(url) {
-  return /\/(_static|css|js|fonts)\//.test(url.pathname);
+  // .js is handled earlier, network-first; this covers stylesheets and fonts,
+  // which are large-ish, change rarely, and are safe to serve from cache.
+  return /\/(_static|css|fonts)\//.test(url.pathname);
 }
 
 /** Tell every open page under this scope that a resource changed. */
@@ -316,7 +318,15 @@ self.addEventListener('fetch', (event) => {
   // have to match, and a cached copy of one paired with a fresh copy of the
   // other renders as garbage. Never serve it from cache while there is a
   // network - fall back only when genuinely offline.
-  if (/common-offline(\.html)?$/.test(url.pathname)) {
+  // All JavaScript, and the offline page itself, take the network first and
+  // fall back to cache only when there is none.
+  //
+  // Script and markup are one unit: a cached copy of either paired with a fresh
+  // copy of the other renders as nonsense, and that failure is silent and
+  // confusing. Scripts are small - a few tens of kilobytes against images
+  // measured in hundreds of megabytes - so serving them fresh costs almost
+  // nothing, while serving them stale costs correctness.
+  if (/\.js$/.test(url.pathname) || /common-offline(\.html)?$/.test(url.pathname)) {
     event.respondWith(safely(networkOnly(request), request));
     return;
   }
