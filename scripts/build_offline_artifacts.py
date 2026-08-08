@@ -20,6 +20,7 @@ once however many vehicles somebody keeps.
 
 import gzip
 import json
+import zipfile
 import os
 import tarfile
 import time
@@ -139,6 +140,48 @@ def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path) -> int:
                 continue
             tar.add(path, arcname=f"{wiki}/{rel.as_posix()}", filter=_normalise)
     return archive.stat().st_size
+
+
+# Images and other already-compressed payloads gain nothing from deflate and
+# cost real time, so only text is compressed.
+ALREADY_COMPRESSED = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".woff", ".woff2",
+                      ".gz", ".zip", ".mp4", ".ico"}
+
+
+def build_pyz(wiki: str, out_dir: Path) -> Path:
+    """
+    Package one wiki as a runnable zipapp: `python3 <wiki>-wiki.pyz`.
+
+    The site is stored under site/ inside the archive and served from there on
+    demand, so running it extracts nothing to disk. Serving over localhost -
+    rather than telling people to open index.html - is what keeps Sphinx search
+    working, since browsers refuse the fetch() it relies on from file:// URLs.
+    """
+    html_root = Path(wiki) / "build" / "html"
+    if not html_root.is_dir():
+        raise SystemExit(f"{wiki}: no build output at {html_root}")
+
+    entry = Path(__file__).with_name("wiki_pyz_main.py")
+    out = out_dir / f"{wiki}-wiki.pyz"
+
+    with zipfile.ZipFile(out, "w") as z:
+        z.writestr("__main__.py", entry.read_text(encoding="utf-8"),
+                   zipfile.ZIP_DEFLATED)
+        for path in sorted(html_root.rglob("*")):
+            if not path.is_file():
+                continue
+            rel = path.relative_to(html_root)
+            if rel.parts and rel.parts[0] == "offline":
+                continue       # never fold the artefacts back into themselves
+            mode = (zipfile.ZIP_STORED if path.suffix.lower() in ALREADY_COMPRESSED
+                    else zipfile.ZIP_DEFLATED)
+            z.write(path, arcname="site/" + rel.as_posix(), compress_type=mode)
+
+    # A zipapp is expected to be executable and to carry a shebang; Python can
+    # run it either way, but this lets ./rover-wiki.pyz work directly.
+    out.chmod(0o755)
+    log(f"{wiki}: wrote {out.name} ({out.stat().st_size / 1048576:.0f} MB)")
+    return out
 
 
 def build(wikis, destdir: Path) -> Path:

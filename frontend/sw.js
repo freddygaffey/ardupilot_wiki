@@ -23,7 +23,7 @@
  * Bumping CACHE_VERSION discards every cache and starts clean.
  */
 
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const PAGE_CACHE = `ardupilot-pages-${CACHE_VERSION}`;
 const IMAGE_CACHE = `ardupilot-images-${CACHE_VERSION}`;
 const STATIC_CACHE = `ardupilot-static-${CACHE_VERSION}`;
@@ -80,9 +80,32 @@ self.addEventListener('activate', (event) => {
   })());
 });
 
+/*
+ * Streaming downloads.
+ *
+ * Exports are built from what is already in Cache Storage - a single HTML file
+ * or a runnable .pyz - and those run to hundreds of megabytes. Assembling one
+ * in a Blob would need it all in memory at once, which is exactly the thing to
+ * avoid. Instead the page hands us a ReadableStream, we answer a request for
+ * /__export__/<id> with it, and the browser writes it to disk as an ordinary
+ * download while the page is still generating it.
+ */
+const EXPORTS = new Map();
+
 self.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'SKIP_WAITING') {
+  const data = event.data;
+  if (!data) {
+    return;
+  }
+  if (data.type === 'SKIP_WAITING') {
     self.skipWaiting();
+    return;
+  }
+  if (data.type === 'EXPORT_START') {
+    EXPORTS.set(data.id, { stream: data.stream, filename: data.filename });
+    // Expire an export that is never collected, so a cancelled save does not
+    // pin its stream here for the lifetime of the worker.
+    setTimeout(() => EXPORTS.delete(data.id), 60000);
   }
 });
 
@@ -170,6 +193,22 @@ async function matchSharedImage(url) {
   return caches.match(shared);
 }
 
+/** Always ask the network; use a cached copy only if there is no network. */
+async function networkOnly(request) {
+  try {
+    const response = await fetch(request, { cache: 'no-store' });
+    if (response && response.ok) {
+      const cache = await caches.open(PAGE_CACHE);
+      await cache.put(request, response.clone());
+    }
+    return response;
+  } catch (err) {
+    return (await caches.match(request, { ignoreSearch: true })) ||
+           (await caches.match('/offline-fallback.html')) ||
+           new Response('Offline.', { status: 503 });
+  }
+}
+
 async function cacheFirst(request, cacheName) {
   const cache = await caches.open(cacheName);
   const cached = await cache.match(request);
@@ -201,7 +240,34 @@ self.addEventListener('fetch', (event) => {
   }
 
   const url = new URL(request.url);
+
+  if (url.pathname.startsWith('/__export__/')) {
+    const id = url.pathname.slice('/__export__/'.length);
+    const entry = EXPORTS.get(id);
+    if (entry) {
+      EXPORTS.delete(id);
+      event.respondWith(new Response(entry.stream, {
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Disposition':
+            'attachment; filename="' + entry.filename.replace(/"/g, '') + '"'
+        }
+      }));
+    } else {
+      event.respondWith(new Response('Export expired.', { status: 410 }));
+    }
+    return;
+  }
   if (url.origin !== self.location.origin) {
+    return;
+  }
+
+  // The offline manager is an application screen: its markup and its script
+  // have to match, and a cached copy of one paired with a fresh copy of the
+  // other renders as garbage. Never serve it from cache while there is a
+  // network - fall back only when genuinely offline.
+  if (/common-offline(\.html)?$/.test(url.pathname)) {
+    event.respondWith(networkOnly(request));
     return;
   }
 

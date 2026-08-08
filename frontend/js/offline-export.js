@@ -1,0 +1,474 @@
+/*
+ * Builds downloadable copies from what is already in Cache Storage.
+ *
+ * The alternative was for the build server to produce and host a ~480MB .pyz
+ * and a ~700MB single-file HTML for every wiki, duplicating content the reader
+ * has already downloaded. Generating them here means the server hosts only the
+ * archives, and the export costs nothing extra to fetch.
+ *
+ * Everything streams. A few hundred megabytes cannot be assembled in a Blob or
+ * a string, so the page writes chunks into a stream that the service worker
+ * answers as a download response, and the browser writes it to disk as it goes.
+ * Peak memory is one file, not one archive.
+ */
+(function (global) {
+  'use strict';
+
+  var OFFLINE_CACHE_PREFIX = 'ardupilot-offline-';
+  var COMPLETE_MARKER = '/__ap_complete__';
+
+  /* ---------------------------------------------------------------- crc32 */
+
+  var CRC_TABLE = (function () {
+    var table = new Uint32Array(256);
+    for (var n = 0; n < 256; n++) {
+      var c = n;
+      for (var k = 0; k < 8; k++) {
+        c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+      }
+      table[n] = c >>> 0;
+    }
+    return table;
+  })();
+
+  function crc32(bytes) {
+    var c = 0xffffffff;
+    for (var i = 0; i < bytes.length; i++) {
+      c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
+    }
+    // The final inversion is part of the algorithm, not an optimisation.
+    // Without it the archive still has a valid structure - correct names,
+    // sizes and offsets - so it looks fine until something actually verifies
+    // a checksum, at which point every entry fails.
+    return (c ^ 0xffffffff) >>> 0;
+  }
+
+  /* ------------------------------------------------------------ zip writer */
+
+  function bytes(n) { return new Uint8Array(n); }
+
+  function u16(view, offset, value) { view.setUint16(offset, value, true); }
+  function u32(view, offset, value) { view.setUint32(offset, value >>> 0, true); }
+
+  /**
+   * Minimal zip writer. Entries are STORED, never deflated: the payload is
+   * mostly PNG and JPEG that gain nothing from a second pass, and storing lets
+   * Python read any entry from the archive without decompressing it.
+   */
+  function ZipWriter(write) {
+    this.write = write;       // (Uint8Array) -> Promise
+    this.offset = 0;
+    this.entries = [];
+  }
+
+  ZipWriter.prototype._push = function (chunk) {
+    this.offset += chunk.length;
+    return this.write(chunk);
+  };
+
+  ZipWriter.prototype.add = function (name, data) {
+    var self = this;
+    var nameBytes = new TextEncoder().encode(name);
+    var crc = crc32(data);
+    var header = bytes(30);
+    var view = new DataView(header.buffer);
+
+    u32(view, 0, 0x04034b50);       // local file header
+    u16(view, 4, 20);               // version needed
+    u16(view, 6, 0);                // flags
+    u16(view, 8, 0);                // method: stored
+    u16(view, 10, 0);               // mod time
+    u16(view, 12, 0x21);            // mod date (1980-01-01)
+    u32(view, 14, crc);
+    u32(view, 18, data.length);     // compressed size
+    u32(view, 22, data.length);     // uncompressed size
+    u16(view, 26, nameBytes.length);
+    u16(view, 28, 0);               // extra length
+
+    this.entries.push({
+      name: nameBytes, crc: crc, size: data.length, offset: this.offset
+    });
+
+    return this._push(header)
+      .then(function () { return self._push(nameBytes); })
+      .then(function () { return self._push(data); });
+  };
+
+  ZipWriter.prototype.finish = function () {
+    var self = this;
+    var start = this.offset;
+    var chain = Promise.resolve();
+
+    this.entries.forEach(function (e) {
+      chain = chain.then(function () {
+        var rec = bytes(46);
+        var view = new DataView(rec.buffer);
+        u32(view, 0, 0x02014b50);   // central directory header
+        u16(view, 4, 20);           // version made by
+        u16(view, 6, 20);           // version needed
+        u16(view, 8, 0);
+        u16(view, 10, 0);           // stored
+        u16(view, 12, 0);
+        u16(view, 14, 0x21);
+        u32(view, 16, e.crc);
+        u32(view, 20, e.size);
+        u32(view, 24, e.size);
+        u16(view, 28, e.name.length);
+        u16(view, 30, 0);
+        u16(view, 32, 0);
+        u16(view, 34, 0);
+        u16(view, 36, 0);
+        u32(view, 38, 0);           // external attrs
+        u32(view, 42, e.offset);
+        return self._push(rec).then(function () { return self._push(e.name); });
+      });
+    });
+
+    return chain.then(function () {
+      var size = self.offset - start;
+      var end = bytes(22);
+      var view = new DataView(end.buffer);
+      u32(view, 0, 0x06054b50);     // end of central directory
+      u16(view, 4, 0);
+      u16(view, 6, 0);
+      u16(view, 8, self.entries.length);
+      u16(view, 10, self.entries.length);
+      u32(view, 12, size);
+      u32(view, 16, start);
+      u16(view, 20, 0);
+      return self._push(end);
+    });
+  };
+
+  /* --------------------------------------------------------- cache reading */
+
+  /** Every cached entry belonging to a stored wiki, as [path, Response]. */
+  function storedEntries(wikiIds) {
+    return caches.keys().then(function (names) {
+      var wanted = names.filter(function (n) {
+        if (n.indexOf(OFFLINE_CACHE_PREFIX) !== 0) { return false; }
+        var id = n.slice(OFFLINE_CACHE_PREFIX.length);
+        return wikiIds.indexOf(id) !== -1 || id === 'common';
+      });
+      return Promise.all(wanted.map(function (name) {
+        return caches.open(name).then(function (cache) {
+          return cache.keys().then(function (reqs) {
+            return { cache: cache, reqs: reqs };
+          });
+        });
+      }));
+    });
+  }
+
+  /* ------------------------------------------------------ download plumbing */
+
+  /**
+   * Open a download the page can write into.
+   *
+   * Prefers the service worker: it can answer with a ReadableStream, so the
+   * browser writes to disk while we are still generating, and this works
+   * outside Chromium. Falls back to the File System Access API, and finally to
+   * a Blob for browsers with neither - which is memory-bound, so it is only a
+   * last resort.
+   */
+  function openDownload(filename) {
+    if (navigator.serviceWorker && navigator.serviceWorker.controller &&
+        typeof TransformStream !== 'undefined') {
+      var ts = new TransformStream();
+      var writer = ts.writable.getWriter();
+      var id = String(Date.now()) + Math.random().toString(36).slice(2);
+
+      navigator.serviceWorker.controller.postMessage(
+        { type: 'EXPORT_START', id: id, filename: filename, stream: ts.readable },
+        [ts.readable]
+      );
+
+      // An iframe rather than location: navigating away would tear down the
+      // page that is generating the stream.
+      var frame = document.createElement('iframe');
+      frame.hidden = true;
+      frame.src = '/__export__/' + id;
+      document.body.appendChild(frame);
+
+      return Promise.resolve({
+        write: function (chunk) { return writer.write(chunk); },
+        close: function () {
+          return writer.close().then(function () {
+            setTimeout(function () { frame.remove(); }, 2000);
+          });
+        }
+      });
+    }
+
+    if (global.showSaveFilePicker) {
+      return global.showSaveFilePicker({ suggestedName: filename })
+        .then(function (handle) { return handle.createWritable(); })
+        .then(function (w) {
+          return {
+            write: function (chunk) { return w.write(chunk); },
+            close: function () { return w.close(); }
+          };
+        });
+    }
+
+    var parts = [];
+    return Promise.resolve({
+      write: function (chunk) { parts.push(chunk); return Promise.resolve(); },
+      close: function () {
+        var url = URL.createObjectURL(new Blob(parts));
+        var a = document.createElement('a');
+        a.href = url; a.download = filename;
+        a.click();
+        setTimeout(function () { URL.revokeObjectURL(url); }, 30000);
+        return Promise.resolve();
+      }
+    });
+  }
+
+  /* ---------------------------------------------------------- exports: pyz */
+
+  // Kept in step with scripts/wiki_pyz_main.py. Embedded rather than fetched
+  // so an export works with no connection.
+  var PYZ_MAIN = [
+    '"""ArduPilot wiki, offline. Run: python3 <this file>"""',
+    'import http.server, mimetypes, socketserver, sys, threading, zipfile, webbrowser',
+    'PORT, STRIDE, TRIES, PREFIX = 8790, 10, 12, "site/"',
+    '_p, _local = sys.path[0], threading.local()',
+    'def _zip():',
+    '    z = getattr(_local, "z", None)',
+    '    if z is None: z = _local.z = zipfile.ZipFile(_p)',
+    '    return z',
+    'class H(http.server.BaseHTTPRequestHandler):',
+    '    protocol_version = "HTTP/1.1"',
+    '    def log_message(self, *a): pass',
+    '    def do_GET(self):',
+    '        path = self.path.split("?")[0].split("#")[0]',
+    '        if path.endswith("/"): path += "index.html"',
+    '        name = PREFIX + path.lstrip("/")',
+    '        try: body = _zip().read(name)',
+    '        except KeyError:',
+    '            try: body = _zip().read(name.rstrip("/") + "/index.html")',
+    '            except KeyError: self.send_error(404); return',
+    '        try:',
+    '            self.send_response(200)',
+    '            self.send_header("Content-Type", mimetypes.guess_type(name)[0] or "application/octet-stream")',
+    '            self.send_header("Content-Length", str(len(body)))',
+    '            self.end_headers()',
+    '            self.wfile.write(body)',
+    '        except (BrokenPipeError, ConnectionResetError): self.close_connection = True',
+    '    def do_HEAD(self): self.do_GET()',
+    'class S(socketserver.ThreadingTCPServer):',
+    '    daemon_threads = allow_reuse_address = True',
+    '    def handle_error(self, *a):',
+    '        if not isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):',
+    '            super().handle_error(*a)',
+    'for i in range(TRIES):',
+    '    try:',
+    '        httpd = S(("127.0.0.1", PORT + i * STRIDE), H); port = PORT + i * STRIDE; break',
+    '    except OSError as e:',
+    '        if e.errno not in (48, 98): raise',
+    'else: sys.exit("no free port")',
+    'url = "http://127.0.0.1:%d/" % port',
+    'print("ArduPilot wiki, offline.\\n  %s\\n\\nPress Ctrl+C to stop." % url)',
+    'try: webbrowser.open(url)',
+    'except Exception: pass',
+    'try: httpd.serve_forever()',
+    'except KeyboardInterrupt: print("\\nStopped.")'
+  ].join('\n') + '\n';
+
+  /**
+   * Write a runnable .pyz containing every cached page for the chosen wikis.
+   * `onProgress(done, total)` is called as entries are written.
+   */
+  function exportPyz(wikiIds, filename, onProgress) {
+    return storedEntries(wikiIds).then(function (groups) {
+      var total = groups.reduce(function (a, g) { return a + g.reqs.length; }, 0);
+      if (!total) {
+        throw new Error('Nothing is saved yet - download a wiki first.');
+      }
+
+      return openDownload(filename).then(function (sink) {
+        var zip = new ZipWriter(sink.write);
+        var done = 0;
+
+        return zip.add('__main__.py', new TextEncoder().encode(PYZ_MAIN))
+          .then(function () {
+            var chain = Promise.resolve();
+            groups.forEach(function (g) {
+              g.reqs.forEach(function (req) {
+                chain = chain.then(function () {
+                  var path = new URL(req.url).pathname;
+                  if (path === COMPLETE_MARKER) { return; }
+                  return g.cache.match(req)
+                    .then(function (res) { return res.arrayBuffer(); })
+                    .then(function (buf) {
+                      // /_common/_images/x -> site/_images/x so the pages,
+                      // which ask for their own wiki's path, still resolve.
+                      var name = 'site' + path.replace('/_common/', '/');
+                      return zip.add(name, new Uint8Array(buf));
+                    })
+                    .then(function () {
+                      done++;
+                      if (onProgress && done % 25 === 0) { onProgress(done, total); }
+                    });
+                });
+              });
+            });
+            return chain;
+          })
+          .then(function () { return zip.finish(); })
+          .then(function () { return sink.close(); })
+          .then(function () { return { files: done }; });
+      });
+    });
+  }
+
+
+  /* --------------------------------------------------- exports: single HTML */
+
+  var BINARY = /\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf)$/i;
+
+  function mimeFor(path) {
+    var ext = (path.split('.').pop() || '').toLowerCase();
+    return ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+              gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+              ico: 'image/x-icon', woff: 'font/woff', woff2: 'font/woff2',
+              ttf: 'font/ttf' })[ext] || 'application/octet-stream';
+  }
+
+  function base64(bytes) {
+    // Chunked: String.fromCharCode.apply blows the argument limit on anything
+    // more than a few tens of kilobytes, and these are photographs.
+    var out = '', CHUNK = 0x8000;
+    for (var i = 0; i < bytes.length; i += CHUNK) {
+      out += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
+    }
+    return btoa(out);
+  }
+
+  function anchorFor(path) {
+    return 'ap-' + path.replace(/^\//, '').replace(/\.[^.]*$/, '')
+                       .replace(/[^A-Za-z0-9]+/g, '-').toLowerCase();
+  }
+
+  /**
+   * Assemble one self-contained HTML file from the cached pages.
+   *
+   * Images are inlined as data URIs, including the shared common set - a single
+   * file cannot reference an archive alongside it, so everything it needs has
+   * to be in it. Written straight to the stream page by page: the finished file
+   * runs to hundreds of megabytes and cannot be built as a string first.
+   */
+  function exportHtml(wikiIds, filename, onProgress) {
+    var enc = new TextEncoder();
+
+    return storedEntries(wikiIds).then(function (groups) {
+      var pages = [], assets = {};
+
+      groups.forEach(function (g) {
+        g.reqs.forEach(function (req) {
+          var path = new URL(req.url).pathname;
+          if (path === COMPLETE_MARKER) { return; }
+          if (BINARY.test(path)) { assets[path] = g.cache; }
+          else if (/\.html?$/.test(path)) { pages.push({ path: path, cache: g.cache }); }
+        });
+      });
+
+      if (!pages.length) {
+        throw new Error('Nothing is saved yet - download a wiki first.');
+      }
+      pages.sort(function (a, b) { return a.path < b.path ? -1 : 1; });
+
+      return openDownload(filename).then(function (sink) {
+        var done = 0;
+        var write = function (text) { return sink.write(enc.encode(text)); };
+
+        return write(
+          '<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">' +
+          '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+          '<title>ArduPilot wiki (offline)</title><style>' +
+          'body{margin:0;font-family:Lato,Helvetica,Arial,sans-serif;color:#404040;' +
+          'line-height:1.65}.ap-wrap{max-width:900px;margin:0 auto;padding:0 20px}' +
+          '.ap-page{border-top:1px solid #e1e4e5;padding-top:24px;margin-top:40px}' +
+          'img{max-width:100%;height:auto}a{color:#2980b9}' +
+          '</style></head><body><div class="ap-wrap">' +
+          '<div style="background:#2980b9;color:#fff;padding:10px 16px;margin:0 -20px">' +
+          'Offline copy of the ArduPilot wiki, built from the pages saved on this ' +
+          'device. Self-contained - it does not update itself.</div><h1>Contents</h1><ul>'
+        ).then(function () {
+          var chain = Promise.resolve();
+          pages.forEach(function (p) {
+            chain = chain.then(function () {
+              return write('<li><a href="#' + anchorFor(p.path) + '">' +
+                           p.path.replace(/^\//, '') + '</a></li>');
+            });
+          });
+          return chain;
+        }).then(function () {
+          return write('</ul>');
+        }).then(function () {
+          var chain = Promise.resolve();
+          pages.forEach(function (p) {
+            chain = chain.then(function () {
+              return p.cache.match(p.path)
+                .then(function (res) { return res.text(); })
+                .then(function (html) {
+                  // Keep only the article body; the theme chrome around it is
+                  // navigation that means nothing in a single flat file.
+                  var m = html.match(/<div[^>]*itemprop="articleBody"[^>]*>([\s\S]*?)<\/div>\s*<footer/i);
+                  var body = m ? m[1] : html;
+                  return inlineImages(body, assets);
+                })
+                .then(function (body) {
+                  done++;
+                  if (onProgress && done % 10 === 0) { onProgress(done, pages.length); }
+                  return write('<div class="ap-page" id="' + anchorFor(p.path) + '">' +
+                               body + '</div>');
+                });
+            });
+          });
+          return chain;
+        }).then(function () {
+          return write('</div></body></html>');
+        }).then(function () { return sink.close(); })
+          .then(function () { return { pages: done }; });
+      });
+    });
+  }
+
+  /** Replace <img src> with data URIs drawn from the cache. */
+  function inlineImages(html, assets) {
+    var srcs = [];
+    html.replace(/<img[^>]+src="([^"]+)"/gi, function (_, src) {
+      srcs.push(src); return _;
+    });
+    if (!srcs.length) { return Promise.resolve(html); }
+
+    var chain = Promise.resolve(html);
+    srcs.forEach(function (src) {
+      chain = chain.then(function (current) {
+        var path = src.replace(/^\.\.\//, '/').split('?')[0];
+        // Images referenced per wiki are stored once under /_common/.
+        var candidates = [path, path.replace(/^\/[^/]+\/_images\//, '/_common/_images/')];
+        var cache = null, found = null;
+        candidates.forEach(function (c) { if (!found && assets[c]) { found = c; cache = assets[c]; } });
+        if (!found) { return current; }
+        return cache.match(found)
+          .then(function (res) { return res.arrayBuffer(); })
+          .then(function (buf) {
+            var uri = 'data:' + mimeFor(found) + ';base64,' +
+                      base64(new Uint8Array(buf));
+            return current.split('"' + src + '"').join('"' + uri + '"');
+          })
+          .catch(function () { return current; });
+      });
+    });
+    return chain;
+  }
+
+  global.ArduPilotExport = {
+    exportPyz: exportPyz,
+    exportHtml: exportHtml,
+    openDownload: openDownload
+  };
+})(window);

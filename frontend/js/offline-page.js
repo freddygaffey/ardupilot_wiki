@@ -10,7 +10,7 @@
  * cache locally. That is deliberate: crawling the site would mean thousands of
  * requests per reader, where this is one request that a CDN can serve.
  */
-(function () {
+(function (global) {
   'use strict';
 
   // Sizes measured from a real build. The build should eventually publish these
@@ -140,6 +140,14 @@
           'permanent.</div>';
 
       el('persist-btn').hidden = persisted || !(navigator.storage && navigator.storage.persist);
+
+      var side = el('side-stat');
+      if (side) {
+        side.innerHTML = '<strong>' + pages + '</strong> page' +
+          (pages === 1 ? '' : 's') + ' saved<br>' + fmt(used) + ' used &middot; ' +
+          (persisted ? 'permanent' : 'temporary');
+      }
+
       updateTotal();
     });
   }
@@ -200,10 +208,11 @@
     var target = el('archive-links');
     if (!target) { return; }
 
+    // Common is deliberately not offered here. On its own it is a few hundred
+    // megabytes of images with no pages to view them in; it is only meaningful
+    // paired with a wiki, and the single-file export inlines it instead.
     var chosen = selected().map(function (c) { return c.value; });
-    var wanted = [COMMON].concat(WIKIS.filter(function (w) {
-      return chosen.indexOf(w.id) !== -1;
-    }));
+    var wanted = WIKIS.filter(function (w) { return chosen.indexOf(w.id) !== -1; });
 
     target.innerHTML = wanted.map(function (w) {
       var file = w.archive || (w.id + '-offline.tar.gz');
@@ -595,6 +604,82 @@
       });
   }
 
+  /*
+   * Build the .pyz here rather than downloading one.
+   *
+   * The pages are already in Cache Storage, so generating the file locally
+   * saves the build server hosting a near-duplicate of every archive - and the
+   * export contains exactly the wikis this reader chose to keep.
+   */
+  /**
+   * Name an export after what it actually contains, plus the build date.
+   *
+   *   one wiki     copter-2026-08-08.html
+   *   several      blimp-copter-rover-2026-08-08.html
+   *   everything   ardupilot-all-2026-08-08.pyz
+   *
+   * The filename is the only thing telling someone months later which vehicles
+   * are in the file sitting in their downloads folder.
+   */
+  function exportName(ids, extension) {
+    var stamp = (CURRENT_BUILD || new Date().toISOString()).slice(0, 10);
+    var base;
+    if (!ids.length) {
+      base = 'ardupilot';
+    } else if (ids.length >= WIKIS.length) {
+      base = 'ardupilot-all';
+    } else {
+      base = ids.slice().sort().join('-');
+    }
+    return base + '-' + stamp + extension;
+  }
+
+  function exportPyzFile() {
+    var link = el('dl-pyz');
+    if (!global.ArduPilotExport) { return; }
+
+    var ids = Object.keys(storedIds).filter(function (id) { return id !== 'common'; });
+    var name = exportName(ids, '.pyz');
+    var original = link.textContent;
+
+    link.textContent = 'Preparing…';
+    global.ArduPilotExport.exportPyz(ids, name, function (done, total) {
+      link.textContent = 'Writing ' + done + ' / ' + total + ' files…';
+    }).then(function (r) {
+      link.textContent = 'Saved ' + name + ' (' + r.files + ' files)';
+      setTimeout(function () { link.textContent = original; }, 8000);
+    }).catch(function (err) {
+      link.textContent = (err && err.message) || 'Export failed';
+      setTimeout(function () { link.textContent = original; }, 8000);
+    });
+  }
+
+  /**
+   * Build the single self-contained HTML file locally.
+   *
+   * Images are inlined from the cache, the shared common set included: a single
+   * file cannot point at an archive next to it, so everything has to be in it.
+   */
+  function exportHtmlFile() {
+    var link = el('dl-single');
+    if (!global.ArduPilotExport || !link) { return; }
+
+    var ids = Object.keys(storedIds).filter(function (id) { return id !== 'common'; });
+    var name = exportName(ids, '.html');
+    var original = link.textContent;
+
+    link.textContent = 'Preparing…';
+    global.ArduPilotExport.exportHtml(ids, name, function (done, total) {
+      link.textContent = 'Writing ' + done + ' / ' + total + ' pages…';
+    }).then(function (r) {
+      link.textContent = 'Saved ' + name + ' (' + r.pages + ' pages)';
+      setTimeout(function () { link.textContent = original; }, 8000);
+    }).catch(function (err) {
+      link.textContent = (err && err.message) || 'Export failed';
+      setTimeout(function () { link.textContent = original; }, 8000);
+    });
+  }
+
   /* ---------- wiring ---------- */
 
   document.addEventListener('change', function (e) {
@@ -612,6 +697,8 @@
     if (e.target.id === 'clear-btn') { clearAll(); }
     if (e.target.id === 'download-cache-btn') { saveSelectedReal(); }
     if (e.target.id === 'check-btn') { checkForUpdates(); }
+    if (e.target.id === 'dl-pyz') { e.preventDefault(); exportPyzFile(); }
+    if (e.target.id === 'dl-single') { e.preventDefault(); exportHtmlFile(); }
   });
 
   function init() {
@@ -667,4 +754,4 @@
   } else {
     init();
   }
-})();
+})(window);
