@@ -56,6 +56,9 @@
   // room to work, so require noticeably more headroom than the raw payload.
   var HEADROOM = 1.5;
 
+  // Build id of the manifest currently published, filled in on load.
+  var CURRENT_BUILD = null;
+
   function el(id) { return document.getElementById(id); }
   function mb(bytes) { return Math.round(bytes / 1048576); }
 
@@ -115,44 +118,73 @@
       var est = r[0].estimate, persisted = r[0].persisted, pages = r[1];
       var used = est.usage || 0, quota = est.quota || 0;
 
-      function kv(key, value) {
-        return '<div class="kv"><span class="k">' + key + '</span>' +
-               '<span class="lead2"></span><span class="v">' + value + '</span></div>';
-      }
+      // Gauge segments are a share of total quota, so the bar answers "how much
+      // room is left" rather than "how big is this download".
+      var usedPct = quota ? Math.min(100, (used / quota) * 100) : 0;
+      setGauge(usedPct, pendingPct(quota, used));
 
       el('storage-status').innerHTML =
-        kv('On this device',
-           pages + ' page' + (pages === 1 ? '' : 's') + ' &middot; ' +
-           fmt(used) + ' used &middot; ' +
-           fmt(Math.max(quota - used, 0)) + ' free') +
-        kv('Storage', persisted ? 'permanent' : '&#9888; temporary');
+        '<span><span class="sw sw-used"></span><b>' + fmt(used) + '</b> used</span>' +
+        '<span><span class="sw sw-pending"></span><b id="pending-label">' +
+          fmt(0) + '</b> selected</span>' +
+        '<span><span class="sw sw-free"></span><b>' +
+          fmt(Math.max(quota - used, 0)) + '</b> free</span>' +
+        '<span>' + pages + ' page' + (pages === 1 ? '' : 's') + ' cached</span>';
 
       el('storage-warning').innerHTML = persisted
-        ? '<div class="ok">Storage is <strong>permanent</strong>. Saved pages will not ' +
-          'be removed automatically, though clearing your browser data still deletes them.</div>'
-        : '<div class="warn">&#9888; Storage is <strong>temporary</strong>. Your browser ' +
-          'can delete these saved pages without warning if this device runs low on space. ' +
-          'Do not rely on this copy in the field until you make it permanent.</div>';
+        ? '<div class="apx-note ok">Storage is <strong>permanent</strong>. Saved ' +
+          'pages will not be removed automatically, though clearing your browser ' +
+          'data still deletes them.</div>'
+        : '<div class="apx-note">Storage is <strong>temporary</strong>. Your ' +
+          'browser can delete these saved pages without warning if this device ' +
+          'runs low on space. Do not rely on this copy in the field until you ' +
+          'make it permanent.</div>';
 
       el('persist-btn').hidden = persisted || !(navigator.storage && navigator.storage.persist);
-      el('clear-btn').hidden = pages === 0;
+      updateTotal();
     });
   }
 
+  function setGauge(usedPct, pendPct) {
+    var u = el('gauge-used'), p = el('gauge-pending');
+    if (u) { u.style.width = usedPct.toFixed(2) + '%'; }
+    if (p) { p.style.width = Math.min(pendPct, Math.max(0, 100 - usedPct)).toFixed(2) + '%'; }
+  }
+
+  /** Bytes the current selection would add, as a share of quota. */
+  function pendingPct(quota, used) {
+    if (!quota) { return 0; }
+    return (selectionBytes() / quota) * 100;
+  }
+
+  function selectionBytes() {
+    var total = 0;
+    selected().forEach(function (c) { total += parseInt(c.dataset.mb, 10) * 1048576; });
+    if (!storedIds.common) { total += (COMMON.mb || 0) * 1048576; }
+    return total;
+  }
+
+  var storedIds = {};
+
   function renderWikis() {
     return storedWikis().then(function (stored) {
-      var rows = [COMMON].concat(WIKIS).map(function (w) {
+      storedIds = stored;
+      var rows = [COMMON].concat(WIKIS).map(function (w, i) {
         var isStored = !!stored[w.id];
-        var box = w.required
-          ? '<input type="checkbox" checked disabled>'
-          : '<input type="checkbox" class="wiki-check" value="' + w.id +
-            '" data-mb="' + w.mb + '"' + (isStored ? ' checked' : '') + '>';
-        return '<tr><td><label>' + box + ' ' + w.name + '</label></td>' +
-               '<td class="num">' + w.mb + ' MB</td>' +
-               '<td class="num">' + (w.pages || '&mdash;') + '</td>' +
-               '<td class="num">' + (isStored
-                 ? '<span class="pill stored">Stored</span>'
-                 : '<span class="pill">&mdash;</span>') + '</td></tr>';
+        var locked = !!w.required;
+        return '<label class="apx-row' + (locked ? ' is-locked' : '') +
+               '" style="animation-delay:' + (i * 22) + 'ms">' +
+                 '<input type="checkbox"' +
+                   (locked ? ' checked disabled' : ' class="wiki-check" value="' + w.id +
+                     '" data-mb="' + w.mb + '"' + (isStored ? ' checked' : '')) + '>' +
+                 '<span class="apx-box"></span>' +
+                 '<span class="apx-name">' + w.name +
+                   (locked ? '<span class="apx-req">required</span>' : '') + '</span>' +
+                 '<span class="apx-num">' + w.mb + ' MB</span>' +
+                 '<span class="apx-num apx-pages">' + (w.pages || '&mdash;') + '</span>' +
+                 '<span class="apx-state' + (isStored ? ' on' : '') + '">' +
+                   (isStored ? 'stored' : '&mdash;') + '</span>' +
+               '</label>';
       });
       el('wiki-rows').innerHTML = rows.join('');
       updateTotal();
@@ -164,10 +196,17 @@
   }
 
   function updateTotal() {
-    var total = COMMON.mb;
-    selected().forEach(function (c) { total += parseInt(c.dataset.mb, 10); });
-    el('selection-total').innerHTML =
-      'Selected: <strong>' + total + ' MB</strong> including the required common files.';
+    var bytes = selectionBytes();
+    var label = el('pending-label');
+    if (label) { label.textContent = fmt(bytes); }
+    var total = el('selection-total');
+    if (total) {
+      total.textContent = bytes ? fmt(bytes) + ' to download' : 'nothing selected';
+    }
+    return storage().then(function (r) {
+      var est = r.estimate, quota = est.quota || 0, used = est.usage || 0;
+      setGauge(quota ? Math.min(100, (used / quota) * 100) : 0, pendingPct(quota, used));
+    });
   }
 
   /*
@@ -359,7 +398,10 @@
    */
   function fetchArchive(entry, cache, onBytes) {
     var url = ARTIFACT_BASE + '/' + (entry.archive || entry.id + '-offline.tar.gz');
-    return fetch(url, { mode: 'cors' }).then(function (response) {
+    return fetch(url, {
+      mode: 'cors',
+      signal: activeDownload ? activeDownload.signal : undefined
+    }).then(function (response) {
       if (!response.ok) {
         throw new Error('could not fetch ' + entry.name + ' (' + response.status + ')');
       }
@@ -385,7 +427,18 @@
     });
   }
 
+  var activeDownload = null;
+
+  function cancelDownload() {
+    if (activeDownload) { activeDownload.abort(); }
+  }
+
   function saveSelectedReal() {
+    // A several-hundred-megabyte download has to be stoppable. The same button
+    // becomes Cancel rather than adding a second one that is dead most of the
+    // time.
+    if (activeDownload) { return cancelDownload(); }
+
     var chosen = selected().map(function (c) { return c.value; });
     var queue = [COMMON].concat(WIKIS.filter(function (w) {
       return chosen.indexOf(w.id) !== -1;
@@ -397,8 +450,18 @@
     var received = 0;
 
     progress.hidden = false;
-    button.disabled = true;
+    activeDownload = new AbortController();
+    button.classList.add('busy');
+    setLabel('Cancel');
 
+    function setLabel(text) {
+      var lbl = button.querySelector('.lbl');
+      if (lbl) { lbl.textContent = text; } else { button.textContent = text; }
+    }
+    function setFill(pct) {
+      var fill = el('dl-fill');
+      if (fill) { fill.style.width = Math.max(0, Math.min(100, pct)) + '%'; }
+    }
     function report(text) { progress.textContent = text; }
     report('Checking space…');
 
@@ -418,25 +481,36 @@
             return caches.open(cacheName).then(function (cache) {
               return fetchArchive(entry, cache, function (n) {
                 received += n;
-                report(entry.name + ' — ' +
-                  Math.min(99, Math.round(received / totalBytes * 100)) + '%');
+                var pct = Math.min(99, Math.round(received / totalBytes * 100));
+                setFill(pct);
+                report(entry.name + ' · ' + pct + '%');
               }).then(function () {
+                // The marker records the build, not just the time: an update
+                // check is only meaningful against what was actually stored.
                 return cache.put(COMPLETE_MARKER,
-                  new Response(String(Date.now()),
-                    { headers: { 'Content-Type': 'text/plain' } }));
+                  new Response(JSON.stringify({
+                    build: CURRENT_BUILD, saved: Date.now(), id: entry.id
+                  }), { headers: { 'Content-Type': 'application/json' } }));
               });
             });
           });
         }, Promise.resolve());
       })
-      .then(function () { report('Saved'); })
+      .then(function () { setFill(100); report('Saved'); })
       .catch(function (err) {
-        report(err && err.name === 'QuotaExceededError'
-          ? 'Ran out of space — your existing copy is untouched.'
-          : (err.message || 'Download failed'));
+        if (err && err.name === 'AbortError') {
+          report('Cancelled — anything already saved is kept.');
+        } else if (err && err.name === 'QuotaExceededError') {
+          report('Ran out of space — your existing copy is untouched.');
+        } else {
+          report((err && err.message) || 'Download failed');
+        }
       })
       .then(function () {
-        button.disabled = false;
+        activeDownload = null;
+        button.classList.remove('busy');
+        setLabel('Save selected');
+        setFill(0);
         return Promise.all([renderStorage(), renderWikis()]);
       });
   }
@@ -486,6 +560,66 @@
       });
   }
 
+  /**
+   * Ask the server what the current build is and compare it against what each
+   * stored copy recorded when it was saved. Anything behind is re-fetched.
+   *
+   * This is a real request, not a reassuring message: a reader checking before
+   * heading out needs to know whether what they are carrying is current.
+   */
+  function checkForUpdates() {
+    var out = el('check-result');
+    out.hidden = false;
+    out.textContent = 'Checking…';
+
+    return fetch('/offline/offline-manifest.json', { cache: 'no-cache' })
+      .then(function (r) {
+        if (!r.ok) { throw new Error('could not reach the server'); }
+        return r.json();
+      })
+      .then(function (manifest) {
+        CURRENT_BUILD = manifest.generated || CURRENT_BUILD;
+        if (manifest.common && manifest.wikis) {
+          COMMON = manifest.common;
+          WIKIS = manifest.wikis;
+        }
+        return caches.keys().then(function (names) {
+          var offline = names.filter(function (n) {
+            return n.indexOf(OFFLINE_CACHE_PREFIX) === 0;
+          });
+          return Promise.all(offline.map(function (name) {
+            return caches.open(name).then(function (c) {
+              return c.match(COMPLETE_MARKER).then(function (m) {
+                if (!m) { return null; }
+                return m.json().then(function (info) {
+                  return (info.build && info.build !== CURRENT_BUILD)
+                    ? info.id : null;
+                }).catch(function () { return null; });
+              });
+            });
+          }));
+        });
+      })
+      .then(function (results) {
+        var stale = results.filter(Boolean);
+        if (!stale.length) {
+          out.textContent = 'Up to date.';
+          return;
+        }
+        out.textContent = 'Updating ' + stale.length + ' item' +
+                          (stale.length === 1 ? '' : 's') + '…';
+        // Re-select exactly what is out of date and reuse the download path,
+        // so there is one implementation of fetching and unpacking.
+        Array.prototype.slice.call(document.querySelectorAll('.wiki-check'))
+          .forEach(function (c) { c.checked = stale.indexOf(c.value) !== -1; });
+        updateTotal();
+        return saveSelectedReal();
+      })
+      .catch(function (err) {
+        out.textContent = (err && err.message) || 'Check failed';
+      });
+  }
+
   /* ---------- wiring ---------- */
 
   document.addEventListener('change', function (e) {
@@ -502,11 +636,7 @@
     if (e.target.id === 'persist-btn') { requestPersist(); }
     if (e.target.id === 'clear-btn') { clearAll(); }
     if (e.target.id === 'download-cache-btn') { saveSelectedReal(); }
-    if (e.target.id === 'check-btn') {
-      var out = el('check-result');
-      out.hidden = false;
-      out.textContent = 'Pages refresh as you read them while online.';
-    }
+    if (e.target.id === 'check-btn') { checkForUpdates(); }
   });
 
   function init() {
@@ -544,6 +674,7 @@
           if (manifest.artifact_base) {
             ARTIFACT_BASE = manifest.artifact_base.replace(/\/$/, '');
           }
+          CURRENT_BUILD = manifest.generated || null;
           if (manifest.generated) {
             el('build-date').textContent =
               'Build ' + manifest.generated.slice(0, 10);
