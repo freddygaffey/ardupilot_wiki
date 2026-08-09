@@ -675,12 +675,18 @@
             return n.indexOf(OFFLINE_CACHE_PREFIX) === 0;
           });
           return Promise.all(offline.map(function (name) {
+            // The cache is named for the wiki it holds, so the id is known
+            // without reading anything. The marker names it too, but a marker
+            // that is unreadable or from an older format would otherwise leave
+            // that wiki permanently stuck: it reports itself up to date, and
+            // no update ever selects it.
+            var id = name.slice(OFFLINE_CACHE_PREFIX.length).split('-')[0];
             return caches.open(name).then(function (c) {
               return c.match(COMPLETE_MARKER).then(function (m) {
                 if (!m) { return null; }
                 return m.json().then(function (info) {
                   return (info.build && info.build !== CURRENT_BUILD)
-                    ? info.id : null;
+                    ? (info.id || id) : null;
                 }).catch(function () { return null; });
               });
             });

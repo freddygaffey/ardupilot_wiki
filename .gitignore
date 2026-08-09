@@ -74,3 +74,8 @@ build_options.py
 
 # Mac file
 .DS_Store
+
+# Test-only dependency, installed on demand rather than vendored:
+#   npm install --no-save jsdom
+/node_modules/
+/package-lock.json
