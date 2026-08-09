@@ -63,19 +63,24 @@ window, and makes your browser far less likely to delete what you have saved.
      <div class="apo-foot">
        <label><input type="checkbox" id="autoupdate" checked>
          <span>Update saved pages automatically</span></label>
-       <span class="apo-spacer"></span>
-       <span class="apo-status" id="selection-total"></span>
-       <span class="apo-status" id="storage-status"></span>
-       <span class="apo-status" id="cache-progress" hidden></span>
-       <span class="apo-status" id="check-result" hidden></span>
-       <span class="apo-status" id="build-date"></span>
+       <div class="apo-status apo-foot-status">
+         <span id="selection-total"></span>
+         <span id="cache-progress" hidden></span>
+         <span id="check-result" hidden></span>
+       </div>
+       <div class="apo-status apo-foot-status">
+         <span id="storage-status"></span>
+         <span id="build-date"></span>
+       </div>
      </div>
 
      <div class="apo-files">
        <h3>Save a copy as a file</h3>
-       <p class="apo-hint" style="margin-top:0">Both are built here from the pages
-         you have saved, so nothing extra is downloaded and each file holds exactly
-         the wikis you kept, shared images included.</p>
+       <p class="apo-hint" style="margin-top:0"><strong>Save the wikis you want
+         above first.</strong> Both files are built on this device out of the pages
+         already saved in your browser &mdash; nothing extra is downloaded, and each
+         file contains exactly the wikis you kept, shared images included. Until
+         something is saved there is nothing to build a file from.</p>
 
        <div class="apo-file">
          <button id="dl-pyz" class="apo-btn apo-btn-outline">Save as .pyz</button>

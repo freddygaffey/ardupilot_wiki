@@ -179,15 +179,30 @@
 
 /* ---- footer and notices ------------------------------------------------ */
 
+/*
+ * Two fixed slots rather than a row of competing spans.
+ *
+ * The footer previously held five status elements in one flex row. Each
+ * progress tick changed one of their widths, which re-flowed all of them, and
+ * the whole strip appeared to flicker several times a second.
+ */
 .apo .apo-foot {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto 1fr;
   align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
+  gap: 4px 16px;
   padding: 12px 14px;
   background: var(--hover);
   border-top: 1px solid var(--line);
   font-size: .9rem;
+  min-height: 62px;
+}
+.apo .apo-foot-status {
+  grid-column: 2;
+  justify-self: end;
+  text-align: right;
+  /* Reserved so text of differing lengths cannot shift the row. */
+  min-height: 1.4em;
 }
 .apo .apo-foot label {
   display: inline-flex;

@@ -118,46 +118,27 @@
       var est = r[0].estimate, persisted = r[0].persisted, pages = r[1];
       var used = est.usage || 0, quota = est.quota || 0;
 
-      function kv(key, value) {
-        return '<div class="kv"><span class="k">' + key + '</span>' +
-               '<span class="lead2"></span><span class="v">' + value + '</span></div>';
-      }
-
-      el('storage-status').innerHTML =
-        kv('On this device',
-           pages + ' page' + (pages === 1 ? '' : 's') + ' &middot; ' +
-           fmt(used) + ' used &middot; ' +
-           fmt(Math.max(quota - used, 0)) + ' free') +
-        kv('Storage', persisted ? 'permanent' : '&#9888; temporary');
+      // One plain sentence. This sits in the panel footer, not in a table, and
+      // the previous key/value markup lost its styling in the redesign - it
+      // rendered as "On this device21 pages".
+      el('storage-status').textContent =
+        pages + ' page' + (pages === 1 ? '' : 's') + ' saved · ' +
+        fmt(used) + ' used · ' + fmt(Math.max(quota - used, 0)) + ' free · ' +
+        'storage ' + (persisted ? 'permanent' : 'temporary');
 
       el('storage-warning').innerHTML = persisted
-        ? '<div class="apo-note apo-note-ok">Storage is <strong>permanent</strong>. Saved pages will ' +
-          'not be removed automatically, though clearing your browser data still ' +
-          'deletes them.</div>'
-        : '<div class="apo-note apo-note-warn">&#9888; Storage is <strong>temporary</strong>. Your ' +
-          'browser can delete these saved pages without warning if this device runs ' +
-          'low on space. Do not rely on this copy in the field until you make it ' +
-          'permanent.</div>';
+        ? ''
+        : '<div class="apo-note apo-note-warn">&#9888; Storage is ' +
+          '<strong>temporary</strong>. Your browser can delete these saved pages ' +
+          'without warning if this device runs low on space. Do not rely on this ' +
+          'copy in the field until you make it permanent.</div>';
 
       el('persist-btn').hidden = persisted || !(navigator.storage && navigator.storage.persist);
-
-      var side = el('side-stat');
-      if (side) {
-        side.innerHTML = '<strong>' + pages + '</strong> page' +
-          (pages === 1 ? '' : 's') + ' saved<br>' + fmt(used) + ' used &middot; ' +
-          (persisted ? 'permanent' : 'temporary');
-      }
-
+      updateExportState();
       updateTotal();
     });
   }
 
-  /**
-   * Two different numbers, and conflating them is what made the total wrong:
-   * how much the selection amounts to, and how much of it still has to be
-   * fetched. Anything already stored counts towards the first and not the
-   * second.
-   */
   function selectionBytes() {
     var selectedTotal = 0, toDownload = 0;
 
@@ -199,6 +180,7 @@
                '</tr>';
       });
       el('wiki-rows').innerHTML = rows.join('');
+      updateExportState();
       updateTotal();
     });
   }
@@ -215,6 +197,16 @@
 
     if (percent === null) {
       wrap.hidden = true;
+      return;
+    }
+    if (percent >= 100) {
+      wrap.hidden = false;
+      bar.style.width = '100%';
+      text.textContent = label || '100%';
+      if (badge) {
+        badge.className = 'apo-badge apo-badge-stored';
+        badge.textContent = 'Saved';
+      }
       return;
     }
     wrap.hidden = false;
@@ -556,7 +548,11 @@
         activeDownload = null;
         button.classList.remove('busy');
         setLabel('Save selected');
-        queue.forEach(function (w) { rowProgress(w.id, null); });
+        // Bars for anything that completed stay at 100%; only unfinished ones
+        // are cleared, so a cancelled run does not look like a successful one.
+        queue.forEach(function (w) {
+          if (!storedIds[w.id]) { rowProgress(w.id, null); }
+        });
         return Promise.all([renderStorage(), renderWikis()]);
       });
   }
@@ -673,6 +669,21 @@
    * saves the build server hosting a near-duplicate of every archive - and the
    * export contains exactly the wikis this reader chose to keep.
    */
+  /**
+   * The file exports build from what is in the cache, so until something has
+   * been saved there is nothing to build from. Disable them and say why, rather
+   * than letting someone press a button that can only fail.
+   */
+  function updateExportState() {
+    var anySaved = Object.keys(storedIds).some(function (id) { return id !== 'common'; });
+    ['dl-pyz', 'dl-single'].forEach(function (id) {
+      var b = el(id);
+      if (!b) { return; }
+      b.disabled = !anySaved;
+      b.title = anySaved ? '' : 'Save a wiki above first - there is nothing to build from yet';
+    });
+  }
+
   /**
    * What an export should contain: what you selected, limited to what is
    * actually saved - you cannot export pages you do not have.
