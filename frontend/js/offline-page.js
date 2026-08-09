@@ -16,7 +16,7 @@
   // Bumped when this file changes in a way worth telling apart at runtime.
   // window.ArduPilotOfflineVersion answers "is the page running the code I just
   // deployed?" without inferring it from behaviour.
-  var VERSION = 'confirm-deadzone-1';
+  var VERSION = 'remove-red-1';
   global.ArduPilotOfflineVersion = VERSION;
 
 
@@ -344,8 +344,9 @@
     if (clearArmed) { clearTimeout(clearArmed); }
     clearArmed = null;
     btn.textContent = 'Remove all';
-    btn.classList.remove('apo-btn-danger');
-    btn.classList.add('apo-btn-ghost');
+    // Stays red: it is destructive whether or not it is armed. Arming is
+    // signalled by the label, the darker shade and the draining bar.
+    btn.classList.remove('apo-btn-armed');
     var bar = btn.querySelector('.apo-arm');
     if (bar) { bar.remove(); }
   }
@@ -364,8 +365,7 @@
       var used = (r.estimate || {}).usage || 0;
       btn.textContent = used ? 'Delete ' + fmt(used) + '? Press again'
                              : 'Press again to confirm';
-      btn.classList.remove('apo-btn-ghost');
-      btn.classList.add('apo-btn-danger');
+      btn.classList.add('apo-btn-armed');
 
       var bar = document.createElement('span');
       bar.className = 'apo-arm';
