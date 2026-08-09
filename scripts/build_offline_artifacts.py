@@ -180,9 +180,9 @@ def video_card(vid: str, wiki: str, has_thumb: bool) -> str:
     """
     Replacement for an embed: a still that links to the video.
 
-    Styled inline because this markup is read in three places with different
-    stylesheets - a cached wiki page, the single-file export and the .pyz - and
-    inline is the only thing all three are guaranteed to honour.
+    Styled inline because this markup is read with two different stylesheets,
+    a cached wiki page and the single-file export, and inline is the only
+    thing both are guaranteed to honour.
     """
     link = f"https://www.youtube.com/watch?v={vid}"
     label = ("&#9654; Watch on YouTube "
@@ -233,7 +233,7 @@ def rewrite_site_links(html: str, wikis) -> str:
     reading works untouched. This exists because the demo is on a different
     domain, where the same links leave the origin entirely and the worker never
     sees them: a top-level navigation to another origin is never handed to a
-    service worker. It also helps the .pyz, which serves from localhost.
+    service worker.
 
     So this can be dropped once the offline copies are served from the real
     site. It is kept because the alternative for demoing to anyone is asking
@@ -287,9 +287,9 @@ def write_common_archive(wikis, common_names, out_dir: Path, thumbs) -> int:
                     tar.add(path, arcname=f"_images/{name}", filter=_normalise)
                     seen.add(name)
         # Stills go in with the shared images rather than a directory of their
-        # own. The service worker, the .pyz server and the HTML exporter each
-        # already know how to find /<wiki>/_images/ here, and none of them
-        # needs teaching about a fourth path.
+        # own. The service worker and the HTML exporter both already know how
+        # to find /<wiki>/_images/ here, and neither needs teaching about
+        # another path.
         for vid, path in sorted(thumbs.items()):
             add_bytes(tar, f"_images/yt-{vid}.jpg", path.read_bytes())
     return archive.stat().st_size

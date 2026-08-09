@@ -83,11 +83,11 @@ self.addEventListener('activate', (event) => {
 /*
  * Streaming downloads.
  *
- * Exports are built from what is already in Cache Storage - a single HTML file
- * or a runnable .pyz - and those run to hundreds of megabytes. Assembling one
- * in a Blob would need it all in memory at once, which is exactly the thing to
- * avoid. Instead the page hands us a ReadableStream, we answer a request for
- * /__export__/<id> with it, and the browser writes it to disk as an ordinary
+ * The export is built from what is already in Cache Storage into one
+ * self-contained HTML file, which runs to hundreds of megabytes. Assembling
+ * that in a Blob would need it all in memory at once, which is exactly the
+ * thing to avoid. Instead the page hands us a ReadableStream, we answer a
+ * request for /__export__/<id> with it, and the browser writes it to disk as an ordinary
  * download while the page is still generating it.
  */
 const EXPORTS = new Map();

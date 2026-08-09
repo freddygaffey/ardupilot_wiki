@@ -1,10 +1,10 @@
 /*
  * Builds downloadable copies from what is already in Cache Storage.
  *
- * The alternative was for the build server to produce and host a ~480MB .pyz
- * and a ~700MB single-file HTML for every wiki, duplicating content the reader
- * has already downloaded. Generating them here means the server hosts only the
- * archives, and the export costs nothing extra to fetch.
+ * The alternative was for the build server to produce and host a ~970MB file
+ * for every combination of wikis, duplicating content the reader has already
+ * downloaded. Generating it here means the server hosts only the archives,
+ * and the export costs nothing extra to fetch.
  *
  * Everything streams. A few hundred megabytes cannot be assembled in a Blob or
  * a string, so the page writes chunks into a stream that the service worker
@@ -16,129 +16,6 @@
 
   var OFFLINE_CACHE_PREFIX = 'ardupilot-offline-';
   var COMPLETE_MARKER = '/__ap_complete__';
-
-  /* ---------------------------------------------------------------- crc32 */
-
-  var CRC_TABLE = (function () {
-    var table = new Uint32Array(256);
-    for (var n = 0; n < 256; n++) {
-      var c = n;
-      for (var k = 0; k < 8; k++) {
-        c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
-      }
-      table[n] = c >>> 0;
-    }
-    return table;
-  })();
-
-  function crc32(bytes) {
-    var c = 0xffffffff;
-    for (var i = 0; i < bytes.length; i++) {
-      c = CRC_TABLE[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
-    }
-    // The final inversion is part of the algorithm, not an optimisation.
-    // Without it the archive still has a valid structure - correct names,
-    // sizes and offsets - so it looks fine until something actually verifies
-    // a checksum, at which point every entry fails.
-    return (c ^ 0xffffffff) >>> 0;
-  }
-
-  /* ------------------------------------------------------------ zip writer */
-
-  function bytes(n) { return new Uint8Array(n); }
-
-  function u16(view, offset, value) { view.setUint16(offset, value, true); }
-  function u32(view, offset, value) { view.setUint32(offset, value >>> 0, true); }
-
-  /**
-   * Minimal zip writer. Entries are STORED, never deflated: the payload is
-   * mostly PNG and JPEG that gain nothing from a second pass, and storing lets
-   * Python read any entry from the archive without decompressing it.
-   */
-  function ZipWriter(write) {
-    this.write = write;       // (Uint8Array) -> Promise
-    this.offset = 0;
-    this.entries = [];
-  }
-
-  ZipWriter.prototype._push = function (chunk) {
-    this.offset += chunk.length;
-    return this.write(chunk);
-  };
-
-  ZipWriter.prototype.add = function (name, data) {
-    var self = this;
-    var nameBytes = new TextEncoder().encode(name);
-    var crc = crc32(data);
-    var header = bytes(30);
-    var view = new DataView(header.buffer);
-
-    u32(view, 0, 0x04034b50);       // local file header
-    u16(view, 4, 20);               // version needed
-    u16(view, 6, 0);                // flags
-    u16(view, 8, 0);                // method: stored
-    u16(view, 10, 0);               // mod time
-    u16(view, 12, 0x21);            // mod date (1980-01-01)
-    u32(view, 14, crc);
-    u32(view, 18, data.length);     // compressed size
-    u32(view, 22, data.length);     // uncompressed size
-    u16(view, 26, nameBytes.length);
-    u16(view, 28, 0);               // extra length
-
-    this.entries.push({
-      name: nameBytes, crc: crc, size: data.length, offset: this.offset
-    });
-
-    return this._push(header)
-      .then(function () { return self._push(nameBytes); })
-      .then(function () { return self._push(data); });
-  };
-
-  ZipWriter.prototype.finish = function () {
-    var self = this;
-    var start = this.offset;
-    var chain = Promise.resolve();
-
-    this.entries.forEach(function (e) {
-      chain = chain.then(function () {
-        var rec = bytes(46);
-        var view = new DataView(rec.buffer);
-        u32(view, 0, 0x02014b50);   // central directory header
-        u16(view, 4, 20);           // version made by
-        u16(view, 6, 20);           // version needed
-        u16(view, 8, 0);
-        u16(view, 10, 0);           // stored
-        u16(view, 12, 0);
-        u16(view, 14, 0x21);
-        u32(view, 16, e.crc);
-        u32(view, 20, e.size);
-        u32(view, 24, e.size);
-        u16(view, 28, e.name.length);
-        u16(view, 30, 0);
-        u16(view, 32, 0);
-        u16(view, 34, 0);
-        u16(view, 36, 0);
-        u32(view, 38, 0);           // external attrs
-        u32(view, 42, e.offset);
-        return self._push(rec).then(function () { return self._push(e.name); });
-      });
-    });
-
-    return chain.then(function () {
-      var size = self.offset - start;
-      var end = bytes(22);
-      var view = new DataView(end.buffer);
-      u32(view, 0, 0x06054b50);     // end of central directory
-      u16(view, 4, 0);
-      u16(view, 6, 0);
-      u16(view, 8, self.entries.length);
-      u16(view, 10, self.entries.length);
-      u32(view, 12, size);
-      u32(view, 16, start);
-      u16(view, 20, 0);
-      return self._push(end);
-    });
-  };
 
   /* --------------------------------------------------------- cache reading */
 
@@ -229,152 +106,6 @@
       }
     });
   }
-
-  /* ---------------------------------------------------------- exports: pyz */
-
-  // The server that runs inside a generated .pyz. Embedded rather than
-  // fetched so an export works with no connection, and the only copy -
-  // there was a fuller version under scripts/ that nothing called, and two
-  // copies of the same server that had to be kept in step was a trap.
-  var PYZ_MAIN = [
-    '"""ArduPilot wiki, offline. Run: python3 <this file>"""',
-    'import http.server, mimetypes, socketserver, sys, threading, zipfile, webbrowser',
-    'PORT, STRIDE, TRIES, PREFIX = 8790, 10, 12, "site/"',
-    '_p, _local = sys.path[0], threading.local()',
-    'def _zip():',
-    '    z = getattr(_local, "z", None)',
-    '    if z is None: z = _local.z = zipfile.ZipFile(_p)',
-    '    return z',
-    'import re as _re',
-    'def _candidates(name):',
-    '    yield name',
-    '    yield name.rstrip("/") + "/index.html"',
-    '    # Shared images are stored once at site/_images/, but pages ask',
-    '    # for them under their own wiki: site/rover/_images/x.png.',
-    '    alias = _re.sub(r"^site/[^/]+/_images/", "site/_images/", name)',
-    '    if alias != name: yield alias',
-    '    # A single-wiki archive has no page at the root, so send / to it.',
-    '    if name in ("site/", "site/index.html"):',
-    '        for n in _zip().namelist():',
-    '            if n.count("/") == 2 and n.endswith("/index.html"): yield n; return',
-    '',
-    'def _root_page():',
-    '    # Contents page, generated when the archive has no index of its own.',
-    '    wikis = {}',
-    '    for n in _zip().namelist():',
-    '        if not n.startswith(PREFIX) or not n.endswith(\'.html\'): continue',
-    '        rest = n[len(PREFIX):]',
-    '        if \'/\' not in rest: continue',
-    '        wikis.setdefault(rest.split(\'/\')[0], []).append(rest)',
-    '    rows = []',
-    '    for w in sorted(wikis):',
-    '        pages = sorted(wikis[w])',
-    '        rows.append(\'<h2>%s <small>(%d pages)</small></h2><ul>\' % (w, len(pages)))',
-    '        for pg in pages[:400]:',
-    '            label = pg.split(\'/\')[-1][:-5].replace(\'-\', \' \')',
-    '            rows.append(\'<li><a href=\\"/%s\\">%s</a></li>\' % (pg, label))',
-    '        if len(pages) > 400: rows.append(\'<li>and %d more</li>\' % (len(pages) - 400))',
-    '        rows.append(\'</ul>\')',
-    '    return (\'<!DOCTYPE html><html><head><meta charset=utf-8>\'',
-    '            \'<title>ArduPilot wiki (offline)</title><style>\'',
-    '            \'body{font-family:sans-serif;margin:40px auto;max-width:820px;\'',
-    '            \'color:#404040;line-height:1.6;padding:0 20px}a{color:#2980b9}\'',
-    '            \'h1{border-bottom:2px solid #2980b9;padding-bottom:8px}\'',
-    '            \'h2{margin-top:28px;font-size:18px}small{color:#757575;font-weight:400}\'',
-    '            \'</style></head><body><h1>ArduPilot wiki, offline</h1>\'',
-    '            \'<p>Served from the archive you are running. Nothing was extracted \'',
-    '            \'to disk.</p>\' + \'\'.join(rows) + \'</body></html>\')',
-
-    'class H(http.server.BaseHTTPRequestHandler):',
-    '    protocol_version = "HTTP/1.1"',
-    '    def log_message(self, *a): pass',
-    '    def do_GET(self):',
-    '        path = self.path.split("?")[0].split("#")[0]',
-    '        if path.endswith("/"): path += "index.html"',
-    '        name = PREFIX + path.lstrip("/")',
-    '        body = None',
-    '        for cand in _candidates(name):',
-    '            try:',
-    '                body = _zip().read(cand); break',
-    '            except KeyError: pass',
-    '        if body is None and name in ("site/", "site/index.html"):',
-    '            body = _root_page().encode("utf-8")',
-    '        if body is None: self.send_error(404, "Not in archive: " + name); return',
-    '        try:',
-    '            self.send_response(200)',
-    '            self.send_header("Content-Type", mimetypes.guess_type(name)[0] or "application/octet-stream")',
-    '            self.send_header("Content-Length", str(len(body)))',
-    '            self.end_headers()',
-    '            self.wfile.write(body)',
-    '        except (BrokenPipeError, ConnectionResetError): self.close_connection = True',
-    '    def do_HEAD(self): self.do_GET()',
-    'class S(socketserver.ThreadingTCPServer):',
-    '    daemon_threads = allow_reuse_address = True',
-    '    def handle_error(self, *a):',
-    '        if not isinstance(sys.exc_info()[1], (BrokenPipeError, ConnectionResetError)):',
-    '            super().handle_error(*a)',
-    'for i in range(TRIES):',
-    '    try:',
-    '        httpd = S(("127.0.0.1", PORT + i * STRIDE), H); port = PORT + i * STRIDE; break',
-    '    except OSError as e:',
-    '        if e.errno not in (48, 98): raise',
-    'else: sys.exit("no free port")',
-    'url = "http://127.0.0.1:%d/" % port',
-    'print("ArduPilot wiki, offline.\\n  %s\\n\\nPress Ctrl+C to stop." % url)',
-    'try: webbrowser.open(url)',
-    'except Exception: pass',
-    'try: httpd.serve_forever()',
-    'except KeyboardInterrupt: print("\\nStopped.")'
-  ].join('\n') + '\n';
-
-  /**
-   * Write a runnable .pyz containing every cached page for the chosen wikis.
-   * `onProgress(done, total)` is called as entries are written.
-   */
-  function exportPyz(wikiIds, filename, onProgress, sink) {
-    return storedEntries(wikiIds).then(function (groups) {
-      var total = groups.reduce(function (a, g) { return a + g.reqs.length; }, 0);
-      if (!total) {
-        throw new Error('Nothing is saved yet - download a wiki first.');
-      }
-
-      return (sink ? Promise.resolve(sink) : openDownload(filename))
-        .then(function (sink) {
-        var zip = new ZipWriter(sink.write);
-        var done = 0;
-
-        return zip.add('__main__.py', new TextEncoder().encode(PYZ_MAIN))
-          .then(function () {
-            var chain = Promise.resolve();
-            groups.forEach(function (g) {
-              g.reqs.forEach(function (req) {
-                chain = chain.then(function () {
-                  var path = new URL(req.url).pathname;
-                  if (path === COMPLETE_MARKER) { return; }
-                  return g.cache.match(req)
-                    .then(function (res) { return res.arrayBuffer(); })
-                    .then(function (buf) {
-                      // /_common/_images/x -> site/_images/x so the pages,
-                      // which ask for their own wiki's path, still resolve.
-                      var name = 'site' + path.replace('/_common/', '/');
-                      return zip.add(name, new Uint8Array(buf));
-                    })
-                    .then(function () {
-                      done++;
-                      if (onProgress && done % 25 === 0) { onProgress(done, total); }
-                    });
-                });
-              });
-            });
-            return chain;
-          })
-          .then(function () { return zip.finish(); })
-          .then(function () { return sink.close(); })
-          .then(function () { return { files: done }; });
-      });
-    });
-  }
-
 
   /* --------------------------------------------------- exports: single HTML */
 
@@ -1181,7 +912,6 @@
   }
 
   global.ArduPilotExport = {
-    exportPyz: exportPyz,
     exportHtml: exportHtml,
     openDownload: openDownload
   };

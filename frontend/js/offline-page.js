@@ -702,11 +702,11 @@
   }
 
   /*
-   * Build the .pyz here rather than downloading one.
+   * Build the file here rather than downloading one.
    *
-   * The pages are already in Cache Storage, so generating the file locally
-   * saves the build server hosting a near-duplicate of every archive - and the
-   * export contains exactly the wikis this reader chose to keep.
+   * The pages are already in Cache Storage, so generating it locally saves the
+   * build server hosting a near-duplicate of every archive, and the export
+   * contains exactly the wikis this reader chose to keep.
    */
   /**
    * Export buttons act on the selection directly: anything selected but not yet
@@ -730,12 +730,10 @@
 
   function updateExportState() {
     var chosen = selected().length;
-    ['dl-pyz', 'dl-single'].forEach(function (id) {
-      var b = el(id);
-      if (!b) { return; }
-      b.disabled = !chosen;
-      b.title = chosen ? '' : 'Select at least one wiki first';
-    });
+    var b = el('dl-single');
+    if (!b) { return; }
+    b.disabled = !chosen;
+    b.title = chosen ? '' : 'Select at least one wiki first';
   }
 
   /**
@@ -758,7 +756,7 @@
    *
    *   one wiki     copter-2026-08-08.html
    *   several      blimp-copter-rover-2026-08-08.html
-   *   everything   ardupilot-all-2026-08-08.pyz
+   *   everything   ardupilot-all-2026-08-08.html
    *
    * The filename is the only thing telling someone months later which vehicles
    * are in the file sitting in their downloads folder.
@@ -783,7 +781,7 @@
    * built from the cache. One press, not two: needing to save and then export
    * as separate steps was ceremony with no purpose.
    */
-  function buildExport(buttonId, kind) {
+  function buildExport(buttonId) {
     var link = el(buttonId);
     if (!link || !global.ArduPilotExport || !selected().length) { return; }
 
@@ -809,25 +807,19 @@
       if (!ready.ids.length) {
         throw new Error('Nothing was saved - check your connection');
       }
-      var name = exportName(ready.ids, kind === 'pyz' ? '.pyz' : '.html');
-      var run = kind === 'pyz'
-        ? global.ArduPilotExport.exportPyz
-        : global.ArduPilotExport.exportHtml;
-
-      return run(ready.ids, name, function (n, total) {
-        link.textContent = 'Writing ' + n + ' / ' + total +
-                           (kind === 'pyz' ? ' files…' : ' pages…');
-      }).then(function (r) {
-        done('Saved ' + name + ' (' + (r.files || r.pages) +
-             (kind === 'pyz' ? ' files)' : ' pages)'));
-      });
+      var name = exportName(ready.ids, '.html');
+      return global.ArduPilotExport.exportHtml(ready.ids, name,
+        function (n, total) {
+          link.textContent = 'Writing ' + n + ' / ' + total + ' pages…';
+        }).then(function (r) {
+          done('Saved ' + name + ' (' + r.pages + ' pages)');
+        });
     }).catch(function (err) {
       done((err && err.message) || 'Export failed');
     });
   }
 
-  function exportPyzFile() { return buildExport('dl-pyz', 'pyz'); }
-  function exportHtmlFile() { return buildExport('dl-single', 'html'); }
+  function exportHtmlFile() { return buildExport('dl-single'); }
 
   /* ---------- wiring ---------- */
 
@@ -852,7 +844,6 @@
     if (e.target.id === 'clear-btn') { confirmClear(); }
     if (e.target.id === 'download-cache-btn') { saveSelectedReal(); }
     if (e.target.id === 'check-btn') { checkForUpdates(); }
-    if (e.target.id === 'dl-pyz') { e.preventDefault(); exportPyzFile(); }
     if (e.target.id === 'dl-single') { e.preventDefault(); exportHtmlFile(); }
   });
 
