@@ -131,10 +131,10 @@
         kv('Storage', persisted ? 'permanent' : '&#9888; temporary');
 
       el('storage-warning').innerHTML = persisted
-        ? '<div class="ok">Storage is <strong>permanent</strong>. Saved pages will ' +
+        ? '<div class="apo-note apo-note-ok">Storage is <strong>permanent</strong>. Saved pages will ' +
           'not be removed automatically, though clearing your browser data still ' +
           'deletes them.</div>'
-        : '<div class="warn">&#9888; Storage is <strong>temporary</strong>. Your ' +
+        : '<div class="apo-note apo-note-warn">&#9888; Storage is <strong>temporary</strong>. Your ' +
           'browser can delete these saved pages without warning if this device runs ' +
           'low on space. Do not rely on this copy in the field until you make it ' +
           'permanent.</div>';
@@ -182,20 +182,48 @@
       var rows = [COMMON].concat(WIKIS).map(function (w) {
         var isStored = !!stored[w.id];
         var box = w.required
-          ? '<input type="checkbox" checked disabled>'
+          ? '<input type="checkbox" checked disabled title="Required">'
           : '<input type="checkbox" class="wiki-check" value="' + w.id +
             '" data-mb="' + w.mb + '"' + (isStored ? ' checked' : '') + '>';
-        return '<tr><td class="name"><label>' + box + '<span>' + w.name +
-                 '</span></label></td>' +
-               '<td class="num">' + w.mb + ' MB</td>' +
-               '<td class="num">' + (w.pages || '&mdash;') + '</td>' +
-               '<td class="num">' + (isStored
-                 ? '<span class="pill stored">Stored</span>'
-                 : '<span class="pill">&mdash;</span>') + '</td></tr>';
+        var badge = isStored
+          ? '<span class="apo-badge apo-badge-stored">Saved</span>'
+          : '<span class="apo-badge apo-badge-none">Not saved</span>';
+        return '<tr data-wiki="' + w.id + '">' +
+                 '<td class="apo-name"><label class="apo-pick">' + box +
+                   '<span>' + w.name + '</span></label></td>' +
+                 '<td class="apo-num">' + w.mb + ' MB</td>' +
+                 '<td class="apo-num apo-pages">' + (w.pages || '&mdash;') + '</td>' +
+                 '<td class="apo-num"><div class="apo-progress" hidden>' +
+                   '<div class="apo-progress-bar"></div><span></span></div></td>' +
+                 '<td class="apo-num">' + badge + '</td>' +
+               '</tr>';
       });
       el('wiki-rows').innerHTML = rows.join('');
       updateTotal();
     });
+  }
+
+  /** Show progress on one wiki's own row, the way the build tool does. */
+  function rowProgress(wikiId, percent, label) {
+    var row = document.querySelector('tr[data-wiki="' + wikiId + '"]');
+    if (!row) { return; }
+    var wrap = row.querySelector('.apo-progress');
+    var bar = row.querySelector('.apo-progress-bar');
+    var text = row.querySelector('.apo-progress span');
+    var badge = row.querySelector('.apo-badge');
+    if (!wrap) { return; }
+
+    if (percent === null) {
+      wrap.hidden = true;
+      return;
+    }
+    wrap.hidden = false;
+    bar.style.width = Math.max(0, Math.min(100, percent)) + '%';
+    text.textContent = label || Math.round(percent) + '%';
+    if (badge) {
+      badge.className = 'apo-badge apo-badge-busy';
+      badge.textContent = 'Saving';
+    }
   }
 
   function selected() {
@@ -469,7 +497,7 @@
     progress.hidden = false;
     activeDownload = new AbortController();
     button.classList.add('busy');
-    setLabel('Cancel download');
+    setLabel('Cancel');
 
     function setLabel(text) {
       var lbl = button.querySelector('.lbl');
@@ -492,11 +520,17 @@
           return chain.then(function () {
             var cacheName = OFFLINE_CACHE_PREFIX + entry.id;
             return caches.open(cacheName).then(function (cache) {
+              var entryBytes = (entry.mb || 0) * 1048576;
+              var entryGot = 0;
               return fetchArchive(entry, cache, function (n) {
                 received += n;
+                entryGot += n;
                 var pct = Math.min(99, Math.round(received / totalBytes * 100));
+                rowProgress(entry.id,
+                  entryBytes ? Math.min(99, (entryGot / entryBytes) * 100) : pct);
                 report(entry.name + ' · ' + pct + '%');
               }).then(function () {
+                rowProgress(entry.id, 100, 'done');
                 // The marker records the build, not just the time: an update
                 // check is only meaningful against what was actually stored.
                 return cache.put(COMPLETE_MARKER,
@@ -521,7 +555,8 @@
       .then(function () {
         activeDownload = null;
         button.classList.remove('busy');
-        setLabel('Save in browser');
+        setLabel('Save selected');
+        queue.forEach(function (w) { rowProgress(w.id, null); });
         return Promise.all([renderStorage(), renderWikis()]);
       });
   }
