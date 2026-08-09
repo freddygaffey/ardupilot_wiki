@@ -431,7 +431,12 @@
     '#ap-lightbox{position:fixed;top:0;right:0;bottom:0;left:0;z-index:9999;' +
     'display:none;align-items:center;justify-content:center;cursor:zoom-out;' +
     'background:rgba(0,0,0,.85)}' +
-    '#ap-lightbox img{max-width:94vw;max-height:94vh}';
+    '#ap-lightbox img{max-width:94vw;max-height:94vh}' +
+    '#ap-pick{list-style:none;margin:1em 0 0;padding:0}' +
+    '#ap-pick li{border-bottom:1px solid #e1e4e5}' +
+    '#ap-pick a{display:flex;align-items:baseline;justify-content:space-between;' +
+    'gap:1em;padding:12px 2px;text-decoration:none;text-transform:capitalize}' +
+    '#ap-pick small{color:#666;text-transform:none;font-size:.85em}';
 
   var SHELL_JS = [
     '(function(){',
@@ -447,7 +452,7 @@
     'var byPath={};D.pages.forEach(function(p,i){byPath[p.p]=i;});',
     'nav.innerHTML=D.nav;',
     'var links=[].slice.call(nav.querySelectorAll("a[href^=\\"#\\"]"));',
-    'function current(){return (location.hash||"").replace(/^#/,"")||D.home||D.pages[0].p;}',
+    'function current(){return (location.hash||"").replace(/^#/,"");}',
     // Accept the shorthand people actually type. #/rover should land on the
     // Rover wiki, not on a "page not found" - as should a trailing slash, a
     // leftover .html, or a missing leading slash.
@@ -467,10 +472,37 @@
     'for(var j=0;j<D.pages.length;j++){',
     'if(D.pages[j].p.indexOf(base+"/")===0)return D.pages[j].p;}',
     'return undefined;}',
+    // Landing page when the file holds more than one wiki. Picking one of them
+    // to open on is a guess, and the reader is the only one who knows.
+    'function showPicker(){',
+    'miss.style.display="none";',
+    'var rows=D.homes.map(function(h){',
+    'return \'<li><a href="#\'+h.path+\'"><span>\'+h.id+\'</span>\'',
+    '+\'<small>\'+h.pages+\' pages</small></a></li>\';}).join("");',
+    'doc.innerHTML="<h1>Offline copy</h1><p>This file contains "+D.homes.length',
+    '+" wikis. Choose one to start reading.</p><ul id=\\"ap-pick\\">"+rows+"</ul>";',
+    'crumb.textContent="";',
+    'document.title="ArduPilot (offline)";',
+    'links.forEach(function(a){a.className="";});',
+    'var sc=document.querySelector(".wy-nav-content-wrap");if(sc)sc.scrollTop=0;}',
+
+    // A page rather than a banner that vanishes. Landing somewhere that says
+    // what happened, and offers a way on, beats a message the reader may not
+    // have been looking at when it appeared.
+    'function showMissing(raw){',
+    'miss.style.display="none";',
+    'var held=D.homes.map(function(h){return h.id;}).join(", ");',
+    'doc.innerHTML="<h1>Not in this offline copy</h1>"',
+    '+"<p><code>"+raw+"</code> is not included in this download.</p>"',
+    '+"<p>This file contains: "+held+".</p>"',
+    '+(D.homes.length>1?"<p><a href=\\"#/\\">Choose a wiki</a></p>":"");',
+    'crumb.textContent="";',
+    'document.title="Not in this offline copy - ArduPilot";',
+    'var sc=document.querySelector(".wy-nav-content-wrap");if(sc)sc.scrollTop=0;}',
+
     'function show(raw){',
     'var path=lookup(raw);',
-    'if(path===undefined){miss.style.display="block";',
-    'miss.textContent="That page is not in this file: "+raw;return;}',
+    'if(path===undefined){return showMissing(raw);}',
     'var i=byPath[path];',
     'miss.style.display="none";',
     'var el=document.getElementById("p"+i);if(!el)return;',
@@ -489,7 +521,11 @@
     'var on=a.getAttribute("href")==="#"+path;',
     'a.className=on?"on":"";',
     'if(on&&a.scrollIntoView)a.scrollIntoView({block:"nearest"});});}',
-    'function route(){show(current());}',
+    'function route(){',
+    'var raw=current();',
+    'if(!raw||raw==="/"){',
+    'return D.home?show(D.home):showPicker();}',
+    'show(raw);}',
     'window.addEventListener("hashchange",route);',
     // Built once and reused. A browser will not navigate to a data: URL, so
     // linked images are shown here rather than opened.
@@ -516,8 +552,11 @@
     'var m=/^https?:\\/\\/(?:www\\.)?ardupilot\\.org(\\/.*)?$/i.exec(href);',
     'if(!m)return null;',
     'var rest=(m[1]||"").replace(/[?#].*$/,"");',
-    'if(!rest||rest==="/")return D.home||null;',
+    'if(!rest||rest==="/")return "/";',
     'return rest.replace(/\\.html?$/,"");}',
+    // Assigning an unchanged hash fires no hashchange, so a link back to the
+    // page you are already on would do nothing without this.
+    'function go(p){var h="#"+p;if(location.hash===h){route();}else{location.hash=h;}}',
     'function onLinkClick(e){',
     'var a=e.target.closest?e.target.closest("a[href]"):null;if(!a)return;',
     'var href=a.getAttribute("href");',
@@ -531,12 +570,9 @@
     // Say the wiki is missing instead. Other hosts, including the forum and
     // the firmware server, still open normally.
     'e.preventDefault();',
+    'if(mapped==="/"){go("/");return;}',
     'var hit=lookup(mapped);',
-    'if(hit!==undefined){location.hash="#"+hit;return;}',
-    'miss.style.display="block";',
-    'miss.textContent="Not in this file: "+mapped+'
-      + '" - that wiki was not included in this download.";',
-    'setTimeout(function(){miss.style.display="none";},5000);',
+    'go(hit!==undefined?hit:mapped);',
     'return;}',
     'var frag="";var h=href;var hi=h.indexOf("#");',
     'if(hi>=0){frag=h.slice(hi);h=h.slice(0,hi);}',
@@ -547,7 +583,7 @@
     // images, so this is easy to hit by accident.
     'e.preventDefault();',
     'var found=lookup(target);',
-    'if(found!==undefined){location.hash="#"+target;',
+    'if(found!==undefined){go(target);',
     'if(frag){setTimeout(function(){var t=doc.querySelector(frag);',
     'if(t&&t.scrollIntoView)t.scrollIntoView();},50);}return;}',
     // Sphinx links every thumbnail to its full-size file, so these outnumber
@@ -562,9 +598,7 @@
     'if(inner){',
     'var ib=document.getElementById("i"+inner.getAttribute("data-ap-img"));',
     'if(ib){lightbox(ib.textContent);return;}}',
-    'miss.style.display="block";',
-    'miss.textContent="Not included in this file: "+target;',
-    'setTimeout(function(){miss.style.display="none";},4000);',
+    'showMissing(target);',
     '}',
     // The sidebar carries the absolute links, so it needs this too.
     'doc.addEventListener("click",onLinkClick);',
@@ -638,32 +672,31 @@
     return out;
   }
 
-  // Landing page preference. Opening on whatever sorted first meant Antenna
-  // Tracker, one of the least used wikis.
+  // Listing order for the picker, most recognisable first. Anything else
+  // follows alphabetically.
   var HOME_ORDER = ['ardupilot', 'copter', 'plane', 'rover'];
 
-  /** First of HOME_ORDER present in the export, else any wiki's front page. */
-  function pickHome(index, wikis) {
-    function find(p) {
-      for (var i = 0; i < index.length; i++) {
-        if (index[i].p === p) { return p; }
+  /** Front page and page count for each wiki in the export, in listing order. */
+  function wikiHomes(index, wikis) {
+    var homes = wikis.map(function (w) {
+      var prefix = '/' + w + '/';
+      var root = null, first = null, count = 0;
+      index.forEach(function (p) {
+        if (p.p.indexOf(prefix) !== 0) { return; }
+        count++;
+        if (!first) { first = p.p; }
+        if (p.p === prefix + 'index') { root = p.p; }
+      });
+      return { id: w, path: root || first, pages: count };
+    }).filter(function (h) { return h.path; });
+
+    return homes.sort(function (a, b) {
+      var ai = HOME_ORDER.indexOf(a.id), bi = HOME_ORDER.indexOf(b.id);
+      if (ai !== -1 || bi !== -1) {
+        return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
       }
-      return null;
-    }
-    for (var i = 0; i < HOME_ORDER.length; i++) {
-      var w = HOME_ORDER[i];
-      if (wikis.indexOf(w) === -1) { continue; }
-      var root = find('/' + w + '/index');
-      if (root) { return root; }
-      // No front page for it, but its first page beats an unrelated wiki's.
-      for (var j = 0; j < index.length; j++) {
-        if (index[j].p.indexOf('/' + w + '/') === 0) { return index[j].p; }
-      }
-    }
-    for (var k = 0; k < index.length; k++) {
-      if (/^\/[^/]+\/index$/.test(index[k].p)) { return index[k].p; }
-    }
-    return index.length ? index[0].p : '';
+      return a.id < b.id ? -1 : 1;
+    });
   }
 
   /**
@@ -812,8 +845,12 @@
             });
             return chain;
           }).then(function () {
+            // With one wiki there is nothing to choose, so open it directly.
+            // With several, opening on one of them is a guess: show the list.
+            var homes = wikiHomes(index, wikis);
             var payload = { pages: index, nav: navHtml, wikis: wikis,
-                            imgs: imgPaths, home: pickHome(index, wikis) };
+                            imgs: imgPaths, homes: homes,
+                            home: homes.length === 1 ? homes[0].path : '' };
             return write('<script type="application/json" id="ap-index">' +
                          JSON.stringify(payload).split('</').join('<\\/') +
                          '<\/script><script>' + SHELL_JS + '<\/script></body></html>');
