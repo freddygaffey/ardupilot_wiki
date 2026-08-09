@@ -76,11 +76,10 @@ window, and makes your browser far less likely to delete what you have saved.
 
      <div class="apo-files">
        <h3>Save a copy as a file</h3>
-       <p class="apo-hint" style="margin-top:0"><strong>Save the wikis you want
-         above first.</strong> Both files are built on this device out of the pages
-         already saved in your browser &mdash; nothing extra is downloaded, and each
-         file contains exactly the wikis you kept, shared images included. Until
-         something is saved there is nothing to build a file from.</p>
+       <p class="apo-hint" style="margin-top:0">Built on this device from the
+         wikis ticked above &mdash; anything not saved yet is downloaded first, so
+         one press is enough. Each file contains exactly the wikis you chose,
+         shared images included.</p>
 
        <div class="apo-file">
          <button id="dl-pyz" class="apo-btn apo-btn-outline">Save as .pyz</button>

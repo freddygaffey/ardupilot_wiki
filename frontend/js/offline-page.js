@@ -670,17 +670,17 @@
    * export contains exactly the wikis this reader chose to keep.
    */
   /**
-   * The file exports build from what is in the cache, so until something has
-   * been saved there is nothing to build from. Disable them and say why, rather
-   * than letting someone press a button that can only fail.
+   * Export buttons act on the selection directly: anything selected but not yet
+   * saved is downloaded first, then the file is built. Requiring two separate
+   * presses to get one file was needless ceremony.
    */
   function updateExportState() {
-    var anySaved = Object.keys(storedIds).some(function (id) { return id !== 'common'; });
+    var chosen = selected().length;
     ['dl-pyz', 'dl-single'].forEach(function (id) {
       var b = el(id);
       if (!b) { return; }
-      b.disabled = !anySaved;
-      b.title = anySaved ? '' : 'Save a wiki above first - there is nothing to build from yet';
+      b.disabled = !chosen;
+      b.title = chosen ? '' : 'Select at least one wiki first';
     });
   }
 
@@ -722,65 +722,58 @@
     return base + '-' + stamp + extension;
   }
 
-  function exportPyzFile() {
-    var link = el('dl-pyz');
-    if (!global.ArduPilotExport) { return; }
-
-    var sel = exportSelection();
-    if (!sel.ids.length) {
-      link.textContent = sel.chosen.length
-        ? 'Save those wikis first - none of the selected ones are downloaded yet'
-        : 'Select a wiki first';
-      return;
-    }
-    var ids = sel.ids;
-    var name = exportName(ids, '.pyz');
-    var original = link.textContent;
-
-    link.textContent = 'Preparing…';
-    global.ArduPilotExport.exportPyz(ids, name, function (done, total) {
-      link.textContent = 'Writing ' + done + ' / ' + total + ' files…';
-    }).then(function (r) {
-      link.textContent = 'Saved ' + name + ' (' + r.files + ' files)';
-      setTimeout(function () { link.textContent = original; }, 8000);
-    }).catch(function (err) {
-      link.textContent = (err && err.message) || 'Export failed';
-      setTimeout(function () { link.textContent = original; }, 8000);
-    });
-  }
-
   /**
-   * Build the single self-contained HTML file locally.
+   * Build a file from the selection.
    *
-   * Images are inlined from the cache, the shared common set included: a single
-   * file cannot point at an archive next to it, so everything has to be in it.
+   * Anything selected but not yet saved is downloaded first, then the file is
+   * built from the cache. One press, not two: needing to save and then export
+   * as separate steps was ceremony with no purpose.
    */
-  function exportHtmlFile() {
-    var link = el('dl-single');
-    if (!global.ArduPilotExport || !link) { return; }
+  function buildExport(buttonId, kind) {
+    var link = el(buttonId);
+    if (!link || !global.ArduPilotExport || !selected().length) { return; }
+
+    var original = link.dataset.label || link.textContent;
+    link.dataset.label = original;
+    link.disabled = true;
+
+    var done = function (text, keep) {
+      link.textContent = text;
+      link.disabled = false;
+      if (!keep) { setTimeout(function () { link.textContent = original; }, 8000); }
+    };
 
     var sel = exportSelection();
-    if (!sel.ids.length) {
-      link.textContent = sel.chosen.length
-        ? 'Save those wikis first - none of the selected ones are downloaded yet'
-        : 'Select a wiki first';
-      return;
-    }
-    var ids = sel.ids;
-    var name = exportName(ids, '.html');
-    var original = link.textContent;
+    link.textContent = sel.missing.length
+      ? 'Saving ' + sel.missing.join(', ') + '…'
+      : 'Preparing…';
 
-    link.textContent = 'Preparing…';
-    global.ArduPilotExport.exportHtml(ids, name, function (done, total) {
-      link.textContent = 'Writing ' + done + ' / ' + total + ' pages…';
-    }).then(function (r) {
-      link.textContent = 'Saved ' + name + ' (' + r.pages + ' pages)';
-      setTimeout(function () { link.textContent = original; }, 8000);
+    var first = sel.missing.length ? saveSelectedReal() : Promise.resolve();
+
+    return first.then(function () {
+      var ready = exportSelection();
+      if (!ready.ids.length) {
+        throw new Error('Nothing was saved - check your connection');
+      }
+      var name = exportName(ready.ids, kind === 'pyz' ? '.pyz' : '.html');
+      var run = kind === 'pyz'
+        ? global.ArduPilotExport.exportPyz
+        : global.ArduPilotExport.exportHtml;
+
+      return run(ready.ids, name, function (n, total) {
+        link.textContent = 'Writing ' + n + ' / ' + total +
+                           (kind === 'pyz' ? ' files…' : ' pages…');
+      }).then(function (r) {
+        done('Saved ' + name + ' (' + (r.files || r.pages) +
+             (kind === 'pyz' ? ' files)' : ' pages)'));
+      });
     }).catch(function (err) {
-      link.textContent = (err && err.message) || 'Export failed';
-      setTimeout(function () { link.textContent = original; }, 8000);
+      done((err && err.message) || 'Export failed');
     });
   }
+
+  function exportPyzFile() { return buildExport('dl-pyz', 'pyz'); }
+  function exportHtmlFile() { return buildExport('dl-single', 'html'); }
 
   /* ---------- wiring ---------- */
 
