@@ -16,7 +16,7 @@
   // Bumped when this file changes in a way worth telling apart at runtime.
   // window.ArduPilotOfflineVersion answers "is the page running the code I just
   // deployed?" without inferring it from behaviour.
-  var VERSION = 'footer-wording-1';
+  var VERSION = 'select-all-1';
   global.ArduPilotOfflineVersion = VERSION;
 
 
@@ -51,10 +51,6 @@
   // at build time and keeps the URL out of the source entirely.
   var ARTIFACT_BASE = 'https://pub-de9c5e70708749b4888f6cadd29d92fe.r2.dev';
 
-  // Wikis the build produced a single-file copy for. Overridden by the
-  // manifest's "single" array so the page never offers a file that is not there.
-  var SINGLE_FILES = ['rover'];
-
   var PAGE_CACHE_PREFIX = 'ardupilot-pages-';
   var OFFLINE_CACHE_PREFIX = 'ardupilot-offline-';
   var COMPLETE_MARKER = '/__ap_complete__';
@@ -67,7 +63,6 @@
   var CURRENT_BUILD = null;
 
   function el(id) { return document.getElementById(id); }
-  function mb(bytes) { return Math.round(bytes / 1048576); }
 
   function fmt(bytes) {
     var m = bytes / 1048576;
@@ -224,6 +219,7 @@
         if (anySaved) { clear.disabled = false; clear.title = ''; }
       }
 
+      syncSelectAll();
       updateExportState();
       updateTotal();
     });
@@ -266,6 +262,37 @@
     return Array.prototype.slice.call(document.querySelectorAll('.wiki-check:checked'));
   }
 
+  function selectable() {
+    return Array.prototype.slice.call(document.querySelectorAll('.wiki-check'));
+  }
+
+  /*
+   * The header box reports the rows rather than holding its own state: ticked
+   * when every wiki is, indeterminate when only some are, clear when none are.
+   * Anything that changes the selection - a row click, an update check
+   * re-selecting the stale wikis, a re-render after a download - calls this, so
+   * it cannot drift out of step with what is actually ticked.
+   *
+   * Common is not counted. Its box is required and disabled, so it is never
+   * something this can select or clear.
+   */
+  function syncSelectAll() {
+    var box = el('select-all');
+    if (!box) { return; }
+    var all = selectable().length;
+    var on = selected().length;
+    box.checked = all > 0 && on === all;
+    box.indeterminate = on > 0 && on < all;
+    box.disabled = all === 0;
+  }
+
+  function toggleAll(on) {
+    selectable().forEach(function (c) { c.checked = on; });
+    syncSelectAll();
+    updateTotal();
+    updateExportState();
+  }
+
   function updateTotal() {
     var b = selectionBytes();
     var total = el('selection-total');
@@ -283,61 +310,6 @@
                           ' of the ' + fmt(b.total) + ' selected is already saved') +
                         '.';
     }
-  }
-
-  /*
-   * Direct download links for whoever wants the files rather than the browser
-   * cache. Each selected wiki is its own archive, plus the common one, which is
-   * why these are a list rather than a single button - and why picking three
-   * vehicles does not mean downloading the shared images three times.
-   */
-  function renderDownloadLinks() {
-    var target = el('archive-links');
-    if (!target) { return; }
-
-    // Common is deliberately not offered here. On its own it is a few hundred
-    // megabytes of images with no pages to view them in; it is only meaningful
-    // paired with a wiki, and the single-file export inlines it instead.
-    var chosen = selected().map(function (c) { return c.value; });
-    var wanted = WIKIS.filter(function (w) { return chosen.indexOf(w.id) !== -1; });
-
-    // Show the filename that will land in their downloads folder, not the
-    // wiki's display name - that is what they will be looking at later.
-    target.innerHTML = wanted.map(function (w) {
-      var file = w.archive || (w.id + '-offline.tar.gz');
-      return '<a href="' + ARTIFACT_BASE + '/' + file + '" download>' +
-             file + ' <span class="pill">' + w.mb + ' MB</span></a>';
-    }).join('');
-  }
-
-  /*
-   * The single-file build is per wiki - it inlines its own images, so unlike
-   * the archives it cannot share the common set. That is why this is a picker
-   * rather than following the checkbox selection above.
-   *
-   * Only wikis the build actually produced a file for are offered; the manifest
-   * lists them in "single", and without that entry the option is marked
-   * unavailable rather than linking to a 404.
-   */
-  function renderSingleFile() {
-    var select = el('single-wiki');
-    var wrap = el('dl-single-wrap');
-    if (!select || !wrap) { return; }
-
-    if (!select.options.length) {
-      select.innerHTML = WIKIS.map(function (w) {
-        var available = SINGLE_FILES.indexOf(w.id) !== -1;
-        return '<option value="' + w.id + '"' + (available ? '' : ' data-missing="1"') +
-               '>' + w.name + (available ? '' : ' — not built') + '</option>';
-      }).join('');
-    }
-
-    var id = select.value;
-    var available = SINGLE_FILES.indexOf(id) !== -1;
-    wrap.innerHTML = available
-      ? '<a href="' + ARTIFACT_BASE + '/' + id + '-wiki-offline.html" download>' +
-        id + '-wiki-offline.html</a>'
-      : '<span class="pill">not yet published</span>';
   }
 
   /* ---------- actions ---------- */
@@ -511,7 +483,9 @@
           if (!haveBody) { return; }
           var body = take(padded).slice(0, size);
           // '0' and NUL are regular files; skip directories and metadata.
-          if (type !== '0' && type !== ' ') { return step(); }
+          // The NUL is written as an escape on purpose: as a raw byte it made
+          // the whole file read as binary to grep and file(1).
+          if (type !== '0' && type !== '\0') { return step(); }
           var path = prefix + name;
           return cache.put(
             new Request(path),
@@ -659,51 +633,6 @@
       });
   }
 
-  function saveSelectedStub() {
-    var wikis = selected().map(function (c) { return c.value; });
-    var totalMb = COMMON.mb + selected().reduce(function (a, c) {
-      return a + parseInt(c.dataset.mb, 10);
-    }, 0);
-    var progress = el('cache-progress');
-    var button = el('download-cache-btn');
-
-    progress.hidden = false;
-    progress.textContent = 'Checking space…';
-    button.disabled = true;
-
-    // Ask for persistence before storing rather than after, so the data is
-    // protected from the moment it lands.
-    var persistFirst = navigator.storage && navigator.storage.persist
-      ? navigator.storage.persist() : Promise.resolve(false);
-
-    persistFirst
-      .then(function () { return checkRoom(totalMb * 1048576); })
-      .then(function () {
-        progress.textContent = 'Downloading…';
-        // The archives are produced by the build and served from object
-        // storage. Until they are published this reports honestly rather
-        // than silently doing nothing.
-        return fetch('/offline/offline-manifest.json', { cache: 'no-cache' });
-      })
-      .then(function (response) {
-        if (!response.ok) { throw new Error('not published'); }
-        return response.json();
-      })
-      .then(function () {
-        progress.textContent = 'Unpacking…';
-        // Unpack step lands here once artefacts are published.
-      })
-      .catch(function (err) {
-        progress.textContent = err && err.message === 'not published'
-          ? 'Offline archives are not published on this deployment yet.'
-          : (err.message || 'Failed');
-      })
-      .then(function () {
-        button.disabled = false;
-        return Promise.all([renderStorage(), renderWikis()]);
-      });
-  }
-
   /**
    * Ask the server what the current build is and compare it against what each
    * stored copy recorded when it was saved. Anything behind is re-fetched.
@@ -754,9 +683,12 @@
                           (stale.length === 1 ? '' : 's') + '…';
         // Re-select exactly what is out of date and reuse the download path,
         // so there is one implementation of fetching and unpacking.
-        Array.prototype.slice.call(document.querySelectorAll('.wiki-check'))
-          .forEach(function (c) { c.checked = stale.indexOf(c.value) !== -1; });
+        selectable().forEach(function (c) {
+          c.checked = stale.indexOf(c.value) !== -1;
+        });
+        syncSelectAll();
         updateTotal();
+        updateExportState();
         return saveSelectedReal();
       })
       .catch(function (err) {
@@ -880,8 +812,15 @@
   /* ---------- wiring ---------- */
 
   document.addEventListener('change', function (e) {
-    if (e.target.classList.contains('wiki-check')) { updateTotal(); renderDownloadLinks(); }
-    if (e.target.id === 'single-wiki') { renderSingleFile(); }
+    if (e.target.classList.contains('wiki-check')) {
+      syncSelectAll();
+      updateTotal();
+      // The export buttons are enabled by the selection, so they have to be
+      // re-evaluated here. Leaving it to the next render meant clearing the
+      // last tick left them offering to build an empty file.
+      updateExportState();
+    }
+    if (e.target.id === 'select-all') { toggleAll(e.target.checked); }
     if (e.target.id === 'autoupdate') {
       try {
         window.localStorage.setItem(AUTOUPDATE_KEY, e.target.checked ? '1' : '0');
@@ -927,9 +866,6 @@
         if (manifest && manifest.common && manifest.wikis) {
           COMMON = manifest.common;
           WIKIS = manifest.wikis;
-          if (Array.isArray(manifest.single)) {
-            SINGLE_FILES = manifest.single;
-          }
           if (manifest.artifact_base) {
             ARTIFACT_BASE = manifest.artifact_base.replace(/\/$/, '');
           }
@@ -941,8 +877,6 @@
         }
         renderStorage();
         renderWikis();
-        renderDownloadLinks();
-        renderSingleFile();
       });
   }
 
