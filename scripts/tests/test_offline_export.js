@@ -198,6 +198,32 @@ function readIndexPayload(file) {
   try { return JSON.parse(m[1].split('<\\/').join('</')); } catch (e) { return null; }
 }
 
+/** The shipped search index and the stemmer that built it, read back out. */
+function readSearchPayload(file) {
+  const size = fs.statSync(file).size;
+  const span = Math.min(size, 96 * 1024 * 1024);
+  const buf = Buffer.alloc(span);
+  const fd = fs.openSync(file, 'r');
+  fs.readSync(fd, buf, 0, span, size - span);
+  fs.closeSync(fd);
+  const m = buf.toString('utf8')
+    .match(/<script type="application\/json" id="ap-fts">([\s\S]*?)<\/script>/);
+  if (!m) { return null; }
+  try { return JSON.parse(m[1].split('<\\/').join('</')); } catch (e) { return null; }
+}
+
+// Sphinx's own stemmer and stopword list, loaded from the build output.
+let stemWord = (w) => w, STOPWORDS = [];
+(function () {
+  const p = path.join(REPO, 'rover', 'build', 'html', '_static', 'language_data.js');
+  if (!fs.existsSync(p)) { return; }
+  const ctx = {};
+  vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync(p, 'utf8'), ctx);
+  if (ctx.Stemmer) { const s = new ctx.Stemmer(); stemWord = (w) => s.stemWord(w); }
+  if (ctx.stopwords) { STOPWORDS = ctx.stopwords; }
+})();
+
 /* ------------------------------------------------------------- the run ---- */
 
 async function main() {
@@ -272,6 +298,39 @@ async function main() {
           cap === Infinity ? '' : '(not checked: page cap in effect)');
     check('image index built', Object.keys(D.imgs || {}).length > 0,
           Object.keys(D.imgs || {}).length + ' image paths');
+  }
+
+  // Sphinx omits stopwords from its index, so a query containing one must not
+  // reduce the result set to nothing. Pasting a sentence used to find nothing
+  // at all.
+  const fts = readSearchPayload(htmlPath);
+  if (fts) {
+    const probe = (q) => {
+      const words = q.toLowerCase().split(/[^a-z0-9_]+/)
+        .filter((w) => w.length > 1 && STOPWORDS.indexOf(w) === -1);
+      if (!words.length) { return 0; }
+      let per = null;
+      for (const w of words) {
+        const s = stemWord(w), hit = {};
+        const mark = (l) => { if (l === undefined) { return; }
+          (typeof l === 'number' ? [l] : l).forEach((n) => { hit[n] = 1; }); };
+        for (const wiki of Object.keys(fts)) {
+          mark(fts[wiki].terms[s]); mark(fts[wiki].titleterms[s]);
+        }
+        if (per === null) { per = hit; } else {
+          const nx = {};
+          Object.keys(hit).forEach((k) => { if (per[k] !== undefined) { nx[k] = 1; } });
+          per = nx;
+        }
+      }
+      return per ? Object.keys(per).length : 0;
+    };
+    const bare = probe('vehicle');
+    check('full-text search finds a word in body text', bare > 0, bare + ' docs');
+    check('a stopword in the query does not empty the results',
+          probe('the vehicle') === bare, probe('the vehicle') + ' vs ' + bare);
+    check('a whole pasted sentence still matches',
+          probe('the vehicle is a copter') > 0, probe('the vehicle is a copter') + ' docs');
   }
 
   console.log('\nwrote ' + OUT + '/test.html');
