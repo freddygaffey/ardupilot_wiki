@@ -12,7 +12,9 @@
 /manifest.json
   Cache-Control: no-cache
 
-# Offline artefacts are immutable once built: each build writes new filenames.
+# The archives live in object storage; all Pages serves under /offline/ is the
+# manifest, which every build rewrites. An immutable rule here pinned it at the
+# edge for a year, along with a page that had already been deleted.
 /offline/*
-  Cache-Control: public, max-age=31536000, immutable
+  Cache-Control: no-cache
   Access-Control-Allow-Origin: *

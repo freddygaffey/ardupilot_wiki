@@ -9,12 +9,12 @@
 Offline Copies
 ==============
 
-Keep the documentation readable with no connection — in a hangar, in a field, or
+Keep the documentation readable with no connection: in a hangar, in a field, or
 anywhere the signal runs out.
 
 Two separate things live on this page, and they are easily confused. *Saving
 pages* makes the wiki readable offline and works in an ordinary browser tab.
-*Installing* the app downloads nothing at all — it only gives the wiki its own
+*Installing* the app downloads nothing at all. It only gives the wiki its own
 window, and makes your browser far less likely to delete what you have saved.
 
 .. raw:: html
@@ -41,7 +41,6 @@ window, and makes your browser far less likely to delete what you have saved.
        <span class="apo-spacer"></span>
        <button id="download-cache-btn" class="apo-btn apo-btn-primary">Save selected</button>
        <button id="check-btn" class="apo-btn apo-btn-ghost">Check for updates</button>
-       <button id="persist-btn" class="apo-btn apo-btn-ghost" hidden>Make permanent</button>
        <button id="clear-btn" class="apo-btn apo-btn-danger">Remove all</button>
      </div>
 
@@ -79,7 +78,7 @@ window, and makes your browser far less likely to delete what you have saved.
      <div class="apo-files">
        <h3>Save a copy as a file</h3>
        <p class="apo-hint" style="margin-top:0">Built on this device from the
-         wikis ticked above &mdash; anything not saved yet is downloaded first, so
+         wikis ticked above. Anything not saved yet is downloaded first, so
          one press is enough. Each file contains exactly the wikis you chose,
          shared images included.</p>
 
@@ -93,7 +92,7 @@ window, and makes your browser far less likely to delete what you have saved.
        <div class="apo-file">
          <button id="dl-single" class="apo-btn apo-btn-outline">Save as .html</button>
          <div class="apo-hint">A single self-contained page. Double-click it, nothing
-           to install &mdash; it works from a USB stick, though it is large and takes
+           to install. It works from a USB stick, though it is large and takes
            a moment to open.</div>
        </div>
      </div>
@@ -105,7 +104,7 @@ Install as an app
 
 .. note::
 
-   Installing downloads nothing, and is not needed to read offline — saving pages
+   Installing downloads nothing, and is not needed to read offline. Saving pages
    works in an ordinary browser tab. It gives the wiki its own window and a
    launcher icon, and makes your browser far less likely to delete your saved
    pages when the device runs low on space.
