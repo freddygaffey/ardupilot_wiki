@@ -168,6 +168,10 @@
     '#ap-pick a{display:flex;align-items:baseline;justify-content:space-between;' +
     'gap:1em;padding:12px 2px;text-decoration:none}' +
     '#ap-pick small{color:#666;text-transform:none;font-size:.85em}' +
+    '.ap-results li{padding:10px 0}' +
+    '.ap-results a{padding:0;border:0}' +
+    '.ap-snip{margin:.25em 0 0;color:#4a4a4a;font-size:.9em;line-height:1.5}' +
+    '.ap-snip mark{background:#fff3b0;color:inherit;padding:0 2px}' +
     '.ap-actions{display:flex;flex-wrap:wrap;gap:0 1.5em}';
 
   var SHELL_JS = [
@@ -373,9 +377,27 @@
     // Sphinx's own stemmer, carried along with the index that it built.
     'var stemmer=(typeof Stemmer!=="undefined")?new Stemmer():null;',
     'function stem(w){return stemmer?stemmer.stemWord(w):w;}',
+    // Sphinx leaves stopwords out of the index entirely, so requiring every
+    // query word to match meant one "the" reduced the whole result set to
+    // nothing. Anybody pasting a sentence got no results at all.
+    'var STOP=(typeof stopwords!=="undefined")?stopwords:[];',
+    // Edit distance with a budget, abandoning a row as soon as every cell in
+    // it already exceeds what we will accept. Most candidates are rejected on
+    // the length check without any work at all.
+    'function within(a,b,max){',
+    'if(Math.abs(a.length-b.length)>max)return false;',
+    'var prev=[],i,j;for(j=0;j<=b.length;j++)prev[j]=j;',
+    'for(i=1;i<=a.length;i++){',
+    'var best=i,diag=prev[0];prev[0]=i;',
+    'for(j=1;j<=b.length;j++){',
+    'var cur=Math.min(prev[j]+1,prev[j-1]+1,diag+(a.charAt(i-1)===b.charAt(j-1)?0:1));',
+    'diag=prev[j];prev[j]=cur;if(cur<best)best=cur;}',
+    'if(best>max)return false;}',
+    'return prev[b.length]<=max;}',
     'function fullText(ql){',
     'var idx=searchIndex();var out={};',
-    'var words=ql.split(/[^a-z0-9_]+/).filter(function(w){return w.length>1;});',
+    'var words=ql.split(/[^a-z0-9_]+/).filter(function(w){',
+    'return w.length>1&&STOP.indexOf(w)===-1;});',
     'if(!words.length)return out;',
     'Object.keys(idx).forEach(function(w){',
     'var d=idx[w];var per=null;',
@@ -388,9 +410,16 @@
     'mark(d.terms[s],1);mark(d.titleterms[s],5);',
     // A word still being typed should match by prefix, or results only appear
     // once the word is finished.
-    'if(word.length>=3){var keys=Object.keys(d.terms);',
-    'for(var k=0;k<keys.length;k++){',
+    'var keys=Object.keys(d.terms),k;',
+    'if(word.length>=3){',
+    'for(k=0;k<keys.length;k++){',
     'if(keys[k]!==s&&keys[k].indexOf(s)===0)mark(d.terms[keys[k]],0.5);}}',
+    // Only when a word matched nothing at all is it worth treating as a typo.
+    // A correctly spelled query never pays for this, and one edit is as far as
+    // it goes: two starts matching words with no relation to what was typed.
+    'if(word.length>=4&&!Object.keys(hit).length){',
+    'for(k=0;k<keys.length;k++){',
+    'if(within(s,keys[k],1))mark(d.terms[keys[k]],0.25);}}',
     'if(per===null){per=hit;}else{',
     'var next={};Object.keys(hit).forEach(function(n){',
     'if(per[n]!==undefined)next[n]=per[n]+hit[n];});per=next;}});',
@@ -399,43 +428,95 @@
     'var path="/"+w+"/"+d.docnames[n];',
     'out[path]=Math.max(out[path]||0,per[n]);});});',
     'return out;}',
-    'function renderSearch(q){',
+    // One matcher, two views: the sidebar list and the full page both rank the
+    // same way, so pressing Enter never reorders what was just on screen.
+    'function matches(q){',
     'var ql=q.toLowerCase();var hits=[];var seen={};',
     'for(var i=0;i<D.pages.length;i++){',
     'var pg=D.pages[i];var at=pg.t.toLowerCase().indexOf(ql);',
     'var ap=at===-1?pg.p.toLowerCase().indexOf(ql):-1;',
+    // Half-remembered page names are the common case for a title search, so a
+    // single wrong letter should still find it. Titles are few and short, so
+    // this costs nothing worth measuring.
+    'if(at===-1&&ap===-1&&ql.length>=4){',
+    'var tw=pg.t.toLowerCase().split(/[^a-z0-9]+/);',
+    'for(var w=0;w<tw.length;w++){',
+    'if(tw[w].length>=4&&within(ql,tw[w],1)){at=1;break;}}}',
     'if(at===-1&&ap===-1)continue;',
     // Title matches first, and a title that starts with the query above one
     // that merely contains it. Path-only matches last.
-    'hits.push({pg:pg,rank:at===0?0:(at>0?1:2)});seen[pg.p]=1;}',
+    'hits.push({pg:pg,i:i,rank:at===0?0:(at>0?1:2)});seen[pg.p]=1;}',
     // Then whatever the body text turns up, below the title matches.
     'var ft=fullText(ql);',
-    'var byPathPage={};D.pages.forEach(function(p){byPathPage[p.p]=p;});',
+    'var byPathPage={},byPathIdx={};',
+    'D.pages.forEach(function(p,n){byPathPage[p.p]=p;byPathIdx[p.p]=n;});',
     'Object.keys(ft).sort(function(a,b){return ft[b]-ft[a];}).forEach(function(p){',
     'if(seen[p]||!byPathPage[p])return;',
-    'hits.push({pg:byPathPage[p],rank:3});});',
+    'hits.push({pg:byPathPage[p],i:byPathIdx[p],rank:3});});',
     'hits.sort(function(a,b){return a.rank-b.rank||(a.pg.t<b.pg.t?-1:1);});',
-    'var shown=hits.slice(0,200);',
+    'return hits;}',
+
+    'function renderSearch(q){',
+    'var hits=matches(q);',
+    'var words=q.toLowerCase().split(/[^a-z0-9_]+/).filter(function(w){',
+    'return w.length>1&&STOP.indexOf(w)===-1;});',
+    'var shown=hits.slice(0,60);',
     'var rows=shown.map(function(h){',
     'return \'<li><a href="#\'+h.pg.p+\'"><span>\'+esc(h.pg.t)+\'</span>\'',
-    '+\'<small>\'+esc(wikiName(h.pg.p))+\'</small></a></li>\';}).join("");',
+    '+\'<small>\'+esc(wikiName(h.pg.p))+\'</small></a>\'',
+    '+\'<p class="ap-snip">\'+snippet(h.i,words)+\'</p></li>\';}).join("");',
     'doc.innerHTML="<h1>Search</h1><p>"+hits.length+" page"',
     '+(hits.length===1?"":"s")+" matching <strong>"+esc(q)+"</strong>"',
     '+(hits.length>shown.length?", showing the first "+shown.length:"")+"</p>"',
-    '+(hits.length?"<ul id=\\"ap-pick\\">"+rows+"</ul>":"");',
+    '+(hits.length?"<ul id=\\"ap-pick\\" class=\\"ap-results\\">"+rows+"</ul>":"");',
     'crumb.textContent="";',
     'var sc=document.querySelector(".wy-nav-content-wrap");if(sc)sc.scrollTop=0;}',
-    // Where to return to when the box is cleared.
+    // A few hundred characters of the page around the first match, so a result
+    // can be judged without opening it. Pulled from the inert page block and
+    // stripped of markup; only done for the handful of results on screen.
+    'function snippet(i,words){',
+    'var el=document.getElementById("p"+i);if(!el)return "";',
+    'var text=el.textContent.replace(/<[^>]*>/g," ").replace(/\\s+/g," ");',
+    'var low=text.toLowerCase(),at=-1,hit="";',
+    'for(var w=0;w<words.length;w++){',
+    'var p=low.indexOf(words[w]);',
+    'if(p!==-1&&(at===-1||p<at)){at=p;hit=words[w];}}',
+    'if(at===-1)return text.slice(0,160)+"\u2026";',
+    'var from=Math.max(0,at-70),to=Math.min(text.length,at+hit.length+130);',
+    'return (from?"\u2026":"")+esc(text.slice(from,at))+"<mark>"',
+    '+esc(text.slice(at,at+hit.length))+"</mark>"+esc(text.slice(at+hit.length,to))',
+    '+(to<text.length?"\u2026":"");}',
+
+    // Typing filters the sidebar and leaves the document alone: someone
+    // searching has not asked to leave the page they are reading. Enter is
+    // what commits to the full result list.
+    'var navHtml=null;',
+    'function restoreNav(){if(navHtml!==null){nav.innerHTML=navHtml;navHtml=null;',
+    'links=[].slice.call(nav.querySelectorAll(\'a[href^="#"]\'));}}',
+    'function sidebarResults(q,hits){',
+    'if(navHtml===null)navHtml=nav.innerHTML;',
+    'var rows=hits.slice(0,40).map(function(h){',
+    'return \'<li class="toctree-l1"><a href="#\'+h.pg.p+\'">\'+esc(h.pg.t)+\'</a></li>\';',
+    '}).join("");',
+    'nav.innerHTML=\'<p class="caption">\'+hits.length+\' result\'+(hits.length===1?"":"s")',
+    '+\'</p><ul>\'+(rows||\'<li class="toctree-l1"><a href="#">nothing found</a></li>\')+\'</ul>\';}',
+
     'var searchTimer=null,beforeSearch=null;',
     'search.addEventListener("input",function(){',
     'clearTimeout(searchTimer);',
     'searchTimer=setTimeout(function(){',
     'var q=search.value.trim();',
-    'if(q.length<2){',
+    'if(q.length<2){restoreNav();',
     'if(beforeSearch!==null){var b=beforeSearch;beforeSearch=null;go(b);}return;}',
+    'sidebarResults(q,matches(q));},120);});',
+    // Enter opens the full list, with context, without having disturbed
+    // anything up to that point.
+    'search.addEventListener("keydown",function(e){',
+    'if(e.key!=="Enter")return;e.preventDefault();',
+    'var q=search.value.trim();if(q.length<2)return;',
     'if(beforeSearch===null)beforeSearch=current()||"/";',
-    'renderSearch(q);},120);});',
-    'window.addEventListener("hashchange",function(){beforeSearch=null;});',
+    'renderSearch(q);});',
+    'window.addEventListener("hashchange",function(){beforeSearch=null;restoreNav();});',
     'document.addEventListener("keydown",function(e){',
     'if(e.key==="Escape"){var lb=document.getElementById("ap-lightbox");',
     'if(lb)lb.style.display="none";',
