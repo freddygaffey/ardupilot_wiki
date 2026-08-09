@@ -19,10 +19,14 @@ once however many vehicles somebody keeps.
 """
 
 import gzip
+import io
 import json
 import os
+import re
 import tarfile
 import time
+import urllib.error
+import urllib.request
 from collections import defaultdict
 from contextlib import contextmanager
 from pathlib import Path
@@ -112,6 +116,107 @@ def classify_images(wikis):
     return common, per_wiki
 
 
+EMBED_RE = re.compile(
+    r'<div class="video_wrapper"[^>]*>\s*'
+    r'<iframe[^>]*src="https?://(?:www\.)?youtube\.com/embed/'
+    r'([A-Za-z0-9_-]+)[^"]*"[^>]*>\s*</iframe>\s*</div>',
+    re.IGNORECASE)
+
+THUMB_URL = "https://img.youtube.com/vi/{}/hqdefault.jpg"
+
+
+def video_ids(wikis):
+    """Every YouTube id embedded anywhere in the built output."""
+    ids = set()
+    for wiki in wikis:
+        root = Path(wiki) / "build" / "html"
+        if not root.is_dir():
+            continue
+        for page in root.rglob("*.html"):
+            ids.update(EMBED_RE.findall(
+                page.read_text(encoding="utf-8", errors="replace")))
+    return ids
+
+
+def fetch_thumbnails(ids, cache: Path):
+    """
+    Download a still for each video, once, into a build cache.
+
+    An embedded player cannot work offline, and will not work from a file://
+    document even online: YouTube rejects the request for want of an origin.
+    A still and a link are what is actually usable, and at roughly 17 KB each
+    they are a rounding error against the images already being shipped.
+
+    Missing downloads are not fatal. The build has to work without a network,
+    and a card with no still is still a working link.
+    """
+    cache.mkdir(parents=True, exist_ok=True)
+    have, failed = {}, []
+    for vid in sorted(ids):
+        path = cache / f"{vid}.jpg"
+        if not path.is_file():
+            try:
+                with urllib.request.urlopen(THUMB_URL.format(vid), timeout=15) as r:
+                    data = r.read()
+                if not data:
+                    raise ValueError("empty")
+                path.write_bytes(data)
+            except (urllib.error.URLError, OSError, ValueError):
+                failed.append(vid)
+                continue
+        have[vid] = path
+    if failed:
+        # Nearly always a video that has been deleted or made private, which
+        # means the wiki is linking to something nobody can watch. Worth naming
+        # rather than counting: it is the only place that shows up.
+        log(f"  no still for {len(failed)} video(s), so those cards link "
+            f"without one. Usually deleted or private:")
+        for vid in failed:
+            log(f"    https://www.youtube.com/watch?v={vid}")
+    return have
+
+
+def video_card(vid: str, wiki: str, has_thumb: bool) -> str:
+    """
+    Replacement for an embed: a still that links to the video.
+
+    Styled inline because this markup is read in three places with different
+    stylesheets - a cached wiki page, the single-file export and the .pyz - and
+    inline is the only thing all three are guaranteed to honour.
+    """
+    link = f"https://www.youtube.com/watch?v={vid}"
+    label = ("&#9654; Watch on YouTube "
+             "<span style=\"opacity:.8\">(needs a connection)</span>")
+    if not has_thumb:
+        return (
+            f'<a class="ap-video" href="{link}" data-ap-external="1" '
+            'style="display:block;max-width:640px;margin:1em 0;padding:14px;'
+            'border:1px solid #d9d9d9;border-radius:4px;text-decoration:none">'
+            f'{label}</a>')
+    return (
+        f'<a class="ap-video" href="{link}" data-ap-external="1" '
+        'style="display:block;position:relative;max-width:640px;margin:1em 0;'
+        'text-decoration:none">'
+        f'<img src="/{wiki}/_images/yt-{vid}.jpg" alt="" '
+        'style="width:100%;display:block;border-radius:4px">'
+        '<span style="position:absolute;left:0;right:0;bottom:0;padding:8px 10px;'
+        'background:rgba(0,0,0,.72);color:#fff;font-size:.9em;'
+        f'border-radius:0 0 4px 4px">{label}</span></a>')
+
+
+def rewrite_embeds(html: str, wiki: str, thumbs) -> str:
+    """Swap every YouTube embed in a page for its card."""
+    return EMBED_RE.sub(
+        lambda m: video_card(m.group(1), wiki, m.group(1) in thumbs), html)
+
+
+def add_bytes(tar, arcname: str, data: bytes):
+    """Add generated content with the same normalisation as a real file."""
+    info = tarfile.TarInfo(arcname)
+    info.size = len(data)
+    tar.addfile(_normalise(info), io.BytesIO(data))
+
+
 def dir_size(path: Path) -> int:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
 
@@ -120,7 +225,7 @@ def build_id() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-def write_common_archive(wikis, common_names, out_dir: Path) -> int:
+def write_common_archive(wikis, common_names, out_dir: Path, thumbs) -> int:
     """One archive of the shared images, taken from whichever wiki has them."""
     archive = out_dir / "common-offline.tar.gz"
     seen = set()
@@ -134,10 +239,16 @@ def write_common_archive(wikis, common_names, out_dir: Path) -> int:
                 if path.is_file():
                     tar.add(path, arcname=f"_images/{name}", filter=_normalise)
                     seen.add(name)
+        # Stills go in with the shared images rather than a directory of their
+        # own. The service worker, the .pyz server and the HTML exporter each
+        # already know how to find /<wiki>/_images/ here, and none of them
+        # needs teaching about a fourth path.
+        for vid, path in sorted(thumbs.items()):
+            add_bytes(tar, f"_images/yt-{vid}.jpg", path.read_bytes())
     return archive.stat().st_size
 
 
-def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path) -> int:
+def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path, thumbs) -> int:
     """Pages, static assets and images unique to this wiki."""
     html_root = Path(wiki) / "build" / "html"
     archive = out_dir / f"{wiki}-offline.tar.gz"
@@ -154,7 +265,14 @@ def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path) -> int:
             # Never fold the offline artefacts back into themselves.
             if parts and parts[0] == "offline":
                 continue
-            tar.add(path, arcname=f"{wiki}/{rel.as_posix()}", filter=_normalise)
+            arcname = f"{wiki}/{rel.as_posix()}"
+            if path.suffix == ".html":
+                html = path.read_text(encoding="utf-8", errors="replace")
+                rewritten = rewrite_embeds(html, wiki, thumbs)
+                if rewritten != html:
+                    add_bytes(tar, arcname, rewritten.encode("utf-8"))
+                    continue
+            tar.add(path, arcname=arcname, filter=_normalise)
     return archive.stat().st_size
 
 
@@ -170,13 +288,18 @@ def build(wikis, destdir: Path) -> Path:
     log(f"classifying images across {len(built)} wikis")
     common_names, per_wiki = classify_images(built)
 
-    log(f"writing common archive ({len(common_names)} shared images)")
-    common_bytes = write_common_archive(built, common_names, out_dir)
+    ids = video_ids(built)
+    log(f"fetching stills for {len(ids)} embedded videos")
+    thumbs = fetch_thumbnails(ids, out_dir / ".thumbs")
+
+    log(f"writing common archive ({len(common_names)} shared images, "
+        f"{len(thumbs)} video stills)")
+    common_bytes = write_common_archive(built, common_names, out_dir, thumbs)
 
     entries = []
     for wiki in built:
         html_root = Path(wiki) / "build" / "html"
-        size = write_wiki_archive(wiki, per_wiki.get(wiki, set()), out_dir)
+        size = write_wiki_archive(wiki, per_wiki.get(wiki, set()), out_dir, thumbs)
         pages = sum(1 for _ in html_root.rglob("*.html"))
         entries.append({
             "id": wiki,

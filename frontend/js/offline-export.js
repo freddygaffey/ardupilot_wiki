@@ -618,15 +618,53 @@
     // The sidebar carries the absolute links, so it needs this too.
     'doc.addEventListener("click",onLinkClick);',
     'nav.addEventListener("click",onLinkClick);',
-    // Filter the real navigation tree rather than a flat list.
+    // Search every page, not the sidebar.
+    //
+    // This used to hide non-matching entries in the navigation tree, which
+    // only ever covered what the toctree lists: about a hundred headings out
+    // of several thousand pages. Anything reached from within a page could not
+    // be found at all. Titles and paths for the whole file are already in the
+    // index, so matching against those costs nothing and covers all of it.
+    'function esc(s){return String(s).replace(/[&<>"]/g,function(c){',
+    'return {"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c];});}',
+    'function wikiName(p){var id=p.split("/")[1]||"";var out=id;',
+    'D.homes.forEach(function(h){if(h.id===id)out=h.name||h.id;});return out;}',
+    'function renderSearch(q){',
+    'var ql=q.toLowerCase();var hits=[];',
+    'for(var i=0;i<D.pages.length;i++){',
+    'var pg=D.pages[i];var at=pg.t.toLowerCase().indexOf(ql);',
+    'var ap=at===-1?pg.p.toLowerCase().indexOf(ql):-1;',
+    'if(at===-1&&ap===-1)continue;',
+    // Title matches first, and a title that starts with the query above one
+    // that merely contains it. Path-only matches last.
+    'hits.push({pg:pg,rank:at===0?0:(at>0?1:2)});}',
+    'hits.sort(function(a,b){return a.rank-b.rank||(a.pg.t<b.pg.t?-1:1);});',
+    'var shown=hits.slice(0,200);',
+    'var rows=shown.map(function(h){',
+    'return \'<li><a href="#\'+h.pg.p+\'"><span>\'+esc(h.pg.t)+\'</span>\'',
+    '+\'<small>\'+esc(wikiName(h.pg.p))+\'</small></a></li>\';}).join("");',
+    'doc.innerHTML="<h1>Search</h1><p>"+hits.length+" page"',
+    '+(hits.length===1?"":"s")+" matching <strong>"+esc(q)+"</strong>"',
+    '+(hits.length>shown.length?", showing the first "+shown.length:"")+"</p>"',
+    '+(hits.length?"<ul id=\\"ap-pick\\">"+rows+"</ul>":"");',
+    'crumb.textContent="";',
+    'var sc=document.querySelector(".wy-nav-content-wrap");if(sc)sc.scrollTop=0;}',
+    // Where to return to when the box is cleared.
+    'var searchTimer=null,beforeSearch=null;',
     'search.addEventListener("input",function(){',
-    'var q=search.value.toLowerCase();',
-    'links.forEach(function(a){',
-    'var li=a.parentNode;',
-    'li.style.display=a.textContent.toLowerCase().indexOf(q)===-1?"none":"";});});',
+    'clearTimeout(searchTimer);',
+    'searchTimer=setTimeout(function(){',
+    'var q=search.value.trim();',
+    'if(q.length<2){',
+    'if(beforeSearch!==null){var b=beforeSearch;beforeSearch=null;go(b);}return;}',
+    'if(beforeSearch===null)beforeSearch=current()||"/";',
+    'renderSearch(q);},120);});',
+    'window.addEventListener("hashchange",function(){beforeSearch=null;});',
     'document.addEventListener("keydown",function(e){',
     'if(e.key==="Escape"){var lb=document.getElementById("ap-lightbox");',
-    'if(lb)lb.style.display="none";}',
+    'if(lb)lb.style.display="none";',
+    'if(document.activeElement===search&&search.value){',
+    'search.value="";search.dispatchEvent(new Event("input"));}}',
     'if(e.key==="/"&&document.activeElement!==search){e.preventDefault();search.focus();}});',
     'route();})();'
   ].join('');
@@ -827,7 +865,7 @@
             '<nav data-toggle="wy-nav-shift" class="wy-nav-side">' +
             '<div id="ap-brand">ArduPilot<small>offline copy &middot; ' +
             wikis.join(', ') + '</small></div>' +
-            '<input id="ap-search" placeholder="Filter pages  ( / )" autocomplete="off">' +
+            '<input id="ap-search" placeholder="Search all pages  ( / )" autocomplete="off">' +
             '<div class="wy-menu wy-menu-vertical" id="ap-nav"></div></nav>' +
             '<section data-toggle="wy-nav-shift" class="wy-nav-content-wrap">' +
             '<div class="wy-nav-content"><div class="rst-content">' +
