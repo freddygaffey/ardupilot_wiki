@@ -13,6 +13,13 @@
 (function (global) {
   'use strict';
 
+  // Bumped when this file changes in a way worth telling apart at runtime.
+  // window.ArduPilotOfflineVersion answers "is the page running the code I just
+  // deployed?" without inferring it from behaviour.
+  var VERSION = 'confirm-deadzone-1';
+  global.ArduPilotOfflineVersion = VERSION;
+
+
   // Sizes measured from a real build. The build should eventually publish these
   // in offline-manifest.json; until it does they come from here so the page
   // never shows invented numbers.
@@ -325,32 +332,52 @@
    * is at stake. It reverts on its own if left alone, so a stray click cannot
    * arm it indefinitely.
    */
+  var CONFIRM_MS = 6000;
+  // A double click should never delete anything. The second press is ignored
+  // until this has passed, so confirming has to be a deliberate, separate act.
+  var CONFIRM_DEAD_MS = 700;
+
   var clearArmed = null;
+  var clearArmedAt = 0;
+
+  function disarmClear(btn) {
+    if (clearArmed) { clearTimeout(clearArmed); }
+    clearArmed = null;
+    btn.textContent = 'Remove all';
+    btn.classList.remove('apo-btn-danger');
+    btn.classList.add('apo-btn-ghost');
+    var bar = btn.querySelector('.apo-arm');
+    if (bar) { bar.remove(); }
+  }
 
   function confirmClear() {
     var btn = el('clear-btn');
     if (!btn) { return; }
 
     if (clearArmed) {
-      clearTimeout(clearArmed);
-      clearArmed = null;
-      btn.textContent = 'Remove all';
-      btn.classList.remove('apo-btn-danger');
-      btn.classList.add('apo-btn-ghost');
+      if (Date.now() - clearArmedAt < CONFIRM_DEAD_MS) { return; }
+      disarmClear(btn);
       return clearAll();
     }
 
     return storage().then(function (r) {
       var used = (r.estimate || {}).usage || 0;
-      btn.textContent = used ? 'Delete ' + fmt(used) + '? Press again' : 'Press again to confirm';
+      btn.textContent = used ? 'Delete ' + fmt(used) + '? Press again'
+                             : 'Press again to confirm';
       btn.classList.remove('apo-btn-ghost');
       btn.classList.add('apo-btn-danger');
-      clearArmed = setTimeout(function () {
-        clearArmed = null;
-        btn.textContent = 'Remove all';
-        btn.classList.remove('apo-btn-danger');
-        btn.classList.add('apo-btn-ghost');
-      }, 6000);
+
+      var bar = document.createElement('span');
+      bar.className = 'apo-arm';
+      btn.appendChild(bar);
+      // Force a layout so the transition starts from full width rather than
+      // being collapsed into the same frame.
+      void bar.offsetWidth;
+      bar.style.transitionDuration = CONFIRM_MS + 'ms';
+      bar.classList.add('apo-arm-run');
+
+      clearArmedAt = Date.now();
+      clearArmed = setTimeout(function () { disarmClear(btn); }, CONFIRM_MS);
     });
   }
 

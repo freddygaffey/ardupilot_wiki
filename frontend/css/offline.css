@@ -70,6 +70,26 @@
   margin: 0;
 }
 .apo .apo-btn:disabled { opacity: .5; cursor: not-allowed; }
+.apo .apo-btn { position: relative; overflow: hidden; }
+
+/*
+ * Countdown under an armed destructive button.
+ *
+ * It shows how long the confirmation stays live, and gives the press somewhere
+ * to read as "not finished yet" - the button changing colour alone invites a
+ * second click straight away, which is exactly what a confirmation is meant to
+ * prevent.
+ */
+.apo .apo-arm {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  width: 100%;
+  background: rgba(255, 255, 255, .85);
+  transform-origin: left center;
+}
+.apo .apo-arm.apo-arm-run { transition: width linear; width: 0; }
 .apo .apo-btn-primary { background: var(--success); border-color: var(--success); color: #fff; }
 .apo .apo-btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
 .apo .apo-btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
