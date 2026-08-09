@@ -42,7 +42,7 @@ window, and makes your browser far less likely to delete what you have saved.
        <button id="download-cache-btn" class="apo-btn apo-btn-primary">Save selected</button>
        <button id="check-btn" class="apo-btn apo-btn-ghost">Check for updates</button>
        <button id="persist-btn" class="apo-btn apo-btn-ghost" hidden>Make permanent</button>
-       <button id="clear-btn" class="apo-btn apo-btn-ghost">Remove all</button>
+       <button id="clear-btn" class="apo-btn apo-btn-danger">Remove all</button>
      </div>
 
      <div id="storage-warning"></div>

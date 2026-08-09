@@ -94,6 +94,10 @@
 .apo .apo-btn-primary:hover:not(:disabled) { filter: brightness(1.1); }
 .apo .apo-btn-danger { background: var(--danger); border-color: var(--danger); color: #fff; }
 .apo .apo-btn-danger:hover:not(:disabled) { filter: brightness(1.1); }
+/* Armed: darker, so the two states are still tellable apart now that the
+   button is red whether armed or not. */
+.apo .apo-btn-armed { background: #a71d2a; border-color: #a71d2a; }
+.apo .apo-btn-armed:hover:not(:disabled) { background: #8f1923; filter: none; }
 /* Outlined, for the header strip where the background is dark. */
 .apo .apo-btn-ghost { background: transparent; border-color: #6c757d; color: #fff; }
 .apo .apo-btn-ghost:hover:not(:disabled) { background: rgba(255, 255, 255, .12); }
