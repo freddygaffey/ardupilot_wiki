@@ -40,6 +40,23 @@ GZIP_LEVEL = 1
 # Left unset, the page falls back to its built-in default.
 ARTIFACT_BASE_ENV = "ARDUPILOT_OFFLINE_BASE"
 
+# The manifest overrides the names the offline page falls back to, so these
+# have to be the real ones. Capitalising the directory gave "Dev", "Planner2"
+# and "Ardupilot", which read as though they were not proper platforms.
+DISPLAY_NAMES = {
+    "copter": "Copter",
+    "plane": "Plane",
+    "rover": "Rover",
+    "sub": "Sub",
+    "blimp": "Blimp",
+    "dev": "Developer",
+    "antennatracker": "Antenna Tracker",
+    "planner": "Mission Planner",
+    "planner2": "APM Planner 2",
+    "ardupilot": "About",
+    "mavproxy": "MAVProxy",
+}
+
 
 def _normalise(info: tarfile.TarInfo) -> tarfile.TarInfo:
     """
@@ -163,7 +180,7 @@ def build(wikis, destdir: Path) -> Path:
         pages = sum(1 for _ in html_root.rglob("*.html"))
         entries.append({
             "id": wiki,
-            "name": wiki.capitalize(),
+            "name": DISPLAY_NAMES.get(wiki, wiki.capitalize()),
             "mb": round(size / 1048576),
             "pages": pages,
             "archive": f"{wiki}-offline.tar.gz",
