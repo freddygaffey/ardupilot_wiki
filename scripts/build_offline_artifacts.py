@@ -187,39 +187,74 @@ def video_card(vid: str, wiki: str, has_thumb: bool) -> str:
     link = f"https://www.youtube.com/watch?v={vid}"
     label = ("&#9654; Watch on YouTube "
              "<span style=\"opacity:.8\">(needs a connection)</span>")
-    if not has_thumb:
-        # No still, so keep the shape of a video and say the preview is
-        # missing. Usually the video has been deleted, but a build with no
-        # network looks identical from here, so the wording does not claim to
-        # know which.
-        return (
-            f'<a class="ap-video" href="{link}" data-ap-external="1" '
-            'style="display:block;position:relative;max-width:640px;'
-            'margin:1em 0;text-decoration:none;background:#2f2f2f;'
-            'border-radius:4px">'
-            '<span style="display:block;padding-bottom:56.25%"></span>'
-            '<span style="position:absolute;top:0;left:0;right:0;bottom:0;'
-            'display:flex;align-items:center;justify-content:center;'
-            'color:#b0b0b0;font-size:.95em;text-align:center;padding:0 16px">'
-            'No preview available</span>'
-            '<span style="position:absolute;left:0;right:0;bottom:0;'
-            'padding:8px 10px;background:rgba(0,0,0,.72);color:#fff;'
-            f'font-size:.9em;border-radius:0 0 4px 4px">{label}</span></a>')
+
+    # The placeholder is always present, underneath, and the still is laid over
+    # it. A card with no still shows it directly; a card whose still fails to
+    # load drops the image and reveals it. The wording does not claim the video
+    # is gone, because a deleted video and a build with no network produce the
+    # same missing still and this cannot tell them apart.
+    still = ''
+    if has_thumb:
+        still = (f'<img src="/{wiki}/_images/yt-{vid}.jpg" alt="" '
+                 'onerror="this.remove()" '
+                 'style="position:absolute;top:0;left:0;width:100%;height:100%;'
+                 'object-fit:cover;border-radius:4px">')
     return (
         f'<a class="ap-video" href="{link}" data-ap-external="1" '
         'style="display:block;position:relative;max-width:640px;margin:1em 0;'
-        'text-decoration:none">'
-        f'<img src="/{wiki}/_images/yt-{vid}.jpg" alt="" '
-        'style="width:100%;display:block;border-radius:4px">'
-        '<span style="position:absolute;left:0;right:0;bottom:0;padding:8px 10px;'
-        'background:rgba(0,0,0,.72);color:#fff;font-size:.9em;'
-        f'border-radius:0 0 4px 4px">{label}</span></a>')
+        'text-decoration:none;background:#2f2f2f;border-radius:4px">'
+        '<span style="display:block;padding-bottom:56.25%"></span>'
+        '<span style="position:absolute;top:0;left:0;right:0;bottom:0;'
+        'display:flex;align-items:center;justify-content:center;color:#b0b0b0;'
+        'font-size:.95em;text-align:center;padding:0 16px">'
+        'No preview available</span>'
+        f'{still}'
+        '<span style="position:absolute;left:0;right:0;bottom:0;'
+        'padding:8px 10px;background:rgba(0,0,0,.72);color:#fff;'
+        f'font-size:.9em;border-radius:0 0 4px 4px">{label}</span></a>')
 
 
 def rewrite_embeds(html: str, wiki: str, thumbs) -> str:
     """Swap every YouTube embed in a page for its card."""
     return EMBED_RE.sub(
         lambda m: video_card(m.group(1), wiki, m.group(1) in thumbs), html)
+
+
+SITE_LINK_RE = re.compile(
+    r'(href|src)="https?://(?:www\.)?ardupilot\.org(/[^"]*)"', re.IGNORECASE)
+
+
+def rewrite_site_links(html: str, wikis) -> str:
+    """
+    Point absolute ardupilot.org links at this copy instead of the network.
+
+    NOT NEEDED IN PRODUCTION. Served from ardupilot.org these links are already
+    same-origin, so the service worker answers them from the cache and offline
+    reading works untouched. This exists because the demo is on a different
+    domain, where the same links leave the origin entirely and the worker never
+    sees them: a top-level navigation to another origin is never handed to a
+    service worker. It also helps the .pyz, which serves from localhost.
+
+    So this can be dropped once the offline copies are served from the real
+    site. It is kept because the alternative for demoing to anyone is asking
+    them to edit their own DNS, which is not a reasonable thing to ask.
+
+    Pages cross-reference each other by full URL, most visibly the About wiki,
+    whose sidebar links to every other wiki that way. Rewriting to root-relative
+    is harmless on the real site, where these resolve to the same pages they
+    always did.
+
+    Only paths belonging to a wiki we ship are touched. Everything else, the
+    forum and firmware server included, is left as it is.
+    """
+    def swap(m):
+        attr, path = m.group(1), m.group(2)
+        first = path.lstrip('/').split('/')[0]
+        if first not in wikis:
+            return m.group(0)
+        return f'{attr}="{path}"'
+
+    return SITE_LINK_RE.sub(swap, html)
 
 
 def add_bytes(tar, arcname: str, data: bytes):
@@ -260,7 +295,8 @@ def write_common_archive(wikis, common_names, out_dir: Path, thumbs) -> int:
     return archive.stat().st_size
 
 
-def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path, thumbs) -> int:
+def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path, thumbs,
+                       wikis) -> int:
     """Pages, static assets and images unique to this wiki."""
     html_root = Path(wiki) / "build" / "html"
     archive = out_dir / f"{wiki}-offline.tar.gz"
@@ -280,7 +316,8 @@ def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path, thumbs) -> int:
             arcname = f"{wiki}/{rel.as_posix()}"
             if path.suffix == ".html":
                 html = path.read_text(encoding="utf-8", errors="replace")
-                rewritten = rewrite_embeds(html, wiki, thumbs)
+                rewritten = rewrite_site_links(
+                    rewrite_embeds(html, wiki, thumbs), wikis)
                 if rewritten != html:
                     add_bytes(tar, arcname, rewritten.encode("utf-8"))
                     continue
@@ -311,7 +348,8 @@ def build(wikis, destdir: Path) -> Path:
     entries = []
     for wiki in built:
         html_root = Path(wiki) / "build" / "html"
-        size = write_wiki_archive(wiki, per_wiki.get(wiki, set()), out_dir, thumbs)
+        size = write_wiki_archive(wiki, per_wiki.get(wiki, set()), out_dir,
+                                  thumbs, set(built))
         pages = sum(1 for _ in html_root.rglob("*.html"))
         entries.append({
             "id": wiki,

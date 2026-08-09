@@ -629,15 +629,60 @@
     'return {"&":"&amp;","<":"&lt;",">":"&gt;","\\"":"&quot;"}[c];});}',
     'function wikiName(p){var id=p.split("/")[1]||"";var out=id;',
     'D.homes.forEach(function(h){if(h.id===id)out=h.name||h.id;});return out;}',
+    // Sphinx's index, parsed the first time somebody searches rather than on
+    // load, so opening the file does not pay for it.
+    'var SI=null;',
+    'function searchIndex(){',
+    'if(SI!==null)return SI;',
+    'var el=document.getElementById("ap-fts");',
+    'try{SI=el?JSON.parse(el.textContent):{};}catch(e){SI={};}',
+    'return SI;}',
+    // The index is stemmed, so the query has to be stemmed the same way or
+    // "tuning" never matches the "tune" that is actually stored. This is
+    // Sphinx's own stemmer, carried along with the index that it built.
+    'var stemmer=(typeof Stemmer!=="undefined")?new Stemmer():null;',
+    'function stem(w){return stemmer?stemmer.stemWord(w):w;}',
+    'function fullText(ql){',
+    'var idx=searchIndex();var out={};',
+    'var words=ql.split(/[^a-z0-9_]+/).filter(function(w){return w.length>1;});',
+    'if(!words.length)return out;',
+    'Object.keys(idx).forEach(function(w){',
+    'var d=idx[w];var per=null;',
+    'words.forEach(function(word){',
+    'var s=stem(word);var hit={};',
+    'function mark(list,weight){',
+    'if(list===undefined)return;',
+    'if(typeof list==="number")list=[list];',
+    'list.forEach(function(n){hit[n]=(hit[n]||0)+weight;});}',
+    'mark(d.terms[s],1);mark(d.titleterms[s],5);',
+    // A word still being typed should match by prefix, or results only appear
+    // once the word is finished.
+    'if(word.length>=3){var keys=Object.keys(d.terms);',
+    'for(var k=0;k<keys.length;k++){',
+    'if(keys[k]!==s&&keys[k].indexOf(s)===0)mark(d.terms[keys[k]],0.5);}}',
+    'if(per===null){per=hit;}else{',
+    'var next={};Object.keys(hit).forEach(function(n){',
+    'if(per[n]!==undefined)next[n]=per[n]+hit[n];});per=next;}});',
+    'if(!per)return;',
+    'Object.keys(per).forEach(function(n){',
+    'var path="/"+w+"/"+d.docnames[n];',
+    'out[path]=Math.max(out[path]||0,per[n]);});});',
+    'return out;}',
     'function renderSearch(q){',
-    'var ql=q.toLowerCase();var hits=[];',
+    'var ql=q.toLowerCase();var hits=[];var seen={};',
     'for(var i=0;i<D.pages.length;i++){',
     'var pg=D.pages[i];var at=pg.t.toLowerCase().indexOf(ql);',
     'var ap=at===-1?pg.p.toLowerCase().indexOf(ql):-1;',
     'if(at===-1&&ap===-1)continue;',
     // Title matches first, and a title that starts with the query above one
     // that merely contains it. Path-only matches last.
-    'hits.push({pg:pg,rank:at===0?0:(at>0?1:2)});}',
+    'hits.push({pg:pg,rank:at===0?0:(at>0?1:2)});seen[pg.p]=1;}',
+    // Then whatever the body text turns up, below the title matches.
+    'var ft=fullText(ql);',
+    'var byPathPage={};D.pages.forEach(function(p){byPathPage[p.p]=p;});',
+    'Object.keys(ft).sort(function(a,b){return ft[b]-ft[a];}).forEach(function(p){',
+    'if(seen[p]||!byPathPage[p])return;',
+    'hits.push({pg:byPathPage[p],rank:3});});',
     'hits.sort(function(a,b){return a.rank-b.rank||(a.pg.t<b.pg.t?-1:1);});',
     'var shown=hits.slice(0,200);',
     'var rows=shown.map(function(h){',
@@ -763,6 +808,27 @@
   }
 
   /**
+   * Sphinx's own search index, trimmed to what searching needs.
+   *
+   * The file is `Search.setIndex({...})`, so the JSON sits between the outer
+   * brackets. Dropping objects, indexentries, alltitles and filenames halves
+   * it: 11 MB across eleven wikis becomes 5 MB, against a 970 MB export.
+   */
+  function readSearchIndex(entry) {
+    return entry.cache.match(entry.path)
+      .then(function (r) { return r.text(); })
+      .then(function (src) {
+        var open = src.indexOf('('), close = src.lastIndexOf(')');
+        if (open === -1 || close <= open) { return null; }
+        var d = JSON.parse(src.slice(open + 1, close));
+        if (!d.terms || !d.docnames) { return null; }
+        return { docnames: d.docnames, titles: d.titles || [],
+                 terms: d.terms, titleterms: d.titleterms || {} };
+      })
+      .catch(function () { return null; });
+  }
+
+  /**
    * Lift the theme's navigation tree out of a wiki's index page.
    *
    * Only the toctree lists: the same div carries a donation form whose links
@@ -796,11 +862,20 @@
 
     return storedEntries(wikiIds).then(function (groups) {
       var pages = [], assets = {}, styles = {}, roots = {};
+      // Sphinx already built a stemmed full-text index per wiki, and the
+      // stemmer that built it. Both are sitting in the cache.
+      var indexes = {}, stemmerSrc = null;
 
       groups.forEach(function (g) {
         g.reqs.forEach(function (req) {
           var path = new URL(req.url).pathname;
           if (path === COMPLETE_MARKER) { return; }
+          var si = path.match(/^\/([^/]+)\/searchindex\.js$/);
+          if (si) { indexes[si[1]] = { cache: g.cache, path: path }; return; }
+          if (/\/_static\/language_data\.js$/.test(path)) {
+            if (!stemmerSrc) { stemmerSrc = { cache: g.cache, path: path }; }
+            return;
+          }
           if (BINARY.test(path)) { assets[path] = g.cache; }
           else if (/\.css$/.test(path)) { styles[path] = g.cache; assets[path] = g.cache; }
           else if (/\.html?$/.test(path)) {
@@ -914,9 +989,38 @@
             var payload = { pages: index, nav: navHtml, wikis: wikis,
                             imgs: imgPaths, homes: homes,
                             home: homes.length === 1 ? homes[0].path : '' };
-            return write('<script type="application/json" id="ap-index">' +
-                         JSON.stringify(payload).split('</').join('<\\/') +
-                         '<\/script><script>' + SHELL_JS + '<\/script></body></html>');
+
+            // Full-text search, written as its own inert block rather than
+            // folded into the routing payload. That one is parsed on load; a
+            // few megabytes of index is not, and is only read the first time
+            // somebody searches.
+            var wantIndex = wikis.filter(function (w) { return indexes[w]; });
+            return Promise.all(wantIndex.map(function (w) {
+              return readSearchIndex(indexes[w]).then(function (d) {
+                return d ? [w, d] : null;
+              });
+            })).then(function (loaded) {
+              var byWiki = {};
+              loaded.forEach(function (e) { if (e) { byWiki[e[0]] = e[1]; } });
+              var stem = stemmerSrc
+                ? stemmerSrc.cache.match(stemmerSrc.path)
+                    .then(function (r) { return r.text(); })
+                    .catch(function () { return ''; })
+                : Promise.resolve('');
+              return stem.then(function (stemSrc) {
+                return write(
+                  '<script type="application/json" id="ap-fts">' +
+                  JSON.stringify(byWiki).split('</').join('<\\/') +
+                  '<\/script>' +
+                  (stemSrc ? '<script>' + stemSrc.split('<\/script>')
+                                                  .join('<\\/script>') +
+                             '<\/script>' : ''));
+              });
+            }).then(function () {
+              return write('<script type="application/json" id="ap-index">' +
+                           JSON.stringify(payload).split('</').join('<\\/') +
+                           '<\/script><script>' + SHELL_JS + '<\/script></body></html>');
+            });
           }).then(function () { return sink.close(); })
             .then(function () { return { pages: done }; });
         });
