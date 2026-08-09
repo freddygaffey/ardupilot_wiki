@@ -524,8 +524,19 @@
     'if(!href||/^(mailto:|#)/.test(href))return;',
     'if(/^https?:/i.test(href)){',
     'var mapped=siteHref(href);',
-    'if(mapped){var hit=lookup(mapped);',
-    'if(hit!==undefined){e.preventDefault();location.hash="#"+hit;return;}}',
+    'if(mapped===null)return;',
+    // An ardupilot.org URL is wiki content, so it never leaves the file, for
+    // the same reason a relative link does not: offline there is nothing at
+    // the other end, and following it costs the reader the whole document.
+    // Say the wiki is missing instead. Other hosts, including the forum and
+    // the firmware server, still open normally.
+    'e.preventDefault();',
+    'var hit=lookup(mapped);',
+    'if(hit!==undefined){location.hash="#"+hit;return;}',
+    'miss.style.display="block";',
+    'miss.textContent="Not in this file: "+mapped+'
+      + '" - that wiki was not included in this download.";',
+    'setTimeout(function(){miss.style.display="none";},5000);',
     'return;}',
     'var frag="";var h=href;var hi=h.indexOf("#");',
     'if(hi>=0){frag=h.slice(hi);h=h.slice(0,hi);}',
