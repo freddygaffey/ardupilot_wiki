@@ -16,7 +16,7 @@
   // Bumped when this file changes in a way worth telling apart at runtime.
   // window.ArduPilotOfflineVersion answers "is the page running the code I just
   // deployed?" without inferring it from behaviour.
-  var VERSION = 'remove-red-1';
+  var VERSION = 'footer-wording-1';
   global.ArduPilotOfflineVersion = VERSION;
 
 
@@ -125,13 +125,25 @@
       var est = r[0].estimate, persisted = r[0].persisted, pages = r[1];
       var used = est.usage || 0, quota = est.quota || 0;
 
-      // One plain sentence. This sits in the panel footer, not in a table, and
-      // the previous key/value markup lost its styling in the redesign - it
-      // rendered as "On this device21 pages".
-      el('storage-status').textContent =
-        pages + ' page' + (pages === 1 ? '' : 's') + ' saved · ' +
-        fmt(used) + ' used · ' + fmt(Math.max(quota - used, 0)) + ' free · ' +
-        'storage ' + (persisted ? 'permanent' : 'temporary');
+      // Two different things get called "saved" and they contradict each other:
+      // wikis you deliberately downloaded, and pages cached simply because you
+      // read them. The table shows the first, so the footer reporting the
+      // second as "saved" made "Remove all" look enabled with nothing to
+      // remove. Name them separately.
+      var savedWikis = Object.keys(storedIds).filter(function (id) {
+        return id !== 'common';
+      }).length;
+      var parts = [];
+      parts.push(savedWikis
+        ? savedWikis + ' wiki' + (savedWikis === 1 ? '' : 's') + ' saved'
+        : 'no wikis saved');
+      if (pages) {
+        parts.push(pages + ' page' + (pages === 1 ? '' : 's') + ' cached while reading');
+      }
+      parts.push(fmt(used) + ' used');
+      parts.push(fmt(Math.max(quota - used, 0)) + ' free');
+      parts.push('storage ' + (persisted ? 'permanent' : 'temporary'));
+      el('storage-status').textContent = parts.join(' · ');
 
       el('storage-warning').innerHTML = persisted
         ? ''
@@ -141,6 +153,18 @@
           'copy in the field until you make it permanent.</div>';
 
       el('persist-btn').hidden = persisted || !(navigator.storage && navigator.storage.persist);
+
+      // Nothing cached means nothing to remove, so the button should not invite
+      // a press. Disarm it too, in case it was armed when the last of it went.
+      var clear = el('clear-btn');
+      if (clear) {
+        var anything = pages > 0 || Object.keys(storedIds).length > 0;
+        clear.disabled = !anything;
+        clear.title = anything ? 'Removes saved wikis and pages cached while reading'
+                               : 'Nothing is stored on this device';
+        if (!anything && clearArmed) { disarmClear(clear); }
+      }
+
       updateExportState();
       updateTotal();
     });
@@ -193,6 +217,13 @@
                '</tr>';
       });
       el('wiki-rows').innerHTML = rows.join('');
+
+      var clear = el('clear-btn');
+      if (clear) {
+        var anySaved = Object.keys(stored).length > 0;
+        if (anySaved) { clear.disabled = false; clear.title = ''; }
+      }
+
       updateExportState();
       updateTotal();
     });

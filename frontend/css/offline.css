@@ -69,7 +69,15 @@
   transition: filter .12s, background-color .12s;
   margin: 0;
 }
-.apo .apo-btn:disabled { opacity: .5; cursor: not-allowed; }
+.apo .apo-btn:disabled { opacity: .45; cursor: not-allowed; }
+/* A disabled destructive button should read as inert rather than as a faded
+   warning - keeping it red implies it still does something. */
+.apo .apo-btn-danger:disabled {
+  background: transparent;
+  border-color: #6c757d;
+  color: #adb5bd;
+  opacity: 1;
+}
 .apo .apo-btn { position: relative; overflow: hidden; }
 
 /*
