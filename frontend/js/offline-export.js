@@ -436,7 +436,8 @@
     '#ap-pick li{border-bottom:1px solid #e1e4e5}' +
     '#ap-pick a{display:flex;align-items:baseline;justify-content:space-between;' +
     'gap:1em;padding:12px 2px;text-decoration:none;text-transform:capitalize}' +
-    '#ap-pick small{color:#666;text-transform:none;font-size:.85em}';
+    '#ap-pick small{color:#666;text-transform:none;font-size:.85em}' +
+    '.ap-actions{display:flex;flex-wrap:wrap;gap:0 1.5em}';
 
   var SHELL_JS = [
     '(function(){',
@@ -492,10 +493,22 @@
     'function showMissing(raw){',
     'miss.style.display="none";',
     'var held=D.homes.map(function(h){return h.id;}).join(", ");',
+    'var live="https://ardupilot.org"+(raw==="/"?"":raw+".html");',
     'doc.innerHTML="<h1>Not in this offline copy</h1>"',
     '+"<p><code>"+raw+"</code> is not included in this download.</p>"',
     '+"<p>This file contains: "+held+".</p>"',
-    '+(D.homes.length>1?"<p><a href=\\"#/\\">Choose a wiki</a></p>":"");',
+    '+"<p class=\\"ap-actions\\">"',
+    // data-ap-external keeps the click handler off it. Without that the link
+    // is an ardupilot.org URL like any other and gets routed straight back
+    // here, which is a loop rather than a way out.
+    '+"<a href=\\""+live+"\\" data-ap-external=\\"1\\">Open it on ardupilot.org</a>"',
+    '+"<a href=\\"#\\" id=\\"ap-back\\">Go back</a>"',
+    '+(D.homes.length>1?"<a href=\\"#/\\">Choose a wiki</a>":"")+"</p>"',
+    '+"<p><small>Opening the live wiki needs a connection. '
+      + 'With none it will simply fail to load, and this file is still here.'
+      + '</small></p>";',
+    'var b=document.getElementById("ap-back");',
+    'if(b)b.addEventListener("click",function(ev){ev.preventDefault();history.back();});',
     'crumb.textContent="";',
     'document.title="Not in this offline copy - ArduPilot";',
     'var sc=document.querySelector(".wy-nav-content-wrap");if(sc)sc.scrollTop=0;}',
@@ -560,6 +573,7 @@
     'function onLinkClick(e){',
     'var a=e.target.closest?e.target.closest("a[href]"):null;if(!a)return;',
     'var href=a.getAttribute("href");',
+    'if(a.getAttribute("data-ap-external")!==null)return;',
     'if(!href||/^(mailto:|#)/.test(href))return;',
     'if(/^https?:/i.test(href)){',
     'var mapped=siteHref(href);',
