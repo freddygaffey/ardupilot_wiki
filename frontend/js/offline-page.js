@@ -118,7 +118,7 @@
   function renderStorage() {
     return Promise.all([storage(), countCachedPages()]).then(function (r) {
       var est = r[0].estimate, persisted = r[0].persisted, pages = r[1];
-      var used = est.usage || 0, quota = est.quota || 0;
+      var used = est.usage || 0;
 
       // Two different things get called "saved" and they contradict each other:
       // wikis you deliberately downloaded, and pages cached simply because you
@@ -136,7 +136,11 @@
         parts.push(pages + ' page' + (pages === 1 ? '' : 's') + ' cached while reading');
       }
       parts.push(fmt(used) + ' used');
-      parts.push(fmt(Math.max(quota - used, 0)) + ' free');
+      // Free space is not reported. Browsers return a fuzzed quota that is
+      // theirs to revise, not a disk figure, and every wiki here fits inside
+      // it comfortably, so the number invited a comparison worth nothing.
+      // checkRoom still uses the quota before a download; it is just not
+      // something to put on screen.
       parts.push('storage ' + (persisted ? 'permanent' : 'temporary'));
       el('storage-status').textContent = parts.join(' · ');
 
@@ -147,7 +151,7 @@
         : '<div class="apo-note apo-note-warn">&#9888; Storage is ' +
           '<strong>temporary</strong>. Your browser can delete these saved pages ' +
           'without warning if this device runs low on space. Installing the wiki ' +
-          'as an app makes that far less likely. See ' +
+          'as an app makes that less likely. See ' +
           '<a href="#install-as-an-app">Install as an app</a> below.</div>';
 
       // Nothing cached means nothing to remove, so the button should not invite
@@ -493,7 +497,14 @@
    * service worker redirects per-wiki image requests there.
    */
   function fetchArchive(entry, cache, onBytes) {
-    var url = ARTIFACT_BASE + '/' + (entry.archive || entry.id + '-offline.tar.gz');
+    // Tagged with the build the manifest describes, so a reader always gets
+    // the archive that goes with it. Object storage keeps the same filename
+    // every build, and replacing an object does not invalidate the CDN cache
+    // in front of it, so without this a new build can be published and readers
+    // keep receiving the previous one until the edge decides otherwise. The
+    // tag also keeps each build cacheable rather than defeating caching.
+    var url = ARTIFACT_BASE + '/' + (entry.archive || entry.id + '-offline.tar.gz') +
+              (CURRENT_BUILD ? '?v=' + encodeURIComponent(CURRENT_BUILD) : '');
     return fetch(url, {
       mode: 'cors',
       signal: activeDownload ? activeDownload.signal : undefined

@@ -15,7 +15,7 @@ anywhere the signal runs out.
 Two separate things live on this page, and they are easily confused. *Saving
 pages* makes the wiki readable offline and works in an ordinary browser tab.
 *Installing* the app downloads nothing at all. It only gives the wiki its own
-window, and makes your browser far less likely to delete what you have saved.
+window, and makes your browser less likely to delete what you have saved.
 
 .. raw:: html
 
@@ -36,6 +36,8 @@ window, and makes your browser far less likely to delete what you have saved.
 
    <div class="apo">
 
+     <div id="storage-warning"></div>
+
      <div class="apo-head">
        <p class="apo-title">Offline storage</p>
        <span class="apo-spacer"></span>
@@ -43,8 +45,6 @@ window, and makes your browser far less likely to delete what you have saved.
        <button id="check-btn" class="apo-btn apo-btn-ghost">Check for updates</button>
        <button id="clear-btn" class="apo-btn apo-btn-danger">Remove all</button>
      </div>
-
-     <div id="storage-warning"></div>
 
      <table class="apo-table">
        <thead>
@@ -99,7 +99,7 @@ Install as an app
 
    Installing downloads nothing, and is not needed to read offline. Saving pages
    works in an ordinary browser tab. It gives the wiki its own window and a
-   launcher icon, and makes your browser far less likely to delete your saved
+   launcher icon, and makes your browser less likely to delete your saved
    pages when the device runs low on space.
 
 .. raw:: html
