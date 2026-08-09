@@ -8,6 +8,11 @@
    therefore has to be served from there, while these pages live under
    /copter/, /plane/ and so on.
 
+   Void elements are self-closed and boolean attributes carry values, which
+   HTML5 accepts and XML requires. Sphinx's epub builder emits XHTML, and a
+   reader parses it strictly: a bare <meta ...> or defer here made every page
+   of the book unopenable, not just this markup.
+
    This file is copied into each wiki's source/_templates/ by update.py. Edit it
    here, not in the copies.
 #}
@@ -15,8 +20,15 @@
 
 {% block extrahead %}
   {{ super() }}
-  <link rel="manifest" href="/manifest.json">
-  <meta name="theme-color" content="#2980b9">
-  <link rel="apple-touch-icon" href="/apple-icon.png">
-  <script src="/js/pwa.js" defer></script>
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#2980b9" />
+  <link rel="apple-touch-icon" href="/apple-icon.png" />
+  <script src="/js/pwa.js" defer="defer"></script>
+  {# The offline page's stylesheet belongs in <head>. Declared inside the
+     page's own raw HTML it is not found until the parser is most of the way
+     down the body, so the panel paints unstyled and then jumps. Only that one
+     page needs it, hence the guard. #}
+  {%- if pagename == 'docs/common-offline' %}
+  <link rel="stylesheet" href="/css/offline.css" />
+  {%- endif %}
 {% endblock %}

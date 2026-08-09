@@ -107,7 +107,11 @@ function streamOf(buf) {
  */
 function panelMarkup() {
   const rst = fs.readFileSync(RST, 'utf8');
-  const start = rst.indexOf('<div class="apo">');
+  // Start at whichever of the panel's blocks comes first: the warning sits
+  // above the panel, and slicing from the panel alone would silently drop it.
+  const panel = rst.indexOf('<div class="apo">');
+  const warn = rst.indexOf('<div id="storage-warning">');
+  const start = warn !== -1 && warn < panel ? warn : panel;
   const end = rst.indexOf('Install as an app');
   let html = rst.slice(start, end);
   html = html.replace(/^\s{0,3}/gm, '');            // rST indentation

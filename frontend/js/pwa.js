@@ -80,10 +80,20 @@
     hideInstallButton();
   });
 
+  // Anything marked data-ap-install offers to install, not just the button.
+  // The storage warning links here too, and sending a reader who asked to
+  // install down the page to find a button is a worse answer than the dialog
+  // they were asking for. The button stays where it is for anyone who scrolls.
+  var INSTALL_SELECTOR = '#' + INSTALL_BUTTON_ID + ', [data-ap-install]';
+
   document.addEventListener('click', function (event) {
-    var target = event.target.closest ? event.target.closest('#' + INSTALL_BUTTON_ID) : null;
+    var target = event.target.closest ? event.target.closest(INSTALL_SELECTOR) : null;
     if (!target) {
       return;
+    }
+    // A link would otherwise jump the page before the dialog is decided.
+    if (target.tagName === 'A') {
+      event.preventDefault();
     }
 
     // The button may be on screen before beforeinstallprompt has fired, because
@@ -98,13 +108,19 @@
           new Promise(function (resolve) { setTimeout(resolve, 2000); }),
         ]);
 
-    target.disabled = true;
+    var isButton = target.tagName === 'BUTTON';
+    if (isButton) { target.disabled = true; }
     ready.then(function () {
-      target.disabled = false;
+      if (isButton) { target.disabled = false; }
       if (!deferredPrompt) {
         // It never arrived, so this browser will not install it after all.
         remember(false);
         hideInstallButton();
+        // A link that offered to install and then did nothing is worse than
+        // one that takes you to the section explaining it, so fall back to
+        // whatever the link pointed at.
+        var href = !isButton && target.getAttribute('href');
+        if (href && href.charAt(0) === '#') { window.location.hash = href; }
         return;
       }
       deferredPrompt.prompt();
