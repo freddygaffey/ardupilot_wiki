@@ -174,8 +174,14 @@
                    '<span>' + w.name + '</span></label></td>' +
                  '<td class="apo-num">' + w.mb + ' MB</td>' +
                  '<td class="apo-num apo-pages">' + (w.pages || '&mdash;') + '</td>' +
-                 '<td class="apo-num"><div class="apo-progress" hidden>' +
-                   '<div class="apo-progress-bar"></div><span></span></div></td>' +
+                 // Rendered from state, not painted on afterwards: renderWikis
+                 // rebuilds this tbody when a download finishes, which used to
+                 // wipe the bar the moment it reached 100%.
+                 '<td class="apo-num"><div class="apo-progress"' +
+                   (isStored ? '' : ' hidden') + '>' +
+                   '<div class="apo-progress-bar" style="width:' +
+                     (isStored ? '100%' : '0') + '"></div>' +
+                   '<span>' + (isStored ? '100%' : '') + '</span></div></td>' +
                  '<td class="apo-num">' + badge + '</td>' +
                '</tr>';
       });
@@ -307,6 +313,44 @@
           'installing may allow it.</div>';
       }
       return renderStorage();
+    });
+  }
+
+  /**
+   * Removing is destructive and slow to undo - it discards hundreds of
+   * megabytes somebody chose to keep, and getting them back means downloading
+   * them again, possibly without the connection that made it possible.
+   *
+   * So it asks first, in place rather than through a modal, and says how much
+   * is at stake. It reverts on its own if left alone, so a stray click cannot
+   * arm it indefinitely.
+   */
+  var clearArmed = null;
+
+  function confirmClear() {
+    var btn = el('clear-btn');
+    if (!btn) { return; }
+
+    if (clearArmed) {
+      clearTimeout(clearArmed);
+      clearArmed = null;
+      btn.textContent = 'Remove all';
+      btn.classList.remove('apo-btn-danger');
+      btn.classList.add('apo-btn-ghost');
+      return clearAll();
+    }
+
+    return storage().then(function (r) {
+      var used = (r.estimate || {}).usage || 0;
+      btn.textContent = used ? 'Delete ' + fmt(used) + '? Press again' : 'Press again to confirm';
+      btn.classList.remove('apo-btn-ghost');
+      btn.classList.add('apo-btn-danger');
+      clearArmed = setTimeout(function () {
+        clearArmed = null;
+        btn.textContent = 'Remove all';
+        btn.classList.remove('apo-btn-danger');
+        btn.classList.add('apo-btn-ghost');
+      }, 6000);
     });
   }
 
@@ -789,7 +833,7 @@
 
   document.addEventListener('click', function (e) {
     if (e.target.id === 'persist-btn') { requestPersist(); }
-    if (e.target.id === 'clear-btn') { clearAll(); }
+    if (e.target.id === 'clear-btn') { confirmClear(); }
     if (e.target.id === 'download-cache-btn') { saveSelectedReal(); }
     if (e.target.id === 'check-btn') { checkForUpdates(); }
     if (e.target.id === 'dl-pyz') { e.preventDefault(); exportPyzFile(); }
