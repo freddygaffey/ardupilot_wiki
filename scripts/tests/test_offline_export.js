@@ -3,12 +3,12 @@
  *
  *   node scripts/tests/test_offline_export.js [wiki...]
  *
- * frontend/js/offline-export.js builds the .pyz and the single-file .html from
- * Cache Storage. Every bug it has had so far - wrong CRCs, images resolved to
- * paths that match nothing, the same image written once per page, a root that
- * 404s - looked fine from the outside and only showed up when something opened
- * the result. So this runs the real exporter against a cache built from real
- * build output, and checks the bytes it produces.
+ * frontend/js/offline-export.js builds the single-file .html from Cache
+ * Storage. Every bug it has had so far - images resolved to paths that match
+ * nothing, the same image written once per page, a sidebar that nested each
+ * wiki inside the last - looked fine from the outside and only showed up when
+ * something opened the result. So this runs the real exporter against a cache
+ * built from real build output, and checks the bytes it produces.
  *
  * The browser APIs it needs are shimmed rather than mocked away: a real
  * CacheStorage-alike over the filesystem, and the exporter is given a sink so
@@ -274,30 +274,7 @@ async function main() {
           Object.keys(D.imgs || {}).length + ' image paths');
   }
 
-  console.log('\nrunnable .pyz');
-  const pyzPath = path.join(OUT, 'test.pyz');
-  const pyzRes = await api.exportPyz(wikis, 'test.pyz', null, fileSink(pyzPath));
-  check('entries written', pyzRes.files > 0, pyzRes.files + ' files');
-
-  const stat = fs.statSync(pyzPath);
-  check('archive non-empty', stat.size > 1000, (stat.size / 1048576).toFixed(1) + ' MB');
-  console.log('\nsizes: html ' + (fs.statSync(htmlPath).size / 1048576).toFixed(0) +
-              ' MB, pyz ' + (stat.size / 1048576).toFixed(0) + ' MB');
-
-  // The archive must answer at its root: opening it to a 404 makes a working
-  // file look broken, and that was a real bug. Checked by inspecting the
-  // embedded server rather than executing it, so the test cannot hang.
-  // __main__.py is stored first, so only the head needs inspecting - and the
-  // whole archive is far too large to hold as a string.
-  const head = Buffer.alloc(64 * 1024);
-  const zfd = fs.openSync(pyzPath, 'r');
-  fs.readSync(zfd, head, 0, head.length, 0);
-  fs.closeSync(zfd);
-  const headText = head.toString('latin1');
-  check('root page generator embedded', headText.includes('def _root_page'));
-  check('shared-image alias embedded', headText.includes('_candidates'));
-
-  console.log('\nwrote ' + OUT + '/test.html and ' + OUT + '/test.pyz');
+  console.log('\nwrote ' + OUT + '/test.html');
   console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n' : '\nall checks passed\n');
   process.exit(failures ? 1 : 0);
 }

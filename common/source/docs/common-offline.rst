@@ -23,7 +23,7 @@ window, and makes your browser far less likely to delete what you have saved.
 
           styling    /css/offline.css
           behaviour  /js/offline-page.js    (the panel)
-                     /js/offline-export.js  (building .pyz and .html files)
+                     /js/offline-export.js  (building the .html file)
 
         Self-contained - every tag opened here is closed here. A <div> opened in
         one raw block and closed in another lands inside different section
@@ -83,17 +83,10 @@ window, and makes your browser far less likely to delete what you have saved.
          shared images included.</p>
 
        <div class="apo-file">
-         <button id="dl-pyz" class="apo-btn apo-btn-outline">Save as .pyz</button>
-         <div class="apo-hint">One file that serves itself:
-           <code>python3 &lt;file&gt;.pyz</code> opens the wiki in your browser. Pages
-           load instantly, search works, and nothing is extracted to disk.</div>
-       </div>
-
-       <div class="apo-file">
          <button id="dl-single" class="apo-btn apo-btn-outline">Save as .html</button>
          <div class="apo-hint">A single self-contained page. Double-click it, nothing
-           to install. It works from a USB stick, though it is large and takes
-           a moment to open.</div>
+           to install. Search works across the full text of every page. It runs
+           from a USB stick, though it is large and takes a moment to open.</div>
        </div>
      </div>
 
