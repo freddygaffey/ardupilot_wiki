@@ -151,8 +151,9 @@
         : '<div class="apo-note apo-note-warn">&#9888; Storage is ' +
           '<strong>temporary</strong>. Your browser can delete these saved pages ' +
           'without warning if this device runs low on space. Installing the wiki ' +
-          'as an app makes that less likely. See ' +
-          '<a href="#install-as-an-app">Install as an app</a> below.</div>';
+          'as an app makes that less likely. ' +
+          '<a href="#install-as-an-app" data-ap-install>Install it now</a>, ' +
+          'or read what that means below.</div>';
 
       // Nothing cached means nothing to remove, so the button should not invite
       // a press. Disarm it too, in case it was armed when the last of it went.
@@ -881,6 +882,14 @@
         'This browser does not support offline storage.';
       return;
     }
+
+    // Draw straight away from the built-in list. Waiting for the manifest left
+    // an empty table on screen for as long as the request took, so the panel
+    // arrived visibly later than the page around it. The numbers are corrected
+    // a moment later when the manifest lands; the shape of the thing does not
+    // have to wait for them.
+    renderStorage();
+    renderWikis();
 
     // The build writes offline-manifest.json alongside the archives. Sizes and
     // page counts change every time the wiki does, so they must come from the

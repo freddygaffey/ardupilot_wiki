@@ -269,28 +269,36 @@
 }
 .apo .apo-status { color: var(--muted); }
 
-/* Muted fill with the colour carried by a left accent rule, so a note reads
-   as a band in the panel rather than a block dropped on it. */
-.apo .apo-note {
+/* Notes sit above the panel as their own block, so they need the panel's
+   framing and a gap beneath rather than a shared bottom edge with it. The
+   colour is carried by a left accent rule and the fill stays muted. */
+#storage-warning:not(:empty) {
+  margin: 20px 0 14px;
+}
+.apo-note {
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue",
+               Arial, sans-serif;
   padding: 11px 14px 11px 12px;
   font-size: .9rem;
-  border-bottom: 1px solid var(--line);
+  border: 1px solid #dee2e6;
   border-left: 3px solid transparent;
+  border-radius: 6px;
   margin: 0;
   line-height: 1.5;
 }
-.apo .apo-note a { color: inherit; text-decoration: underline; }
-.apo .apo-note-warn {
+.rst-content #storage-warning .apo-note { margin: 0; }
+.apo-note a { color: inherit; text-decoration: underline; }
+.apo-note-warn {
   background: #fdf8ec;
-  border-left-color: var(--warning);
+  border-left-color: #ffc107;
   color: #6b5518;
 }
-.apo .apo-note-ok {
+.apo-note-ok {
   background: #f0f7f3;
-  border-left-color: var(--success);
+  border-left-color: #198754;
   color: #1a5440;
 }
-.apo .apo-note-info {
+.apo-note-info {
   background: #eff8fb;
   border-left-color: #0dcaf0;
   color: #14606f;

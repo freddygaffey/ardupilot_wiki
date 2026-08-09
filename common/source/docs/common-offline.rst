@@ -31,12 +31,15 @@ window, and makes your browser less likely to delete what you have saved.
         the content column.
 
         Follows ArduPilot's other tool front-end, custom.ardupilot.org: dark
-        header strip, status badges, progress bars. -->
-   <link rel="stylesheet" href="/css/offline.css">
+        header strip, status badges, progress bars.
+
+        The stylesheet is loaded from common/_templates/layout.html so it lands
+        in <head>. A <link> here is not reached until the parser is well into
+        the body, which paints this panel unstyled first. -->
+
+   <div id="storage-warning"></div>
 
    <div class="apo">
-
-     <div id="storage-warning"></div>
 
      <div class="apo-head">
        <p class="apo-title">Offline storage</p>
@@ -51,7 +54,7 @@ window, and makes your browser less likely to delete what you have saved.
          <tr>
            <th class="apo-name"><span class="apo-pick"><input type="checkbox"
                  id="select-all" title="Select every wiki"
-                 aria-label="Select every wiki"><span>Wiki</span></span></th>
+                 aria-label="Select every wiki" /><span>Wiki</span></span></th>
            <th class="apo-num">Size</th>
            <th class="apo-num apo-pages-h">Pages</th>
            <th class="apo-num">Progress</th>
@@ -62,12 +65,12 @@ window, and makes your browser less likely to delete what you have saved.
      </table>
 
      <div class="apo-foot">
-       <label><input type="checkbox" id="autoupdate" checked>
+       <label><input type="checkbox" id="autoupdate" checked="checked" />
          <span>Update saved pages automatically</span></label>
        <div class="apo-status apo-foot-status">
          <span id="selection-total"></span>
-         <span id="cache-progress" hidden></span>
-         <span id="check-result" hidden></span>
+         <span id="cache-progress" hidden="hidden"></span>
+         <span id="check-result" hidden="hidden"></span>
        </div>
        <div class="apo-status apo-foot-status">
          <span id="storage-status"></span>
@@ -105,11 +108,11 @@ Install as an app
 .. raw:: html
 
    <div class="apo-install-row">
-     <button id="ap-install-app" class="apo-btn apo-btn-outline" hidden>Install app</button>
+     <button id="ap-install-app" class="apo-btn apo-btn-outline" hidden="hidden">Install app</button>
      <span id="install-state" class="apo-hint"></span>
    </div>
 
-   <script src="/js/offline-export.js" defer></script>
-   <script src="/js/offline-page.js" defer></script>
+   <script src="/js/offline-export.js" defer="defer"></script>
+   <script src="/js/offline-page.js" defer="defer"></script>
 
 [copywiki destination="copter,plane,rover,sub,blimp,antennatracker,dev,planner,planner2,ardupilot,mavproxy"]
