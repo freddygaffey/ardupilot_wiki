@@ -63,6 +63,42 @@ function makeCaches() {
   };
 }
 
+/**
+ * A real gzipped tar, so the download path runs to completion rather than
+ * stopping at the fetch. Without this the completion marker is never written
+ * and the freshness contract - download, record the build, compare it on the
+ * next check - cannot be tested at all.
+ */
+function tarGz(files) {
+  const zlib = require('zlib');
+  const blocks = [];
+  for (const [name, body] of Object.entries(files)) {
+    const data = Buffer.from(body);
+    const head = Buffer.alloc(512);
+    head.write(name, 0, 100);
+    head.write('000644 \0', 100, 8);
+    head.write('000000 \0', 108, 8);
+    head.write('000000 \0', 116, 8);
+    head.write(data.length.toString(8).padStart(11, '0') + '\0', 124, 12);
+    head.write('00000000000\0', 136, 12);
+    head.write('        ', 148, 8);            // checksum field, spaces first
+    head.write('0', 156, 1);                   // regular file
+    let sum = 0;
+    for (const b of head) { sum += b; }
+    head.write(sum.toString(8).padStart(6, '0') + '\0 ', 148, 8);
+    blocks.push(head, data,
+                Buffer.alloc((512 - (data.length % 512)) % 512));
+  }
+  blocks.push(Buffer.alloc(1024));             // end of archive
+  return zlib.gzipSync(Buffer.concat(blocks));
+}
+
+function streamOf(buf) {
+  return new ReadableStream({
+    start(c) { c.enqueue(new Uint8Array(buf)); c.close(); }
+  });
+}
+
 /* -------------------------------------------------------- page under test - */
 
 /**
@@ -80,7 +116,7 @@ function panelMarkup() {
 }
 
 function load({ manifest = null, caches = makeCaches(), persisted = false,
-                usage = 0, quota = 10e9 } = {}) {
+                usage = 0, quota = 10e9, archives = null } = {}) {
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => { console.log('    [page error] ' + e.message);
                                if (e.stack) console.log('    ' + e.stack.split('\n')[1]); });
@@ -91,6 +127,7 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
   // jsdom has no matchMedia and init() calls it to detect standalone mode.
   if (!w.matchMedia) { w.matchMedia = () => ({ matches: false, addListener(){}, removeListener(){} }); }
   const fetchCalls = [];
+  const fetchOpts = [];
   const sandbox = {
     window: w, document: w.document, navigator: {
       storage: {
@@ -105,17 +142,19 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
     Response: FakeResponse,
     Request: class { constructor(u) { this.url = u; } },
     AbortController: w.AbortController,
-    TransformStream: class {},
-    DecompressionStream: class {},
+    TransformStream, DecompressionStream, ReadableStream, Uint8Array,
     fetch: (u, o) => {
       fetchCalls.push(String(u));
+      fetchOpts.push({ url: String(u), opts: o || {} });
       if (String(u).indexOf('offline-manifest.json') !== -1) {
         return Promise.resolve(manifest
           ? { ok: true, json: () => Promise.resolve(manifest) }
           : { ok: false, json: () => Promise.reject(new Error('no manifest')) });
       }
-      // Archive fetches: record them and fail, so the download path runs far
-      // enough to be observed without needing a real tar stream.
+      if (archives) {
+        // A real archive, so the unpack runs and the marker gets written.
+        return Promise.resolve({ ok: true, body: streamOf(tarGz(archives)) });
+      }
       return Promise.reject(new Error('archive fetch blocked by harness'));
     }
   };
@@ -125,7 +164,7 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
   sandbox.window.fetch = sandbox.fetch;
   vm.createContext(sandbox);
   vm.runInContext(fs.readFileSync(PAGE, 'utf8'), sandbox);
-  return { dom, w, doc: w.document, sandbox, fetchCalls };
+  return { dom, w, doc: w.document, sandbox, fetchCalls, fetchOpts };
 }
 
 const settle = () => new Promise(r => setTimeout(r, 60));
@@ -375,6 +414,136 @@ async function main() {
     check('and it is not reported as up to date',
           !($(doc, 'check-result').textContent || '').toLowerCase().includes('up to date'),
           JSON.stringify($(doc, 'check-result').textContent));
+  }
+
+  console.log('\nfreshness: the manifest');
+  {
+    const { fetchOpts } = load({ manifest: MANIFEST });
+    await settle();
+    const m = fetchOpts.filter(f => f.url.indexOf('offline-manifest.json') !== -1);
+    check('the manifest is requested', m.length > 0);
+    // Everything downstream is derived from the manifest, so a cached manifest
+    // means a frozen build id, a frozen tag, and archives that never refresh.
+    check('the manifest is never served from cache',
+          m.every(f => f.opts && f.opts.cache === 'no-cache'),
+          JSON.stringify(m.map(f => f.opts && f.opts.cache)));
+  }
+
+  console.log('\nfreshness: the archive tag');
+  {
+    const caches = makeCaches();
+    const { doc, fetchCalls } = load({ manifest: MANIFEST, caches,
+                                       archives: { 'x/index.html': '<html>' } });
+    await settle();
+    $(doc, 'select-all').click();
+    await settle();
+    $(doc, 'download-cache-btn').click();
+    for (let i = 0; i < 12; i++) { await settle(); }
+    const arch = fetchCalls.filter(u => u.indexOf('.tar.gz') !== -1);
+    check('every archive in the queue is tagged, not just the first',
+          arch.length > 1 && arch.every(u => u.indexOf('?v=') !== -1),
+          arch.length + ' archives');
+    check('the tag is exactly the manifest build id',
+          arch.every(u => u.endsWith('?v=' + encodeURIComponent(MANIFEST.generated))),
+          JSON.stringify(arch[0]));
+    check('common and the wikis are all fetched',
+          arch.some(u => u.indexOf('common-') !== -1) &&
+          arch.some(u => u.indexOf('copter-') !== -1), JSON.stringify(arch));
+  }
+
+  console.log('\nfreshness: a new build changes the tag');
+  {
+    const older = JSON.parse(JSON.stringify(MANIFEST));
+    older.generated = '2020-01-01T00:00:00Z';
+    const a = load({ manifest: older, archives: { 'x/index.html': '<html>' } });
+    await settle();
+    $(a.doc, 'select-all').click(); await settle();
+    $(a.doc, 'download-cache-btn').click();
+    for (let i = 0; i < 12; i++) { await settle(); }
+    const oldTags = a.fetchCalls.filter(u => u.indexOf('.tar.gz') !== -1);
+
+    const b = load({ manifest: MANIFEST, archives: { 'x/index.html': '<html>' } });
+    await settle();
+    $(b.doc, 'select-all').click(); await settle();
+    $(b.doc, 'download-cache-btn').click();
+    for (let i = 0; i < 12; i++) { await settle(); }
+    const newTags = b.fetchCalls.filter(u => u.indexOf('.tar.gz') !== -1);
+
+    check('a different build produces a different URL',
+          oldTags.length && newTags.length && oldTags[0] !== newTags[0],
+          JSON.stringify([oldTags[0], newTags[0]]));
+    check('the old build tag is not reused',
+          !newTags.some(u => u.indexOf('2020-01-01') !== -1));
+  }
+
+  console.log('\nfreshness: no build id means no bogus tag');
+  {
+    const noBuild = JSON.parse(JSON.stringify(MANIFEST));
+    delete noBuild.generated;
+    const { doc, fetchCalls } = load({ manifest: noBuild,
+                                       archives: { 'x/index.html': '<html>' } });
+    await settle();
+    doc.querySelector('.wiki-check[value="copter"]').click();
+    await settle();
+    $(doc, 'download-cache-btn').click();
+    for (let i = 0; i < 12; i++) { await settle(); }
+    const arch = fetchCalls.filter(u => u.indexOf('.tar.gz') !== -1);
+    check('no build id means an untagged URL, never ?v=undefined',
+          arch.length && arch.every(u => u.indexOf('undefined') === -1 &&
+                                          u.indexOf('?v=') === -1),
+          JSON.stringify(arch[0]));
+  }
+
+  console.log('\nfreshness: the whole round trip');
+  {
+    const caches = makeCaches();
+    const first = load({ manifest: MANIFEST, caches,
+                         archives: { 'copter/index.html': '<html>ok' } });
+    await settle();
+    first.doc.querySelector('.wiki-check[value="copter"]').click();
+    await settle();
+    $(first.doc, 'download-cache-btn').click();
+    for (let i = 0; i < 15; i++) { await settle(); }
+
+    const c = await caches.open('ardupilot-offline-copter');
+    const marker = await c.match('/__ap_complete__');
+    check('a completed download writes a marker', !!marker);
+    const info = marker ? JSON.parse(await marker.text()) : {};
+    check('the marker records the build that was downloaded',
+          info.build === MANIFEST.generated, JSON.stringify(info.build));
+    check('the archive contents were unpacked into the cache',
+          !!(await c.match('/copter/index.html')));
+
+    // Same build again: nothing to do.
+    const same = load({ manifest: MANIFEST, caches,
+                        archives: { 'copter/index.html': '<html>ok' } });
+    await settle();
+    $(same.doc, 'check-btn').click();
+    for (let i = 0; i < 8; i++) { await settle(); }
+    check('checking against the same build reports up to date',
+          ($(same.doc, 'check-result').textContent || '').toLowerCase().includes('up to date'),
+          JSON.stringify($(same.doc, 'check-result').textContent));
+    check('and downloads nothing',
+          !same.fetchCalls.some(u => u.indexOf('.tar.gz') !== -1));
+
+    // A newer build: the wiki is stale and must be re-fetched with the new tag.
+    const newer = JSON.parse(JSON.stringify(MANIFEST));
+    newer.generated = '2027-01-01T00:00:00Z';
+    const next = load({ manifest: newer, caches,
+                        archives: { 'copter/index.html': '<html>new' } });
+    await settle();
+    $(next.doc, 'check-btn').click();
+    for (let i = 0; i < 15; i++) { await settle(); }
+    const arch = next.fetchCalls.filter(u => u.indexOf('.tar.gz') !== -1);
+    check('a newer build makes the stored copy stale',
+          arch.length > 0, JSON.stringify(arch));
+    check('the refetch carries the new build tag, not the stored one',
+          arch.every(u => u.indexOf(encodeURIComponent('2027-01-01T00:00:00Z')) !== -1),
+          JSON.stringify(arch[0]));
+    const after = await (await caches.open('ardupilot-offline-copter')).match('/__ap_complete__');
+    const info2 = after ? JSON.parse(await after.text()) : {};
+    check('and the marker is updated to the new build',
+          info2.build === '2027-01-01T00:00:00Z', JSON.stringify(info2.build));
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
