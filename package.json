@@ -1,0 +1,15 @@
+{
+  "name": "ardupilot-wiki-offline-tests",
+  "private": true,
+  "description": "Test-only manifest for the offline reading feature. The wiki itself is built by update.py and needs none of this.",
+  "scripts": {
+    "test": "node scripts/tests/test_offline_page.js && node scripts/tests/test_offline_export.js rover",
+    "test:panel": "node scripts/tests/test_offline_page.js",
+    "test:export": "node scripts/tests/test_offline_export.js",
+    "test:export:multi": "node scripts/tests/test_offline_export.js ardupilot planner2 antennatracker",
+    "test:export:full": "node --max-old-space-size=8192 scripts/tests/test_offline_export.js --full"
+  },
+  "devDependencies": {
+    "jsdom": "^29.0.0"
+  }
+}
