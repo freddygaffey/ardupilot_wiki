@@ -50,7 +50,9 @@ window, and makes your browser far less likely to delete what you have saved.
      <table class="apo-table">
        <thead>
          <tr>
-           <th>Wiki</th>
+           <th class="apo-name"><span class="apo-pick"><input type="checkbox"
+                 id="select-all" title="Select every wiki"
+                 aria-label="Select every wiki"><span>Wiki</span></span></th>
            <th class="apo-num">Size</th>
            <th class="apo-num apo-pages-h">Pages</th>
            <th class="apo-num">Progress</th>
