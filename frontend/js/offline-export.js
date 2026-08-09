@@ -435,7 +435,7 @@
     '#ap-pick{list-style:none;margin:1em 0 0;padding:0}' +
     '#ap-pick li{border-bottom:1px solid #e1e4e5}' +
     '#ap-pick a{display:flex;align-items:baseline;justify-content:space-between;' +
-    'gap:1em;padding:12px 2px;text-decoration:none;text-transform:capitalize}' +
+    'gap:1em;padding:12px 2px;text-decoration:none}' +
     '#ap-pick small{color:#666;text-transform:none;font-size:.85em}' +
     '.ap-actions{display:flex;flex-wrap:wrap;gap:0 1.5em}';
 
@@ -478,7 +478,7 @@
     'function showPicker(){',
     'miss.style.display="none";',
     'var rows=D.homes.map(function(h){',
-    'return \'<li><a href="#\'+h.path+\'"><span>\'+h.id+\'</span>\'',
+    'return \'<li><a href="#\'+h.path+\'"><span>\'+(h.name||h.id)+\'</span>\'',
     '+\'<small>\'+h.pages+\' pages</small></a></li>\';}).join("");',
     'doc.innerHTML="<h1>Offline copy</h1><p>This file contains "+D.homes.length',
     '+" wikis. Choose one to start reading.</p><ul id=\\"ap-pick\\">"+rows+"</ul>";',
@@ -492,7 +492,7 @@
     // have been looking at when it appeared.
     'function showMissing(raw){',
     'miss.style.display="none";',
-    'var held=D.homes.map(function(h){return h.id;}).join(", ");',
+    'var held=D.homes.map(function(h){return h.name||h.id;}).join(", ");',
     'var live="https://ardupilot.org"+(raw==="/"?"":raw+".html");',
     'doc.innerHTML="<h1>Not in this offline copy</h1>"',
     '+"<p><code>"+raw+"</code> is not included in this download.</p>"',
@@ -527,8 +527,9 @@
 'if(b)im.src=b.textContent;});',
     'var sc=document.querySelector(".wy-nav-content-wrap");if(sc)sc.scrollTop=0;',
     // The page's own <h1> follows, so name the wiki rather than repeat it.
-    'crumb.textContent=(D.pages[i].p.split("/")[1]||"")',
-    '.replace(/^./,function(c){return c.toUpperCase();});',
+    'var wid=D.pages[i].p.split("/")[1]||"";',
+    'var wh=null;D.homes.forEach(function(h){if(h.id===wid)wh=h;});',
+    'crumb.textContent=wh?wh.name:wid.replace(/^./,function(c){return c.toUpperCase();});',
     'document.title=D.pages[i].t+" - ArduPilot (offline)";',
     'links.forEach(function(a){',
     'var on=a.getAttribute("href")==="#"+path;',
@@ -690,6 +691,15 @@
   // follows alphabetically.
   var HOME_ORDER = ['ardupilot', 'copter', 'plane', 'rover'];
 
+  // Directory names are not product names. Kept in step with DISPLAY_NAMES in
+  // scripts/build_offline_artifacts.py.
+  var DISPLAY_NAMES = {
+    ardupilot: 'About ArduPilot', copter: 'Copter', plane: 'Plane',
+    rover: 'Rover', sub: 'Sub', blimp: 'Blimp', dev: 'Developer',
+    antennatracker: 'Antenna Tracker', planner: 'Mission Planner',
+    planner2: 'APM Planner 2', mavproxy: 'MAVProxy'
+  };
+
   /** Front page and page count for each wiki in the export, in listing order. */
   function wikiHomes(index, wikis) {
     var homes = wikis.map(function (w) {
@@ -701,7 +711,8 @@
         if (!first) { first = p.p; }
         if (p.p === prefix + 'index') { root = p.p; }
       });
-      return { id: w, path: root || first, pages: count };
+      return { id: w, name: DISPLAY_NAMES[w] || w, path: root || first,
+               pages: count };
     }).filter(function (h) { return h.path; });
 
     return homes.sort(function (a, b) {
