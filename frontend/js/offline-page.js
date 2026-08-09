@@ -16,7 +16,7 @@
   // Bumped when this file changes in a way worth telling apart at runtime.
   // window.ArduPilotOfflineVersion answers "is the page running the code I just
   // deployed?" without inferring it from behaviour.
-  var VERSION = 'select-all-1';
+  var VERSION = 'save-skips-stored-1';
   global.ArduPilotOfflineVersion = VERSION;
 
 
@@ -140,14 +140,15 @@
       parts.push('storage ' + (persisted ? 'permanent' : 'temporary'));
       el('storage-status').textContent = parts.join(' · ');
 
+      // No button: browsers routinely decline a bare persist() request, so it
+      // appeared to do nothing. Installing is the signal they do act on.
       el('storage-warning').innerHTML = persisted
         ? ''
         : '<div class="apo-note apo-note-warn">&#9888; Storage is ' +
           '<strong>temporary</strong>. Your browser can delete these saved pages ' +
-          'without warning if this device runs low on space. Do not rely on this ' +
-          'copy in the field until you make it permanent.</div>';
-
-      el('persist-btn').hidden = persisted || !(navigator.storage && navigator.storage.persist);
+          'without warning if this device runs low on space. Installing the wiki ' +
+          'as an app makes that far less likely. See ' +
+          '<a href="#install-as-an-app">Install as an app</a> below.</div>';
 
       // Nothing cached means nothing to remove, so the button should not invite
       // a press. Disarm it too, in case it was armed when the last of it went.
@@ -161,6 +162,7 @@
       }
 
       updateExportState();
+      updateSaveState();
       updateTotal();
     });
   }
@@ -199,7 +201,7 @@
                  '<td class="apo-name"><label class="apo-pick">' + box +
                    '<span>' + w.name + '</span></label></td>' +
                  '<td class="apo-num">' + w.mb + ' MB</td>' +
-                 '<td class="apo-num apo-pages">' + (w.pages || '&mdash;') + '</td>' +
+                 '<td class="apo-num apo-pages">' + (w.pages || '') + '</td>' +
                  // Rendered from state, not painted on afterwards: renderWikis
                  // rebuilds this tbody when a download finishes, which used to
                  // wipe the bar the moment it reached 100%.
@@ -221,6 +223,7 @@
 
       syncSelectAll();
       updateExportState();
+      updateSaveState();
       updateTotal();
     });
   }
@@ -266,15 +269,9 @@
     return Array.prototype.slice.call(document.querySelectorAll('.wiki-check'));
   }
 
-  /*
-   * The header box reports the rows rather than holding its own state: ticked
-   * when every wiki is, indeterminate when only some are, clear when none are.
-   * Anything that changes the selection - a row click, an update check
-   * re-selecting the stale wikis, a re-render after a download - calls this, so
-   * it cannot drift out of step with what is actually ticked.
-   *
-   * Common is not counted. Its box is required and disabled, so it is never
-   * something this can select or clear.
+  /**
+   * Mirror the rows: ticked when every wiki is, indeterminate when only some
+   * are. Common is excluded, its box being required and disabled.
    */
   function syncSelectAll() {
     var box = el('select-all');
@@ -291,6 +288,7 @@
     syncSelectAll();
     updateTotal();
     updateExportState();
+    updateSaveState();
   }
 
   function updateTotal() {
@@ -298,33 +296,22 @@
     var total = el('selection-total');
     if (!total) { return; }
 
+    // Kept short: this sits in a right-aligned column barely wider than the
+    // checkbox beside it, and a sentence long enough to wrap reads badly there.
     if (!b.total) {
-      total.textContent = 'Nothing selected.';
+      total.textContent = 'Nothing selected';
     } else if (!b.toDownload) {
-      total.innerHTML = '<strong>' + fmt(b.total) + '</strong> selected &mdash; ' +
-                        'all of it is already saved on this device.';
+      total.innerHTML = '<strong>' + fmt(b.total) + '</strong> selected, ' +
+                        'all already saved';
     } else {
       total.innerHTML = '<strong>' + fmt(b.toDownload) + '</strong> to download' +
                         (b.toDownload === b.total ? '' :
-                          ' &middot; ' + fmt(b.total - b.toDownload) +
-                          ' of the ' + fmt(b.total) + ' selected is already saved') +
-                        '.';
+                          ' &middot; ' + fmt(b.total - b.toDownload) + ' of ' +
+                          fmt(b.total) + ' already saved');
     }
   }
 
   /* ---------- actions ---------- */
-
-  function requestPersist() {
-    return navigator.storage.persist().then(function (granted) {
-      if (!granted) {
-        el('storage-warning').innerHTML +=
-          '<div class="warn">Your browser declined the request. Installing this ' +
-          'site as an app is the strongest signal it uses when deciding, so ' +
-          'installing may allow it.</div>';
-      }
-      return renderStorage();
-    });
-  }
 
   /**
    * Removing is destructive and slow to undo - it discards hundreds of
@@ -483,8 +470,7 @@
           if (!haveBody) { return; }
           var body = take(padded).slice(0, size);
           // '0' and NUL are regular files; skip directories and metadata.
-          // The NUL is written as an escape on purpose: as a raw byte it made
-          // the whole file read as binary to grep and file(1).
+          // Escaped, not a raw byte, or the file reads as binary to grep.
           if (type !== '0' && type !== '\0') { return step(); }
           var path = prefix + name;
           return cache.put(
@@ -543,20 +529,37 @@
     if (activeDownload) { activeDownload.abort(); }
   }
 
-  function saveSelectedReal() {
+  /**
+   * Download what is selected and not already held.
+   *
+   * `refreshIds` re-fetches something already stored; only the update check
+   * passes it. Without that filter a second press re-fetched every selected
+   * wiki, several hundred megabytes, to end up where it started.
+   */
+  function saveSelectedReal(refreshIds) {
     // A several-hundred-megabyte download has to be stoppable. The same button
     // becomes Cancel rather than adding a second one that is dead most of the
     // time.
     if (activeDownload) { return cancelDownload(); }
 
+    var refresh = refreshIds || [];
     var chosen = selected().map(function (c) { return c.value; });
     var queue = [COMMON].concat(WIKIS.filter(function (w) {
       return chosen.indexOf(w.id) !== -1;
-    }));
-    // Only what actually has to come down counts against the space check.
+    })).filter(function (w) {
+      return !storedIds[w.id] || refresh.indexOf(w.id) !== -1;
+    });
+
+    if (!queue.length) {
+      el('cache-progress').hidden = false;
+      el('cache-progress').textContent =
+        'Everything selected is already saved. Use Check for updates to refresh it.';
+      return Promise.resolve();
+    }
+
     var totalBytes = queue.reduce(function (a, w) {
-      return a + (storedIds[w.id] ? 0 : w.mb * 1048576);
-    }, 0) || queue.reduce(function (a, w) { return a + w.mb * 1048576; }, 0);
+      return a + (w.mb || 0) * 1048576;
+    }, 0);
 
     var progress = el('cache-progress');
     var button = el('download-cache-btn');
@@ -613,9 +616,9 @@
       .then(function () { report('Saved'); })
       .catch(function (err) {
         if (err && err.name === 'AbortError') {
-          report('Cancelled — anything already saved is kept.');
+          report('Cancelled. Anything already saved is kept.');
         } else if (err && err.name === 'QuotaExceededError') {
-          report('Ran out of space — your existing copy is untouched.');
+          report('Ran out of space. Your existing copy is untouched.');
         } else {
           report((err && err.message) || 'Download failed');
         }
@@ -689,7 +692,9 @@
         syncSelectAll();
         updateTotal();
         updateExportState();
-        return saveSelectedReal();
+        updateSaveState();
+        // The one caller allowed to re-fetch what is already stored.
+        return saveSelectedReal(stale);
       })
       .catch(function (err) {
         out.textContent = (err && err.message) || 'Check failed';
@@ -708,6 +713,21 @@
    * saved is downloaded first, then the file is built. Requiring two separate
    * presses to get one file was needless ceremony.
    */
+  /** Save is offered only when it has something to fetch. */
+  function updateSaveState() {
+    var button = el('download-cache-btn');
+    if (!button || activeDownload) { return; }
+    var b = selectionBytes();
+    // Common alone is images with no pages to view them in.
+    var anyWiki = selected().length > 0;
+    button.disabled = !anyWiki || !b.toDownload;
+    button.title = !anyWiki
+      ? 'Select a wiki first'
+      : (b.toDownload
+          ? 'Downloads ' + fmt(b.toDownload)
+          : 'Everything selected is already saved. Check for updates refreshes it.');
+  }
+
   function updateExportState() {
     var chosen = selected().length;
     ['dl-pyz', 'dl-single'].forEach(function (id) {
@@ -815,10 +835,10 @@
     if (e.target.classList.contains('wiki-check')) {
       syncSelectAll();
       updateTotal();
-      // The export buttons are enabled by the selection, so they have to be
-      // re-evaluated here. Leaving it to the next render meant clearing the
-      // last tick left them offering to build an empty file.
+      // Clearing the last tick otherwise left the export buttons enabled
+      // until the next render.
       updateExportState();
+      updateSaveState();
     }
     if (e.target.id === 'select-all') { toggleAll(e.target.checked); }
     if (e.target.id === 'autoupdate') {
@@ -829,7 +849,6 @@
   });
 
   document.addEventListener('click', function (e) {
-    if (e.target.id === 'persist-btn') { requestPersist(); }
     if (e.target.id === 'clear-btn') { confirmClear(); }
     if (e.target.id === 'download-cache-btn') { saveSelectedReal(); }
     if (e.target.id === 'check-btn') { checkForUpdates(); }

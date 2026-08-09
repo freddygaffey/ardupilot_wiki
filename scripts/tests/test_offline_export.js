@@ -24,11 +24,9 @@ const ARGS = process.argv.slice(2);
 const FULL = ARGS.includes('--full');
 // --full loads every wiki with no page cap, to measure a real export rather
 // than a sample. Slow and memory-hungry; the default stays small.
-// More than one wiki is not just a bigger sample: the sidebar, the page index
-// and the image index are all shared across wikis, and a run against a single
-// wiki exercises none of that. Every multi-wiki bug so far was invisible to
-// the one-wiki run and only showed up under --full, which is too slow to be
-// the thing that catches them. Two small wikis take seconds.
+
+// The sidebar, page index and image index are shared across wikis, so a
+// single-wiki run exercises none of them. Two small wikis take seconds.
 const WIKIS_ARG = ARGS.filter((a) => !a.startsWith('--'));
 const WIKI = WIKIS_ARG[0] || 'rover';
 const ALL_WIKIS = ['copter', 'plane', 'rover', 'sub', 'blimp', 'dev',
@@ -183,10 +181,8 @@ function scanFile(file, patterns, literals) {
 }
 
 /**
- * The JSON the shell routes from, read back out of the finished file.
- *
- * It is written last, so the tail holds it however large the export is - and
- * the export itself is far too large to read into a string.
+ * The JSON the shell routes from, read back out of the finished file. It is
+ * written last, so the tail holds it however large the export is.
  */
 function readIndexPayload(file) {
   const size = fs.statSync(file).size;
@@ -255,10 +251,8 @@ async function main() {
   check('no unresolved relative image srcs', scan.counts[4] === 0,
         scan.counts[4] + ' left');
 
-  // Everything below is about the file holding more than one wiki. The sidebar
-  // is one element built from every wiki's toctree, so a fragment that does not
-  // close its own tags nests the next wiki inside the last one; that is what
-  // made a ten-wiki export look like a one-wiki export.
+  // The sidebar is one element built from every wiki's toctree, so a fragment
+  // that does not close its own tags nests each wiki inside the last.
   const D = readIndexPayload(htmlPath);
   check('routing index readable', D !== null && Array.isArray(D.pages));
   if (D) {

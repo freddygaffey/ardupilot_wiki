@@ -155,11 +155,8 @@
   font-weight: 400;
   cursor: pointer;
 }
-/*
- * Select-all, in the header of the column it controls so it lines up with the
- * boxes below it. Deliberately not a <label>: clicking a column title should
- * not queue several hundred megabytes, so only the box itself is a target.
- */
+/* Not a <label>: clicking a column title should not select every wiki, so
+   only the box itself is a target. */
 .apo table.apo-table thead th .apo-pick,
 .rst-content .apo table.apo-table thead th .apo-pick {
   display: inline-flex;
@@ -235,20 +232,32 @@
 .apo .apo-foot {
   display: grid;
   grid-template-columns: auto 1fr;
-  align-items: center;
-  gap: 4px 16px;
-  padding: 12px 14px;
+  align-items: baseline;
+  gap: 3px 16px;
+  padding: 10px 14px;
   background: var(--hover);
   border-top: 1px solid var(--line);
   font-size: .9rem;
-  min-height: 62px;
+  min-height: 58px;
 }
+/* Each status is a flex row of its own parts, so a wrap breaks between them
+   rather than mid-phrase, and adjacent spans cannot run into each other. */
 .apo .apo-foot-status {
   grid-column: 2;
   justify-self: end;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: baseline;
+  gap: 0 10px;
   text-align: right;
   /* Reserved so text of differing lengths cannot shift the row. */
-  min-height: 1.4em;
+  min-height: 1.35em;
+}
+/* The device line is reference detail, not the answer to "what will this do". */
+.apo .apo-foot-status + .apo-foot-status {
+  font-size: .8rem;
+  color: var(--muted);
 }
 .apo .apo-foot label {
   display: inline-flex;
@@ -260,15 +269,32 @@
 }
 .apo .apo-status { color: var(--muted); }
 
+/* Muted fill with the colour carried by a left accent rule, so a note reads
+   as a band in the panel rather than a block dropped on it. */
 .apo .apo-note {
-  padding: 12px 14px;
+  padding: 11px 14px 11px 12px;
   font-size: .9rem;
   border-bottom: 1px solid var(--line);
+  border-left: 3px solid transparent;
   margin: 0;
+  line-height: 1.5;
 }
-.apo .apo-note-warn { background: #fff3cd; color: #664d03; }
-.apo .apo-note-ok { background: #d1e7dd; color: #0f5132; }
-.apo .apo-note-info { background: #cff4fc; color: #055160; }
+.apo .apo-note a { color: inherit; text-decoration: underline; }
+.apo .apo-note-warn {
+  background: #fdf8ec;
+  border-left-color: var(--warning);
+  color: #6b5518;
+}
+.apo .apo-note-ok {
+  background: #f0f7f3;
+  border-left-color: var(--success);
+  color: #1a5440;
+}
+.apo .apo-note-info {
+  background: #eff8fb;
+  border-left-color: #0dcaf0;
+  color: #14606f;
+}
 
 .apo .apo-files { padding: 14px; border-top: 1px solid var(--line); }
 .apo .apo-files h3 {

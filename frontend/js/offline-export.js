@@ -447,7 +447,7 @@
     'var byPath={};D.pages.forEach(function(p,i){byPath[p.p]=i;});',
     'nav.innerHTML=D.nav;',
     'var links=[].slice.call(nav.querySelectorAll("a[href^=\\"#\\"]"));',
-    'function current(){return (location.hash||"").replace(/^#/,"")||D.pages[0].p;}',
+    'function current(){return (location.hash||"").replace(/^#/,"")||D.home||D.pages[0].p;}',
     // Accept the shorthand people actually type. #/rover should land on the
     // Rover wiki, not on a "page not found" - as should a trailing slash, a
     // leftover .html, or a missing leading slash.
@@ -481,10 +481,7 @@
 'var b=document.getElementById("i"+im.getAttribute("data-ap-img"));',
 'if(b)im.src=b.textContent;});',
     'var sc=document.querySelector(".wy-nav-content-wrap");if(sc)sc.scrollTop=0;',
-    // The page's own <h1> is right below this, so repeating the title here
-    // just printed every heading twice. Name the wiki instead - with eleven of
-    // them in one file, which one you are reading is the thing that is not
-    // otherwise on screen.
+    // The page's own <h1> follows, so name the wiki rather than repeat it.
     'crumb.textContent=(D.pages[i].p.split("/")[1]||"")',
     '.replace(/^./,function(c){return c.toUpperCase();});',
     'document.title=D.pages[i].t+" - ArduPilot (offline)";',
@@ -494,7 +491,8 @@
     'if(on&&a.scrollIntoView)a.scrollIntoView({block:"nearest"});});}',
     'function route(){show(current());}',
     'window.addEventListener("hashchange",route);',
-    // Full-size image viewer, built once and reused.
+    // Built once and reused. A browser will not navigate to a data: URL, so
+    // linked images are shown here rather than opened.
     'function lightbox(uri){',
     'var lb=document.getElementById("ap-lightbox");',
     'if(!lb){lb=document.createElement("div");lb.id="ap-lightbox";',
@@ -511,10 +509,24 @@
     'href.split("/").forEach(function(seg){',
     'if(seg===".."){parts.pop();}else if(seg!=="."&&seg!==""){parts.push(seg);}});',
     'return parts.join("/").replace(/\\.html?$/,"");}',
-    'doc.addEventListener("click",function(e){',
+    // The About wiki links to every other wiki by absolute ardupilot.org URL,
+    // as does cross-wiki body text, so offline those lead out of the document.
+    // Map them back in when the target is here; leave the rest external.
+    'function siteHref(href){',
+    'var m=/^https?:\\/\\/(?:www\\.)?ardupilot\\.org(\\/.*)?$/i.exec(href);',
+    'if(!m)return null;',
+    'var rest=(m[1]||"").replace(/[?#].*$/,"");',
+    'if(!rest||rest==="/")return D.home||null;',
+    'return rest.replace(/\\.html?$/,"");}',
+    'function onLinkClick(e){',
     'var a=e.target.closest?e.target.closest("a[href]"):null;if(!a)return;',
     'var href=a.getAttribute("href");',
-    'if(!href||/^(https?:|mailto:|#)/.test(href))return;',
+    'if(!href||/^(mailto:|#)/.test(href))return;',
+    'if(/^https?:/i.test(href)){',
+    'var mapped=siteHref(href);',
+    'if(mapped){var hit=lookup(mapped);',
+    'if(hit!==undefined){e.preventDefault();location.hash="#"+hit;return;}}',
+    'return;}',
     'var frag="";var h=href;var hi=h.indexOf("#");',
     'if(hi>=0){frag=h.slice(hi);h=h.slice(0,hi);}',
     'var target=resolve(current(),h);',
@@ -527,21 +539,14 @@
     'if(found!==undefined){location.hash="#"+target;',
     'if(frag){setTimeout(function(){var t=doc.querySelector(frag);',
     'if(t&&t.scrollIntoView)t.scrollIntoView();},50);}return;}',
-    // A linked image we hold: show it rather than reporting it missing.
-    //
-    // Sphinx links every thumbnail to its full-size file, so these are most of
-    // the links in the document - on a real export, more than the page links.
-    // They are answered from the index rather than by searching the rendered
-    // page, and shown here rather than opened, because a browser will not
-    // navigate to a data: URL.
+    // Sphinx links every thumbnail to its full-size file, so these outnumber
+    // the page links. Answer them from the index.
     'var iid=D.imgs?D.imgs[target]:undefined;',
     'if(iid!==undefined&&iid!==null){',
     'var blk=document.getElementById("i"+iid);',
     'if(blk){lightbox(blk.textContent);return;}}',
-    // Where Sphinx scaled an image it links the untouched original, which no
-    // page displays and the export therefore does not carry. The thumbnail
-    // inside the link is the same picture, so show that rather than telling
-    // somebody a file they can see is missing.
+    // Scaled images link an original that no page displays, so it is not in
+    // the file. The wrapped thumbnail is the same picture.
     'var inner=a.querySelector?a.querySelector("[data-ap-img]"):null;',
     'if(inner){',
     'var ib=document.getElementById("i"+inner.getAttribute("data-ap-img"));',
@@ -549,7 +554,10 @@
     'miss.style.display="block";',
     'miss.textContent="Not included in this file: "+target;',
     'setTimeout(function(){miss.style.display="none";},4000);',
-    '});',
+    '}',
+    // The sidebar carries the absolute links, so it needs this too.
+    'doc.addEventListener("click",onLinkClick);',
+    'nav.addEventListener("click",onLinkClick);',
     // Filter the real navigation tree rather than a flat list.
     'search.addEventListener("input",function(){',
     'var q=search.value.toLowerCase();',
@@ -584,16 +592,8 @@
   }
 
   /**
-   * The inside of an element, matched by counting its own tag rather than
+   * Inner HTML of an element, found by counting nested tags rather than
    * stopping at the first closing one.
-   *
-   * The menu div holds the donate block, so a non-greedy match to the first
-   * </div> ended in the middle of it: the captured fragment carried an
-   * unclosed <div>, and joining one per wiki nested each wiki's navigation
-   * inside the previous wiki's stray div. Eleven wikis meant ten levels of
-   * nesting, each indented and narrower than the last, until everything below
-   * the first was squeezed out of a 300px sidebar. It looked like only one
-   * wiki had been exported.
    */
   function innerOf(html, openRe, tag) {
     var open = openRe.exec(html);
@@ -609,14 +609,7 @@
     return html.slice(from);
   }
 
-  /**
-   * The balanced top-level <ul> blocks in a fragment, and nothing else.
-   *
-   * The theme puts a donation form and its logos in the same div as the
-   * toctree. They are live links to ardupilot.org, useless in a file meant to
-   * work with no connection, and repeated once per wiki - so keep the lists
-   * and drop everything around them.
-   */
+  /** The balanced top-level <ul> blocks in a fragment, and nothing else. */
   function topLevelLists(inner) {
     var out = '', re = /<(\/?)ul\b[^>]*>/gi, depth = 0, start = -1, m;
     while ((m = re.exec(inner)) !== null) {
@@ -634,7 +627,42 @@
     return out;
   }
 
-  /** Lift the theme's navigation tree out of a wiki's index page. */
+  // Landing page preference. Opening on whatever sorted first meant Antenna
+  // Tracker, one of the least used wikis.
+  var HOME_ORDER = ['ardupilot', 'copter', 'plane', 'rover'];
+
+  /** First of HOME_ORDER present in the export, else any wiki's front page. */
+  function pickHome(index, wikis) {
+    function find(p) {
+      for (var i = 0; i < index.length; i++) {
+        if (index[i].p === p) { return p; }
+      }
+      return null;
+    }
+    for (var i = 0; i < HOME_ORDER.length; i++) {
+      var w = HOME_ORDER[i];
+      if (wikis.indexOf(w) === -1) { continue; }
+      var root = find('/' + w + '/index');
+      if (root) { return root; }
+      // No front page for it, but its first page beats an unrelated wiki's.
+      for (var j = 0; j < index.length; j++) {
+        if (index[j].p.indexOf('/' + w + '/') === 0) { return index[j].p; }
+      }
+    }
+    for (var k = 0; k < index.length; k++) {
+      if (/^\/[^/]+\/index$/.test(index[k].p)) { return index[k].p; }
+    }
+    return index.length ? index[0].p : '';
+  }
+
+  /**
+   * Lift the theme's navigation tree out of a wiki's index page.
+   *
+   * Only the toctree lists: the same div carries a donation form whose links
+   * are live and useless offline. Matching to the first </div> lands inside
+   * that form and returns an unbalanced fragment, which nests each wiki's
+   * navigation inside the last one when they are joined.
+   */
   function extractNav(html, wiki) {
     var inner = innerOf(
       html, /<div class="wy-menu wy-menu-vertical"[^>]*>/i, 'div');
@@ -748,6 +776,8 @@
                   .then(function (html) {
                     var title = (html.match(/<title>([^<]*)<\/title>/i) || [])[1] ||
                                 p.path.replace(/^\//, '');
+                    // Strip the theme's " <dash> Project documentation" suffix.
+                    // The dashes are what Sphinx emits, so the split spells them.
                     title = title.split('&mdash;')[0].split(' — ')[0].trim();
                     index.push({ t: title, p: p.path.replace(/\.html?$/, '') });
 
@@ -772,7 +802,7 @@
             return chain;
           }).then(function () {
             var payload = { pages: index, nav: navHtml, wikis: wikis,
-                            imgs: imgPaths };
+                            imgs: imgPaths, home: pickHome(index, wikis) };
             return write('<script type="application/json" id="ap-index">' +
                          JSON.stringify(payload).split('</').join('<\\/') +
                          '<\/script><script>' + SHELL_JS + '<\/script></body></html>');
@@ -907,11 +937,8 @@
                         .join('data-ap-missing="' + src + '"');
         }
 
-        // Sphinx links every thumbnail to its full-size file, so the page an
-        // image sits on is also full of links to that image. Record the path
-        // as the page spells it, so a click on one can be answered with the
-        // copy already inside the file instead of dead-ending.
-
+        // Record the path as the page spells it, so a link to this image can
+        // be answered from the copy already in the file.
         // Already emitted for an earlier page: just point at it.
         if (imgIds[hit] !== undefined) {
           if (imgPaths) { imgPaths[resolved] = imgIds[hit]; }
