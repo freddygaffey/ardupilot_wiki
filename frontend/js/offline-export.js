@@ -425,7 +425,13 @@
     'font-size:13px}' +
     '#ap-bar{background:#2980b9;color:#fff;padding:8px 16px;font-size:13px}' +
     '#ap-brand{background:#2980b9;color:#fff;padding:14px 16px;font-weight:700}' +
-    '#ap-brand small{display:block;font-weight:400;opacity:.85;font-size:12px}';
+    '#ap-brand small{display:block;font-weight:400;opacity:.85;font-size:12px}' +
+    '#ap-crumb{padding:6px 0;color:#666;font-size:13px;text-transform:uppercase;' +
+    'letter-spacing:.05em}' +
+    '#ap-lightbox{position:fixed;top:0;right:0;bottom:0;left:0;z-index:9999;' +
+    'display:none;align-items:center;justify-content:center;cursor:zoom-out;' +
+    'background:rgba(0,0,0,.85)}' +
+    '#ap-lightbox img{max-width:94vw;max-height:94vh}';
 
   var SHELL_JS = [
     '(function(){',
@@ -475,7 +481,12 @@
 'var b=document.getElementById("i"+im.getAttribute("data-ap-img"));',
 'if(b)im.src=b.textContent;});',
     'var sc=document.querySelector(".wy-nav-content-wrap");if(sc)sc.scrollTop=0;',
-    'crumb.textContent=D.pages[i].t;',
+    // The page's own <h1> is right below this, so repeating the title here
+    // just printed every heading twice. Name the wiki instead - with eleven of
+    // them in one file, which one you are reading is the thing that is not
+    // otherwise on screen.
+    'crumb.textContent=(D.pages[i].p.split("/")[1]||"")',
+    '.replace(/^./,function(c){return c.toUpperCase();});',
     'document.title=D.pages[i].t+" - ArduPilot (offline)";',
     'links.forEach(function(a){',
     'var on=a.getAttribute("href")==="#"+path;',
@@ -483,6 +494,15 @@
     'if(on&&a.scrollIntoView)a.scrollIntoView({block:"nearest"});});}',
     'function route(){show(current());}',
     'window.addEventListener("hashchange",route);',
+    // Full-size image viewer, built once and reused.
+    'function lightbox(uri){',
+    'var lb=document.getElementById("ap-lightbox");',
+    'if(!lb){lb=document.createElement("div");lb.id="ap-lightbox";',
+    'lb.addEventListener("click",function(){lb.style.display="none";});',
+    'document.body.appendChild(lb);}',
+    'lb.innerHTML="";',
+    'var im=document.createElement("img");im.src=uri;lb.appendChild(im);',
+    'lb.style.display="flex";}',
     // Links inside page content still point at the original files
     // (docs/x.html, ../index.html). Resolve them against the current page and
     // route internally; without this every cross-reference dead-ends.
@@ -508,11 +528,24 @@
     'if(frag){setTimeout(function(){var t=doc.querySelector(frag);',
     'if(t&&t.scrollIntoView)t.scrollIntoView();},50);}return;}',
     // A linked image we hold: show it rather than reporting it missing.
-    'var im=doc.querySelector(\'[data-ap-img]\');',
-    'var block=null;',
-    '[].forEach.call(doc.querySelectorAll("[data-ap-img]"),function(x){',
-    'if(!block&&x.src&&h.indexOf(x.getAttribute("data-ap-name")||"\\u0000")>=0)block=x.src;});',
-    'if(block){window.open(block,"_blank");return;}',
+    //
+    // Sphinx links every thumbnail to its full-size file, so these are most of
+    // the links in the document - on a real export, more than the page links.
+    // They are answered from the index rather than by searching the rendered
+    // page, and shown here rather than opened, because a browser will not
+    // navigate to a data: URL.
+    'var iid=D.imgs?D.imgs[target]:undefined;',
+    'if(iid!==undefined&&iid!==null){',
+    'var blk=document.getElementById("i"+iid);',
+    'if(blk){lightbox(blk.textContent);return;}}',
+    // Where Sphinx scaled an image it links the untouched original, which no
+    // page displays and the export therefore does not carry. The thumbnail
+    // inside the link is the same picture, so show that rather than telling
+    // somebody a file they can see is missing.
+    'var inner=a.querySelector?a.querySelector("[data-ap-img]"):null;',
+    'if(inner){',
+    'var ib=document.getElementById("i"+inner.getAttribute("data-ap-img"));',
+    'if(ib){lightbox(ib.textContent);return;}}',
     'miss.style.display="block";',
     'miss.textContent="Not included in this file: "+target;',
     'setTimeout(function(){miss.style.display="none";},4000);',
@@ -524,6 +557,8 @@
     'var li=a.parentNode;',
     'li.style.display=a.textContent.toLowerCase().indexOf(q)===-1?"none":"";});});',
     'document.addEventListener("keydown",function(e){',
+    'if(e.key==="Escape"){var lb=document.getElementById("ap-lightbox");',
+    'if(lb)lb.style.display="none";}',
     'if(e.key==="/"&&document.activeElement!==search){e.preventDefault();search.focus();}});',
     'route();})();'
   ].join('');
@@ -548,13 +583,66 @@
     return '<ul>' + items.join('') + '</ul>';
   }
 
+  /**
+   * The inside of an element, matched by counting its own tag rather than
+   * stopping at the first closing one.
+   *
+   * The menu div holds the donate block, so a non-greedy match to the first
+   * </div> ended in the middle of it: the captured fragment carried an
+   * unclosed <div>, and joining one per wiki nested each wiki's navigation
+   * inside the previous wiki's stray div. Eleven wikis meant ten levels of
+   * nesting, each indented and narrower than the last, until everything below
+   * the first was squeezed out of a 300px sidebar. It looked like only one
+   * wiki had been exported.
+   */
+  function innerOf(html, openRe, tag) {
+    var open = openRe.exec(html);
+    if (!open) { return ''; }
+    var from = open.index + open[0].length;
+    var scan = new RegExp('<(/?)' + tag + '\\b[^>]*>', 'gi');
+    scan.lastIndex = from;
+    var depth = 1, m;
+    while ((m = scan.exec(html)) !== null) {
+      depth += m[1] ? -1 : 1;
+      if (depth === 0) { return html.slice(from, m.index); }
+    }
+    return html.slice(from);
+  }
+
+  /**
+   * The balanced top-level <ul> blocks in a fragment, and nothing else.
+   *
+   * The theme puts a donation form and its logos in the same div as the
+   * toctree. They are live links to ardupilot.org, useless in a file meant to
+   * work with no connection, and repeated once per wiki - so keep the lists
+   * and drop everything around them.
+   */
+  function topLevelLists(inner) {
+    var out = '', re = /<(\/?)ul\b[^>]*>/gi, depth = 0, start = -1, m;
+    while ((m = re.exec(inner)) !== null) {
+      if (!m[1]) {
+        if (depth === 0) { start = m.index; }
+        depth++;
+      } else if (depth > 0) {
+        depth--;
+        if (depth === 0 && start >= 0) {
+          out += inner.slice(start, m.index + m[0].length);
+          start = -1;
+        }
+      }
+    }
+    return out;
+  }
+
   /** Lift the theme's navigation tree out of a wiki's index page. */
   function extractNav(html, wiki) {
-    var m = html.match(/<div class="wy-menu wy-menu-vertical"[^>]*>([\s\S]*?)<\/div>/i);
-    if (!m) { return ''; }
+    var inner = innerOf(
+      html, /<div class="wy-menu wy-menu-vertical"[^>]*>/i, 'div');
+    var lists = topLevelLists(inner);
+    if (!lists) { return ''; }
     // Hrefs in the root index are relative to the wiki root, so they map
     // straight onto our anchors once the extension is dropped.
-    return m[1].replace(/href="([^"#]+)(#[^"]*)?"/g, function (all, href) {
+    return lists.replace(/href="([^"#]+)(#[^"]*)?"/g, function (all, href) {
       if (/^(https?:|mailto:)/.test(href)) { return all; }
       return 'href="#/' + wiki + '/' + href.replace(/\.html?$/, '') + '"';
     });
@@ -626,6 +714,9 @@
           var done = 0, index = [];
           // Shared across pages so each image is emitted once.
           var imgIds = { __next: 0 };
+          // Image path as pages spell it -> the id of the block holding it,
+          // so a link to an image can be answered from what is already here.
+          var imgPaths = {};
           var write = function (text) { return sink.write(enc.encode(text)); };
 
           return write(
@@ -661,7 +752,8 @@
                     index.push({ t: title, p: p.path.replace(/\.html?$/, '') });
 
                     var m = html.match(/<div[^>]*itemprop="articleBody"[^>]*>([\s\S]*?)<\/div>\s*<footer/i);
-                    return referenceImages(m ? m[1] : html, assets, p.path, imgIds);
+                    return referenceImages(m ? m[1] : html, assets, p.path,
+                                           imgIds, imgPaths);
                   })
                   .then(function (r) {
                     done++;
@@ -679,7 +771,8 @@
             });
             return chain;
           }).then(function () {
-            var payload = { pages: index, nav: navHtml, wikis: wikis };
+            var payload = { pages: index, nav: navHtml, wikis: wikis,
+                            imgs: imgPaths };
             return write('<script type="application/json" id="ap-index">' +
                          JSON.stringify(payload).split('</').join('<\\/') +
                          '<\/script><script>' + SHELL_JS + '<\/script></body></html>');
@@ -782,7 +875,7 @@
    * Returns the rewritten html plus any images seen for the first time, which
    * the caller writes out as it streams.
    */
-  function referenceImages(html, assets, pagePath, imgIds) {
+  function referenceImages(html, assets, pagePath, imgIds, imgPaths) {
     var srcs = [];
     html.replace(/<img[^>]+src="([^"]+)"/gi, function (all, src) {
       if (srcs.indexOf(src) === -1) { srcs.push(src); }
@@ -814,13 +907,20 @@
                         .join('data-ap-missing="' + src + '"');
         }
 
+        // Sphinx links every thumbnail to its full-size file, so the page an
+        // image sits on is also full of links to that image. Record the path
+        // as the page spells it, so a click on one can be answered with the
+        // copy already inside the file instead of dead-ending.
+
         // Already emitted for an earlier page: just point at it.
         if (imgIds[hit] !== undefined) {
+          if (imgPaths) { imgPaths[resolved] = imgIds[hit]; }
           return current.split('src="' + src + '"')
                         .join('data-ap-img="' + imgIds[hit] + '"');
         }
 
         var id = imgIds[hit] = imgIds.__next++;
+        if (imgPaths) { imgPaths[resolved] = id; }
         return assets[hit].match(hit)
           .then(function (res) { return res.arrayBuffer(); })
           .then(function (buf) {
