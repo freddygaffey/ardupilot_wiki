@@ -362,9 +362,20 @@ def build(wikis, destdir: Path) -> Path:
 
     entries.sort(key=lambda e: -e["mb"])
 
+    # Unset means the page falls back to its built-in default, which is a
+    # development bucket that Cloudflare rate limits. That is a silent
+    # downgrade, so say so rather than letting a build quietly ship it.
+    artifact_base = os.environ.get(ARTIFACT_BASE_ENV, "")
+    if artifact_base:
+        log(f"archives will be served from {artifact_base}")
+    else:
+        log(f"WARNING: {ARTIFACT_BASE_ENV} is not set, so the manifest carries "
+            f"no host and readers fall back to the rate-limited development "
+            f"bucket. Set it to the public URL of wherever these are published.")
+
     manifest = {
         "generated": build_id(),
-        "artifact_base": os.environ.get(ARTIFACT_BASE_ENV, ""),
+        "artifact_base": artifact_base,
         "common": {
             "id": "common",
             "name": "Common (required)",
