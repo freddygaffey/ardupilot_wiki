@@ -188,11 +188,23 @@ def video_card(vid: str, wiki: str, has_thumb: bool) -> str:
     label = ("&#9654; Watch on YouTube "
              "<span style=\"opacity:.8\">(needs a connection)</span>")
     if not has_thumb:
+        # No still, so keep the shape of a video and say the preview is
+        # missing. Usually the video has been deleted, but a build with no
+        # network looks identical from here, so the wording does not claim to
+        # know which.
         return (
             f'<a class="ap-video" href="{link}" data-ap-external="1" '
-            'style="display:block;max-width:640px;margin:1em 0;padding:14px;'
-            'border:1px solid #d9d9d9;border-radius:4px;text-decoration:none">'
-            f'{label}</a>')
+            'style="display:block;position:relative;max-width:640px;'
+            'margin:1em 0;text-decoration:none;background:#2f2f2f;'
+            'border-radius:4px">'
+            '<span style="display:block;padding-bottom:56.25%"></span>'
+            '<span style="position:absolute;top:0;left:0;right:0;bottom:0;'
+            'display:flex;align-items:center;justify-content:center;'
+            'color:#b0b0b0;font-size:.95em;text-align:center;padding:0 16px">'
+            'No preview available</span>'
+            '<span style="position:absolute;left:0;right:0;bottom:0;'
+            'padding:8px 10px;background:rgba(0,0,0,.72);color:#fff;'
+            f'font-size:.9em;border-radius:0 0 4px 4px">{label}</span></a>')
     return (
         f'<a class="ap-video" href="{link}" data-ap-external="1" '
         'style="display:block;position:relative;max-width:640px;margin:1em 0;'
