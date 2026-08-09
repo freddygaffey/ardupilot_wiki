@@ -9,35 +9,30 @@
 Offline Copies
 ==============
 
+Keep the documentation readable with no connection — in a hangar, in a field, or
+anywhere the signal runs out.
+
+Two separate things live on this page, and they are easily confused. *Saving
+pages* makes the wiki readable offline and works in an ordinary browser tab.
+*Installing* the app downloads nothing at all — it only gives the wiki its own
+window, and makes your browser far less likely to delete what you have saved.
+
 .. raw:: html
 
-   <!-- Everything below is one raw block on purpose.
-        Sphinx supplies the page title and the surrounding wiki chrome; the tool
-        itself is plain HTML, CSS and JavaScript, so it can be worked on without
-        touching reStructuredText and without docutils deciding how it is laid
-        out. It is also the only arrangement that is structurally safe: a <div>
-        opened in one raw block and closed in another lands inside different
-        section wrappers, which corrupts the nesting and pushes the page footer
-        out of the content column.
+   <!-- The tool. Markup only:
 
-        Styling:   /css/offline.css
-        Behaviour: /js/offline-page.js  (the panel)
-                   /js/offline-export.js (building .pyz and .html files)
+          styling    /css/offline.css
+          behaviour  /js/offline-page.js    (the panel)
+                     /js/offline-export.js  (building .pyz and .html files)
 
-        The panel follows ArduPilot's other tool front-end,
-        custom.ardupilot.org: dark header strip, status badges, progress bars.
-   -->
+        Self-contained - every tag opened here is closed here. A <div> opened in
+        one raw block and closed in another lands inside different section
+        wrappers, which corrupts the nesting and pushes the page footer out of
+        the content column.
+
+        Follows ArduPilot's other tool front-end, custom.ardupilot.org: dark
+        header strip, status badges, progress bars. -->
    <link rel="stylesheet" href="/css/offline.css">
-
-   <div class="apo-intro">
-     <p>Keep the documentation readable with no connection &mdash; in a hangar, in
-        a field, or anywhere the signal runs out.</p>
-     <p>Two separate things live on this page, and they are easily confused.
-        <strong>Saving pages</strong> makes the wiki readable offline and works in
-        an ordinary browser tab. <strong>Installing</strong> the app downloads
-        nothing at all &mdash; it only gives the wiki its own window, and makes
-        your browser far less likely to delete what you have saved.</p>
-   </div>
 
    <div class="apo">
 
@@ -97,20 +92,23 @@ Offline Copies
        </div>
      </div>
 
-     <div class="apo-install">
-       <h3>Install as an app</h3>
-       <div class="apo-note apo-note-info" style="border-bottom:0">
-         <strong>Installing downloads nothing</strong>, and is not needed to read
-         offline &mdash; saving pages works in an ordinary browser tab. It gives the
-         wiki its own window and a launcher icon, and makes your browser far less
-         likely to delete your saved pages when the device runs low on space.
-       </div>
-       <div class="apo-file" style="margin-top:12px">
-         <button id="ap-install-app" class="apo-btn apo-btn-outline" hidden>Install app</button>
-         <span id="install-state" class="apo-hint"></span>
-       </div>
-     </div>
+   </div>
 
+Install as an app
+=================
+
+.. note::
+
+   Installing downloads nothing, and is not needed to read offline — saving pages
+   works in an ordinary browser tab. It gives the wiki its own window and a
+   launcher icon, and makes your browser far less likely to delete your saved
+   pages when the device runs low on space.
+
+.. raw:: html
+
+   <div class="apo-install-row">
+     <button id="ap-install-app" class="apo-btn apo-btn-outline" hidden>Install app</button>
+     <span id="install-state" class="apo-hint"></span>
    </div>
 
    <script src="/js/offline-export.js" defer></script>
