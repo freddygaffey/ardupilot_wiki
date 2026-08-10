@@ -114,41 +114,60 @@ function isImage(url) {
          /\.(png|jpe?g|gif|webp|svg|ico)$/i.test(url.pathname);
 }
 
-/*
- * The addresses a reader is on are not the addresses we stored.
- *
- * Cloudflare Pages canonicalises this site: /x.html 308s to /x, and
- * /rover/index.html to /rover/. So every page a reader actually sits on has no
- * extension, while both the archives and Sphinx's own output name the files
- * exactly as built - /rover/docs/foo.html. An exact cache match therefore
- * misses for every page opened cold, reloaded or bookmarked, which left
- * offline reading working only for as long as somebody kept clicking links
- * whose href still carried the .html.
- *
- * So look for the shapes the same page can have been stored under before
- * deciding it is not held. Paths that already carry an extension get exactly
- * one candidate, so nothing else pays for this.
- */
 // Named extensions rather than "looks like it has one": pages here are called
 // things like common-msp-osd-overview-4.2, and treating that trailing .2 as an
 // extension is how the first attempt at this still missed them.
 const ASSET_EXT_RE =
   /\.(html?|css|m?js|json|xml|txt|map|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf|eot|pdf|zip|gz|tgz|tar|mp4|webm)$/i;
 
-function pageVariants(url) {
+/*
+ * Every shape one URL can have been stored under.
+ *
+ * Two separate things used to be true at once. A page could be addressed
+ * without its extension, because a host that canonicalises URLs leaves the
+ * reader on /rover/docs/foo while the archive stored /rover/docs/foo.html.
+ * And an image shared by several wikis is stored once, under /_common/, while
+ * every page still asks for it by that page's own wiki.
+ *
+ * Both are the same question: where else might this be? Answering it in one
+ * place is the point. When they were separate lookups they drifted, and the
+ * image path never consulted the download at all.
+ */
+function storedShapes(url) {
   const path = url.pathname;
   const out = [path];
+
   if (path.endsWith('/')) {
     out.push(path + 'index.html', path.slice(0, -1) + '.html');
   } else if (!ASSET_EXT_RE.test(path)) {
     out.push(path + '.html', path + '/index.html');
   }
+
+  // Shared images live once under /_common/_images/, however many wikis use
+  // them; the shared set is hundreds of megabytes and nearly every wiki
+  // references most of it.
+  const shared = path.replace(/^\/[^/]+\/_images\//, '/_common/_images/');
+  if (shared !== path) {
+    out.push(shared);
+  }
   return out;
 }
 
-/** cache.match, widened to the shapes a page can be stored under. */
-async function matchVariants(request, cache) {
-  for (const path of pageVariants(new URL(request.url))) {
+/*
+ * The one answer to "is this held offline", for every kind of resource.
+ *
+ * Pages and images having their own lookups is what let 123 of rover's 123
+ * images be missing offline while every page resolved: the image path checked
+ * the runtime cache and the shared-image remap, and never the cache the
+ * download unpacks into. The shared images resolved through the remap, so most
+ * pictures appeared and it read as scattered breakage rather than a lookup
+ * that did not exist.
+ *
+ * Pass a cache to look only there; pass none to search every cache, which is
+ * what finds a downloaded wiki.
+ */
+async function heldOffline(request, cache) {
+  for (const path of storedShapes(new URL(request.url))) {
     const hit = cache
       ? await cache.match(path, { ignoreSearch: true })
       : await caches.match(path, { ignoreSearch: true });
@@ -177,7 +196,7 @@ async function notifyClients(message) {
  */
 async function staleWhileRevalidate(request, cacheName, announceChanges) {
   const cache = await caches.open(cacheName);
-  const cached = await matchVariants(request, cache);
+  const cached = await heldOffline(request, cache);
 
   const network = fetch(request).then(async (response) => {
     if (!response || !response.ok) {
@@ -213,7 +232,7 @@ async function staleWhileRevalidate(request, cacheName, announceChanges) {
   // Checking it earlier would let a wiki downloaded weeks ago permanently
   // shadow the live site: the reader would be served stale pages online, with
   // no indication why, and no amount of redeploying would reach them.
-  const downloaded = await matchVariants(request);
+  const downloaded = await heldOffline(request);
   if (downloaded) {
     return downloaded;
   }
@@ -223,21 +242,6 @@ async function staleWhileRevalidate(request, cacheName, announceChanges) {
            status: 503,
            headers: { 'Content-Type': 'text/plain' },
          });
-}
-
-/*
- * Images shared between wikis are stored once, under /_common/_images/, rather
- * than copied into every wiki that references them - the shared set is around
- * 433 MB and every vehicle uses most of it, so per-wiki copies would multiply
- * that several times over. Pages still ask for /rover/_images/x.png, so a miss
- * on the per-wiki path falls back to the canonical one.
- */
-async function matchSharedImage(url) {
-  const shared = url.pathname.replace(/^\/[^/]+\/_images\//, '/_common/_images/');
-  if (shared === url.pathname) {
-    return undefined;
-  }
-  return caches.match(shared);
 }
 
 /*
@@ -277,44 +281,28 @@ async function networkOnly(request) {
     }
     return unredirect(response);
   } catch (err) {
-    return (await matchVariants(request)) ||
+    return (await heldOffline(request)) ||
            (await caches.match('/offline-fallback.html')) ||
            new Response('Offline.', { status: 503 });
   }
 }
 
 async function cacheFirst(request, cacheName) {
-  const cache = await caches.open(cacheName);
-  const cached = await cache.match(request);
-  if (cached) {
-    return cached;
-  }
-
-  // A downloaded wiki stores its own images under exactly the path the page
-  // asks for, in the offline cache. Only IMAGE_CACHE was consulted here, and
-  // that holds nothing but what has been fetched while reading, so an image
-  // belonging to one wiki rather than to the shared set was missing offline
-  // however complete the download was. The shared remap below covers the
-  // common images, which are most of them, and that is what made this look
-  // like scattered broken pictures rather than a missing lookup.
-  const stored = await caches.match(request, { ignoreSearch: true });
-  if (stored) {
-    return stored;
-  }
-
-  const shared = await matchSharedImage(new URL(request.url));
-  if (shared) {
-    return shared;
+  // One lookup, every cache, every shape: the runtime image cache and a
+  // downloaded wiki are both just places this might already be.
+  const held = await heldOffline(request);
+  if (held) {
+    return held;
   }
   try {
     const response = await fetch(request);
     if (response && response.ok) {
+      const cache = await caches.open(cacheName);
       await cache.put(request, response.clone());
     }
     return response;
   } catch (err) {
-    const shared = await matchSharedImage(new URL(request.url));
-    return shared || new Response('', { status: 504 });
+    return (await heldOffline(request)) || new Response('', { status: 504 });
   }
 }
 
@@ -334,7 +322,7 @@ function safely(handler, request) {
     try {
       return await fetch(request);
     } catch (netErr) {
-      return (await matchVariants(request)) ||
+      return (await heldOffline(request)) ||
              (await caches.match('/offline-fallback.html')) ||
              new Response('Offline.', { status: 503 });
     }

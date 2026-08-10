@@ -264,6 +264,24 @@ def add_bytes(tar, arcname: str, data: bytes):
     tar.addfile(_normalise(info), io.BytesIO(data))
 
 
+def raw_size(path: Path) -> int:
+    """
+    Uncompressed size of a .gz, taken from its trailer.
+
+    The client needs this because the browser now does the decompressing:
+    served as a content coding, Content-Length is the *compressed* length while
+    the stream yields decompressed bytes, so progress measured against
+    Content-Length reads over 200% on the text-heavy wikis. The manifest
+    carries both numbers instead.
+
+    The gzip ISIZE field is modulo 2^32, which is exact below 4 GiB. The
+    largest archive here is around 450 MB.
+    """
+    with open(path, "rb") as f:
+        f.seek(-4, os.SEEK_END)
+        return int.from_bytes(f.read(4), "little")
+
+
 def dir_size(path: Path) -> int:
     return sum(f.stat().st_size for f in path.rglob("*") if f.is_file())
 
@@ -351,12 +369,19 @@ def build(wikis, destdir: Path) -> Path:
         size = write_wiki_archive(wiki, per_wiki.get(wiki, set()), out_dir,
                                   thumbs, set(built))
         pages = sum(1 for _ in html_root.rglob("*.html"))
+        raw = raw_size(out_dir / f"{wiki}-offline.tar.gz")
         entries.append({
             "id": wiki,
             "name": DISPLAY_NAMES.get(wiki, wiki.capitalize()),
             "mb": round(size / 1048576),
             "pages": pages,
-            "archive": f"{wiki}-offline.tar.gz",
+            # What crosses the wire, and what the stream yields after the
+            # browser has decompressed it. The panel needs both.
+            "bytes": size,
+            "raw_bytes": raw,
+            # No .gz: nginx gzip_static serves <name>.tar.gz when <name>.tar is
+            # requested, setting Content-Encoding so the browser decompresses.
+            "archive": f"{wiki}-offline.tar",
         })
         log(f"  {wiki}: {size / 1048576:.0f} MB, {pages} pages")
 
@@ -382,7 +407,9 @@ def build(wikis, destdir: Path) -> Path:
             "mb": round(common_bytes / 1048576),
             "pages": 0,
             "required": True,
-            "archive": "common-offline.tar.gz",
+            "bytes": common_bytes,
+            "raw_bytes": raw_size(out_dir / "common-offline.tar.gz"),
+            "archive": "common-offline.tar",
         },
         "wikis": entries,
     }

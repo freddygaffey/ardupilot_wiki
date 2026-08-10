@@ -513,8 +513,8 @@
       if (!response.ok) {
         throw new Error('could not fetch ' + entry.name + ' (' + response.status + ')');
       }
-      if (!response.body || typeof DecompressionStream === 'undefined') {
-        throw new Error('this browser cannot unpack the download');
+      if (!response.body) {
+        throw new Error('this browser cannot stream the download');
       }
 
       var counter = new TransformStream({
@@ -524,9 +524,17 @@
         }
       });
 
-      var stream = response.body
-        .pipeThrough(counter)
-        .pipeThrough(new DecompressionStream('gzip'));
+      // No DecompressionStream. The archive is served as a content coding
+      // (nginx gzip_static pairs <name>.tar with <name>.tar.gz), so the
+      // browser has already decompressed by the time we see the body. That
+      // drops a dependency which excluded Safari below 16.4 and Firefox below
+      // 113, and removes a pipe stage.
+      //
+      // The bytes counted here are therefore DECOMPRESSED, which is why the
+      // manifest carries raw_bytes alongside the compressed size: measuring
+      // progress against Content-Length would read over 200% on the
+      // text-heavy wikis.
+      var stream = response.body.pipeThrough(counter);
 
       // The common archive holds bare _images/... paths; wiki archives are
       // already prefixed with their own name.
@@ -603,7 +611,9 @@
           return chain.then(function () {
             var cacheName = OFFLINE_CACHE_PREFIX + entry.id;
             return caches.open(cacheName).then(function (cache) {
-              var entryBytes = (entry.mb || 0) * 1048576;
+              // raw_bytes, not mb: the browser decompresses before we count,
+              // so the stream is larger than the download.
+              var entryBytes = entry.raw_bytes || (entry.mb || 0) * 1048576;
               var entryGot = 0;
               return fetchArchive(entry, cache, function (n) {
                 received += n;

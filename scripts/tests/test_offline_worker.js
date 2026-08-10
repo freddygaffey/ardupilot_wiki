@@ -46,8 +46,7 @@ function liftLookup(src) {
   // The extension list the matcher consults, taken with it.
   const konst = src.match(/const ASSET_EXT_RE\s*=\s*[\s\S]*?;/);
   if (konst) { out += konst[0] + '\n'; }
-  for (const name of ['pageVariants', 'matchVariants',
-                      'matchSharedImage', 'cacheFirst']) {
+  for (const name of ['storedShapes', 'heldOffline', 'cacheFirst']) {
     const at = src.indexOf('function ' + name + '(');
     if (at === -1) { return null; }
     const from = src.lastIndexOf('async ', at) === at - 6 ? at - 6 : at;
@@ -85,7 +84,7 @@ function tarNames(file) {
 function run(workerSrc, label) {
   const lifted = liftLookup(workerSrc);
   if (!lifted) {
-    check('lookup lifted from ' + label, false, 'pageVariants/matchVariants not found');
+    check('lookup lifted from ' + label, false, 'storedShapes/heldOffline not found');
     return;
   }
 
@@ -130,10 +129,10 @@ function run(workerSrc, label) {
   };
   vm.createContext(ctx);
   vm.runInContext(lifted +
-    'this.pageVariants=pageVariants;this.matchVariants=matchVariants;' +
+    'this.storedShapes=storedShapes;this.heldOffline=heldOffline;' +
     'this.cacheFirst=cacheFirst;', ctx);
 
-  const ask = (u) => ctx.matchVariants({ url: 'https://example.test' + u });
+  const ask = (u) => ctx.heldOffline({ url: 'https://example.test' + u });
   const askImage = async (u) => {
     const r = await ctx.cacheFirst({ url: 'https://example.test' + u }, 'images');
     return r && r.url ? r : undefined;
@@ -188,8 +187,11 @@ async function main() {
   if (anImage) {
     check('an image still resolves exactly', !!(await ask('/' + anImage)),
           '/' + anImage);
-    check('an image path gets no extra candidates',
-          cur.ctx.pageVariants(new URL('https://e.test/' + anImage)).length === 1);
+    const shapes = cur.ctx.storedShapes(new URL('https://e.test/' + anImage));
+    check('an image asks for its own path first, then the shared copy',
+          shapes[0] === '/' + anImage &&
+          shapes.some((p) => p.startsWith('/_common/_images/')),
+          shapes.join('  '));
   }
   check('a page that is genuinely absent still misses',
         !(await ask('/' + WIKI + '/docs/no-such-page-here')));
@@ -233,7 +235,7 @@ async function main() {
   try {
     old = execFileSync('git', ['-C', REPO, 'show', 'HEAD:frontend/sw.js']).toString();
   } catch (e) { /* not in git, skip */ }
-  if (old && old.indexOf('function pageVariants(') === -1) {
+  if (old && old.indexOf('function storedShapes(') === -1) {
     console.log('\n  (previous sw.js had no variant matching, so the canonical' +
                 ' URL of every page missed)');
   }

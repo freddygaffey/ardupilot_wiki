@@ -219,3 +219,48 @@
     }
   }
 })();
+
+/*
+ * TODO(mirror): delete this when served from ardupilot.org.
+ *
+ * The wiki links to itself by absolute URL in a few hundred places, and the
+ * theme's own menu adds about ten more to every page. On ardupilot.org those
+ * are same-origin and resolve without help. On a mirror they walk the reader
+ * off the site, and offline they fail outright: the document is gone and what
+ * replaces it is a browser error.
+ *
+ * A service worker CANNOT catch this. A top-level navigation to another origin
+ * is never handed to one, so no fetch event fires and there is nothing to
+ * intercept. Anything built there would look right in testing and fail on the
+ * first real click.
+ *
+ * So catch it at click time, which is the only place it can be caught. Only
+ * links to a wiki this site actually serves are rewritten: /discord, /donate,
+ * the firmware server and the forum are separate services with no local copy,
+ * and they are left to leave normally.
+ */
+(function () {
+  'use strict';
+
+  var WIKIS = /^\/(copter|plane|rover|sub|blimp|dev|antennatracker|planner|planner2|ardupilot|mavproxy)(\/|$)/;
+  var SITE = /^https?:\/\/(?:www\.)?ardupilot\.org(\/.*)?$/i;
+
+  document.addEventListener('click', function (e) {
+    // Leave modified clicks alone: a command-click asking for a new tab should
+    // still get the live site, and a middle click is not ours to redirect.
+    if (e.defaultPrevented || e.button !== 0) { return; }
+    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) { return; }
+
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    if (!a || a.target === '_blank') { return; }
+
+    var m = SITE.exec(a.href);
+    if (!m) { return; }
+
+    var path = m[1] || '/';
+    if (!WIKIS.test(path)) { return; }
+
+    e.preventDefault();
+    window.location.href = path;
+  });
+})();
