@@ -291,6 +291,55 @@ def rewrite_site_links(html: str, wikis) -> str:
     return SITE_LINK_RE.sub(swap, html)
 
 
+# Lossless PNG recompression, applied on the way into an archive.
+#
+# The bytes stay pixel-identical: same dimensions, same colours, no artefacts.
+# Only the deflate stream is redone at maximum effort, which the wiki's images
+# have never had, since they arrive from whatever tool an author happened to
+# use. Diagrams, pinouts and screenshots therefore keep every hard edge, which
+# is the whole reason for choosing lossless over re-encoding to JPEG or WebP.
+#
+# The served site is untouched. This only affects what a reader downloads.
+_PNG_CACHE: Path | None = None
+
+
+def set_png_cache(path: Path):
+    """Where recompressed PNGs are remembered between builds."""
+    global _PNG_CACHE
+    _PNG_CACHE = path
+    path.mkdir(parents=True, exist_ok=True)
+
+
+def shrink_png(data: bytes) -> bytes:
+    """Re-deflate a PNG at maximum effort. Returns the original if it cannot."""
+    # 5,787 PNGs at maximum effort is minutes of work that is identical every
+    # time, so key it on the content and keep the result. The cache lives with
+    # the video stills, beside the archives, and is safe to delete.
+    cached = None
+    if _PNG_CACHE is not None:
+        import hashlib
+        cached = _PNG_CACHE / (hashlib.sha256(data).hexdigest()[:32] + ".png")
+        if cached.is_file():
+            return cached.read_bytes()
+    try:
+        from PIL import Image
+    except ImportError:
+        return data
+    try:
+        with Image.open(io.BytesIO(data)) as im:
+            im.load()
+            out = io.BytesIO()
+            im.save(out, format="PNG", optimize=True, compress_level=9)
+        shrunk = out.getvalue()
+        # Occasionally a file is already better than anything we produce.
+        best = shrunk if len(shrunk) < len(data) else data
+        if cached is not None:
+            cached.write_bytes(best)
+        return best
+    except Exception:
+        return data
+
+
 def add_bytes(tar, arcname: str, data: bytes):
     """Add generated content with the same normalisation as a real file."""
     info = tarfile.TarInfo(arcname)
@@ -325,7 +374,12 @@ def build_id() -> str:
 
 
 def write_common_archive(wikis, common_names, out_dir: Path, thumbs) -> int:
-    """One archive of the shared images, taken from whichever wiki has them."""
+    """One archive of the shared images, taken from whichever wiki has them.
+
+    This is where the payload lives: 483 MB, effectively all images, against
+    around 25 MB of images in a per-wiki archive. Recompressing PNGs here is
+    most of the saving available.
+    """
     archive = out_dir / "common-offline.tar.gz"
     seen = set()
     with reproducible_tar(archive) as tar:
@@ -336,7 +390,12 @@ def write_common_archive(wikis, common_names, out_dir: Path, thumbs) -> int:
             for name in sorted(common_names - seen):
                 path = images / name
                 if path.is_file():
-                    tar.add(path, arcname=f"_images/{name}", filter=_normalise)
+                    if path.suffix.lower() == ".png":
+                        add_bytes(tar, f"_images/{name}",
+                                  shrink_png(path.read_bytes()))
+                    else:
+                        tar.add(path, arcname=f"_images/{name}",
+                                filter=_normalise)
                     seen.add(name)
         # Stills go in with the shared images rather than a directory of their
         # own. The service worker and the HTML exporter both already know how
@@ -373,6 +432,10 @@ def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path, thumbs,
                 if rewritten != html:
                     add_bytes(tar, arcname, rewritten.encode("utf-8"))
                     continue
+            if path.suffix.lower() == ".png":
+                shrunk = shrink_png(path.read_bytes())
+                add_bytes(tar, arcname, shrunk)
+                continue
             tar.add(path, arcname=arcname, filter=_normalise)
     return archive.stat().st_size
 
@@ -392,6 +455,7 @@ def build(wikis, destdir: Path) -> Path:
     ids = video_ids(built)
     log(f"fetching stills for {len(ids)} embedded videos")
     thumbs = fetch_thumbnails(ids, out_dir / ".thumbs")
+    set_png_cache(out_dir / ".png-cache")
 
     log(f"writing common archive ({len(common_names)} shared images, "
         f"{len(thumbs)} video stills)")
