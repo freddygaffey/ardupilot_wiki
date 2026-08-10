@@ -56,6 +56,38 @@ def html_members(archive: Path, limit=None):
                 return
 
 
+def check_assets_follow_pages():
+    """
+    Wherever the offline page went, its assets must have gone too.
+
+    The page carries a copywiki marker naming all eleven wikis. Its stylesheet
+    is copied to every wiki unconditionally; its scripts are routed by a marker
+    of their own and, without one, reach DEFAULT_COPY_WIKIS - four of the
+    eleven. So the panel would have been scriptless on seven wikis while
+    looking perfectly correct on the four anyone would think to check.
+
+    Rather than assert a hardcoded list, which would be the same mistake in a
+    different file, derive it: find every wiki that has the page, then require
+    the assets beside it. If the page moves, this moves with it.
+    """
+    ASSETS = ["offline.css", "offline-page.js", "offline-export.js"]
+    have_page, missing = [], []
+
+    for wiki in WIKIS:
+        page = REPO / wiki / "build" / "html" / "docs" / "common-offline.html"
+        if not page.is_file():
+            continue
+        have_page.append(wiki)
+        for asset in ASSETS:
+            if not (REPO / wiki / "build" / "html" / "_static" / asset).is_file():
+                missing.append(f"{wiki}/{asset}")
+
+    check("every wiki with the offline page has its assets",
+          have_page and not missing,
+          f"{len(missing)} missing, e.g. {missing[0]}" if missing
+          else f"{len(have_page)} wikis, {len(ASSETS)} assets each")
+
+
 def main():
     wikis = [w for w in (sys.argv[1:] or WIKIS)]
     print("\noffline archives: what the reader receives\n")
@@ -90,6 +122,8 @@ def main():
         check(f"{wiki}: the donate control survives as a link",
               local_donate > 0,
               f"{local_donate} of {pages} pages")
+
+    check_assets_follow_pages()
 
     check("archives were present to test", checked > 0,
           f"{checked} wikis" if checked else "run update.py --offline first")
