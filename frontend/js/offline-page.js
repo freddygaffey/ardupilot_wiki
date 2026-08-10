@@ -42,14 +42,19 @@
   // own hosting (Cloudflare Pages caps files at 25 MiB and the common archive
   // is 433 MB), so they live in object storage.
   //
-  // TODO: this default points at a throwaway r2.dev demo bucket. Before this
-  // goes anywhere real it must become ArduPilot's own bucket or CDN domain.
-  // r2.dev is rate limited and documented as development-only, so it will not
-  // stand up to production traffic. The preferred fix is not to edit this line
-  // but to set "artifact_base" in offline-manifest.json (see
-  // scripts/build_offline_artifacts.py, ARTIFACT_BASE_ENV), which overrides it
-  // at build time and keeps the URL out of the source entirely.
-  var ARTIFACT_BASE = 'https://pub-de9c5e70708749b4888f6cadd29d92fe.r2.dev';
+  // Same origin as the pages, which is what the archives are: ordinary static
+  // files in the built tree, written to <destdir>/offline/ by update.py
+  // --offline and served by nginx like any other file. There is no endpoint
+  // and no separate host.
+  //
+  // That also means no CORS, no bucket whose policy pins a hostname, and no
+  // upload client for objects over 300 MiB. The previous default was a
+  // throwaway r2.dev bucket, rate limited and documented as development-only,
+  // which a build could ship silently.
+  //
+  // The manifest's "artifact_base" still overrides this when the archives are
+  // genuinely served from elsewhere.
+  var ARTIFACT_BASE = '/offline';
 
   var PAGE_CACHE_PREFIX = 'ardupilot-pages-';
   var OFFLINE_CACHE_PREFIX = 'ardupilot-offline-';

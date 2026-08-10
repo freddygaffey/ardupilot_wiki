@@ -387,16 +387,15 @@ def build(wikis, destdir: Path) -> Path:
 
     entries.sort(key=lambda e: -e["mb"])
 
-    # Unset means the page falls back to its built-in default, which is a
-    # development bucket that Cloudflare rate limits. That is a silent
-    # downgrade, so say so rather than letting a build quietly ship it.
+    # Unset is now the ordinary case: the archives are static files in the
+    # tree this build just wrote, served from the same origin as the pages, and
+    # the page defaults to /offline. Only say something when it IS set, which
+    # means somebody is deliberately serving them from elsewhere.
     artifact_base = os.environ.get(ARTIFACT_BASE_ENV, "")
     if artifact_base:
         log(f"archives will be served from {artifact_base}")
     else:
-        log(f"WARNING: {ARTIFACT_BASE_ENV} is not set, so the manifest carries "
-            f"no host and readers fall back to the rate-limited development "
-            f"bucket. Set it to the public URL of wherever these are published.")
+        log("archives will be served from this site's own /offline/")
 
     manifest = {
         "generated": build_id(),
