@@ -239,7 +239,28 @@ is absent, if anything raises, or if the result is not actually smaller.
 Results are cached by content hash in `offline/.png-cache`, since the work is
 identical on every build.
 
-**For upstream:** running the same pass over the images in the repository would
-give the same saving to every reader of the live site, not just to people
-taking an offline copy. That is a content change rather than a build change,
-and it is a decision for whoever maintains the images.
+**For upstream.** Running the same pass over the images in the repository would
+give the saving to every reader of the live site, not only to those taking an
+offline copy. It is a content change rather than a build change, so it needs a
+decision from whoever maintains the images.
+
+If proposed as a pull request, the argument is:
+
+* **It is lossless.** Dimensions, colours and every pixel are unchanged; only
+  the deflate stream is redone. No diagram, screenshot or pinout degrades, and
+  the result can be verified by decoding both and comparing.
+* **The saving is real but uneven**, so claim it honestly: 16% across a sample
+  of the largest files, with individual results from 53% down to nothing.
+  Files an author already optimised give back little; files exported straight
+  from a tool give back a lot.
+* **It is a one-off**, not a build step. Committing the recompressed images
+  means no ongoing cost, no new dependency, and nothing for contributors to
+  remember. A note in the editing guide asking contributors to optimise images
+  before committing would keep it from regressing.
+* **It is separable.** Doing it in batches, by directory, keeps any single
+  pull request reviewable and makes a regression easy to isolate.
+
+Anything requiring re-encoding, resizing, or a format change (JPEG, WebP, AVIF)
+is a different proposal with different trade-offs, and should not be mixed into
+this one. Those were measured too: JPEG at q85 gives 69% on the same files, but
+returns least on the pinout diagrams where its artefacts would matter most.
