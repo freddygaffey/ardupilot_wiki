@@ -1,5 +1,5 @@
 /*
- * Harness for common/source/_static/offline-page.js, the offline manager panel.
+ * Harness for common/source/_static/common_offline_page.js, the offline manager panel.
  *
  *   npm install --no-save jsdom
  *   node scripts/tests/test_offline_page.js
@@ -30,7 +30,7 @@ try {
 }
 
 const REPO = path.resolve(__dirname, '..', '..');
-const PAGE = path.join(REPO, 'common/source/_static/offline-page.js');
+const PAGE = path.join(REPO, 'common/source/_static/common_offline_page.js');
 const RST = path.join(REPO, 'common/source/docs/common-offline.rst');
 
 let pass = 0, fail = 0;
