@@ -115,7 +115,11 @@ function panelMarkup() {
   const panel = rst.indexOf('<div class="apo">');
   const warn = rst.indexOf('<div id="storage-warning">');
   const start = warn !== -1 && warn < panel ? warn : panel;
-  const end = rst.indexOf('Install as an app');
+  // Search forward from the panel, not from the top of the file: the
+  // stylesheet is inlined above the markup now and mentions the install
+  // button by name, so an absolute search matched inside the CSS and cut
+  // the slice to nothing.
+  const end = rst.indexOf('Install as an app', start);
   let html = rst.slice(start, end);
   html = html.replace(/^\s{0,3}/gm, '');            // rST indentation
   html = html.split('\n').filter(l => !l.trim().startsWith('.. ')).join('\n');
