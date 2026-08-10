@@ -300,6 +300,12 @@
   // it stays cheaper than being wrong, and a clever heuristic that follows an
   // idle pointer around can quietly turn one reader into a load generator.
   var MAX_BYTES = 2 * 1024 * 1024;   // the generated reference pages are 5.8MB
+  // A page listing every supported board has 514 links. Tracking them means a
+  // rect read per link after every scroll and a pass over all of them on every
+  // animation frame the pointer moves, which is a lot of work to guess at one
+  // click. Past this, guess nothing: those pages are indexes, and a reader on
+  // one is scanning rather than being led anywhere in particular.
+  var MAX_TRACKED = 250;
   var MAX_PER_PAGE = 8;              // total guesses allowed per page view
   var MIN_GAP_MS = 400;              // never two in quick succession
   var NEAR_PX = 90;                  // close enough to act on by itself
@@ -328,10 +334,16 @@
 
   // Recomputed on scroll and resize rather than per pointer move: reading
   // layout on every mousemove is exactly how a smooth page starts stuttering.
+  var tooMany = false;
+
   function measure() {
     rects = [];
+    var all = document.querySelectorAll('a[href]');
+    if (all.length > MAX_TRACKED) { tooMany = true; return; }
     var h = window.innerHeight, w = window.innerWidth;
-    [].forEach.call(document.querySelectorAll('a[href]'), function (a) {
+    // Rects are read in one pass and never interleaved with writes, so this
+    // costs one layout rather than one per link.
+    [].forEach.call(all, function (a) {
       var href = fetchable(a);
       if (!href) { return; }
       var r = a.getBoundingClientRect();
@@ -405,8 +417,9 @@
 
   function consider() {
     pending = null;
+    if (tooMany) { return; }
     if (!rects) { measure(); }
-    if (!rects.length || samples.length < 3) { return; }
+    if (tooMany || !rects.length || samples.length < 3) { return; }
 
     var n = samples.length;
     var a = samples[n - 3], b = samples[n - 2], c = samples[n - 1];
@@ -509,17 +522,23 @@
              document.getElementsByName(id)[0];
     if (!el) { return; }
 
-    var node = el;
-    while (node && node !== document.body) {
+    var revealed = false;
+    for (var node = el; node && node !== document.body; node = node.parentElement) {
       // Only touch what is actually being skipped.
       if (getComputedStyle(node).contentVisibility === 'auto') {
         node.style.contentVisibility = 'visible';
         node.style.containIntrinsicSize = 'none';
+        revealed = true;
       }
-      node = node.parentElement;
     }
-    // Now it has a real position to scroll to.
-    el.scrollIntoView();
+
+    // Only scroll if something was hidden from the browser when it tried.
+    //
+    // On an ordinary page the browser has already scrolled to the anchor
+    // perfectly well, and scrolling again on DOMContentLoaded jumps the page
+    // out from under the reader and takes the top menu off screen with it.
+    // There is nothing to correct unless we just changed what is laid out.
+    if (revealed) { el.scrollIntoView(); }
   }
 
   if (document.readyState === 'loading') {
