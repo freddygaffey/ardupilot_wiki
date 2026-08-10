@@ -43,10 +43,16 @@ function check(name, ok, detail) {
  */
 function liftLookup(src) {
   let out = '';
-  // The extension list the matcher consults, taken with it.
-  const konst = src.match(/const ASSET_EXT_RE\s*=\s*[\s\S]*?;/);
-  if (konst) { out += konst[0] + '\n'; }
-  for (const name of ['storedShapes', 'heldOffline', 'cacheFirst']) {
+  // Module-level state the matcher consults, taken with it.
+  for (const re of [/const ASSET_EXT_RE\s*=\s*[\s\S]*?;/,
+                    /const OFFLINE_CACHE_PREFIX\s*=\s*[^;]*;/,
+                    /let knownCacheNames\s*=\s*[^;]*;/,
+                    /const openedCaches\s*=\s*[^;]*;/]) {
+    const m = src.match(re);
+    if (m) { out += m[0] + '\n'; }
+  }
+  for (const name of ['storedShapes', 'likelyCacheName', 'offlineCacheFor',
+                      'heldOffline', 'cacheFirst']) {
     const at = src.indexOf('function ' + name + '(');
     if (at === -1) { return null; }
     const from = src.lastIndexOf('async ', at) === at - 6 ? at - 6 : at;
@@ -118,10 +124,27 @@ function run(workerSrc, label) {
     console,
     caches: {
       match: async (r) => (store.has(keyOf(r)) ? { url: keyOf(r) } : undefined),
-      open: async () => ({
-        match: async (r) => runtimeCache.get(keyOf(r)),
+      // Every offline cache a reader would hold, so the named-cache path is
+      // exercised rather than silently falling through to the exhaustive one.
+      keys: async () => [...new Set([...store].filter((k) => k.startsWith('/'))
+        .map((k) => k.startsWith('/_common/')
+          ? 'ardupilot-offline-common'
+          : 'ardupilot-offline-' + k.split('/')[1]))],
+      open: async (name) => ({
+        match: async (r) => {
+          const k = keyOf(r);
+          if (typeof name === 'string' && name.startsWith('ardupilot-offline-')) {
+            const want = k.startsWith('/_common/')
+              ? 'ardupilot-offline-common'
+              : 'ardupilot-offline-' + k.split('/')[1];
+            if (want !== name) { return undefined; }
+            return store.has(k) ? { url: k } : undefined;
+          }
+          return runtimeCache.get(k);
+        },
         put: async (r, v) => { runtimeCache.set(keyOf(r), v); },
       }),
+
     },
     // Offline.
     fetch: async () => { throw new TypeError('Failed to fetch'); },
