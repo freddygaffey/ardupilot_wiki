@@ -349,6 +349,27 @@
   function prefetch(href) {
     var now = performance.now();
     if (busy || asked.has(href)) { return; }
+
+    // Already held? Then there is nothing to guess about and nothing to spend.
+    // The budget and the pacing exist to protect the server, so they should
+    // only ever apply to something that would actually reach it. A reader who
+    // has downloaded a wiki has every page here already, and rationing those
+    // would be rationing nothing.
+    if (window.caches && caches.match) {
+      asked.add(href);
+      caches.match(href, { ignoreSearch: true }).then(function (hit) {
+        if (hit) { return; }                 // free, and already done
+        asked.delete(href);
+        spend(href);
+      }).catch(function () { asked.delete(href); spend(href); });
+      return;
+    }
+    spend(href);
+  }
+
+  function spend(href) {
+    var now = performance.now();
+    if (busy || asked.has(href)) { return; }
     if (spent >= MAX_PER_PAGE) { return; }
     if (now - lastAt < MIN_GAP_MS) { return; }
 
@@ -436,6 +457,26 @@
     if (href) { prefetch(href); }
   }, { passive: true });
 
+  // Next and previous are the two likeliest clicks on any documentation page,
+  // and there are only ever two of them, so take them without waiting for the
+  // pointer to say anything. They count against the same budget as everything
+  // else.
+  function prefetchNeighbours() {
+    var picked = [];
+    [].forEach.call(
+      document.querySelectorAll('.rst-footer-buttons a[href], a[rel="next"], a[rel="prev"]'),
+      function (a) {
+        var href = fetchable(a);
+        if (href && picked.indexOf(href) === -1) { picked.push(href); }
+      });
+    // One now, the other once that has finished, so they never race.
+    if (picked[0]) { prefetch(picked[0]); }
+    if (picked[1]) { setTimeout(function () { prefetch(picked[1]); }, MIN_GAP_MS + 50); }
+  }
+
+  if (document.readyState === 'complete') { setTimeout(prefetchNeighbours, 800); }
+  else { window.addEventListener('load', function () { setTimeout(prefetchNeighbours, 800); }); }
+
   var remeasure = null;
   function invalidate() {
     clearTimeout(remeasure);
@@ -443,4 +484,48 @@
   }
   window.addEventListener('scroll', invalidate, { passive: true });
   window.addEventListener('resize', invalidate, { passive: true });
+})();
+
+
+/*
+ * Land on the anchor, rather than at the top and then jumping.
+ *
+ * The generated reference pages carry content-visibility so the browser can
+ * skip laying out sections nobody is looking at. The cost is that an anchor
+ * inside a skipped section is not somewhere it can scroll to yet: it renders
+ * the top of the page, keeps laying out, finds the target a second later and
+ * snaps. Correct, and horrible to watch.
+ *
+ * So when the URL names a target, force the sections containing it to lay out
+ * before scrolling. That is a handful of sections rather than 356.
+ */
+(function () {
+  'use strict';
+
+  function reveal() {
+    if (!location.hash || location.hash.length < 2) { return; }
+    var id = decodeURIComponent(location.hash.slice(1));
+    var el = document.getElementById(id) ||
+             document.getElementsByName(id)[0];
+    if (!el) { return; }
+
+    var node = el;
+    while (node && node !== document.body) {
+      // Only touch what is actually being skipped.
+      if (getComputedStyle(node).contentVisibility === 'auto') {
+        node.style.contentVisibility = 'visible';
+        node.style.containIntrinsicSize = 'none';
+      }
+      node = node.parentElement;
+    }
+    // Now it has a real position to scroll to.
+    el.scrollIntoView();
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', reveal);
+  } else {
+    reveal();
+  }
+  window.addEventListener('hashchange', reveal);
 })();

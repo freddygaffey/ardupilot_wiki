@@ -44,9 +44,19 @@
          pagename.startswith('docs/binary-features') or
          pagename.startswith('docs/logmessages') %}
   <style>
+    /* The group sections, one per parameter prefix: 356 of them on the copter
+       list, each holding roughly sixteen parameters.
+
+       The size estimate has to be near the truth or this makes scrolling
+       WORSE, not better. At 320px the browser put the page at ~114,000px when
+       it is over 850,000px, so every scroll discovered real heights, the
+       document grew underneath the reader and the scrollbar re-anchored
+       continuously. 5.8MB over 356 groups is ~16KB each, which lays out around
+       2,400px. "auto" then replaces the estimate with the measured height once
+       a group has been rendered once, so only the first pass uses it. */
     .rst-content section > section > section {
       content-visibility: auto;
-      contain-intrinsic-size: auto 320px;
+      contain-intrinsic-size: auto 2400px;
     }
   </style>
   {%- endif %}
