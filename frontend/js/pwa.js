@@ -264,3 +264,70 @@
     window.location.href = path;
   });
 })();
+
+
+/*
+ * Fetch a page when the reader looks like they are about to open it.
+ *
+ * A hover, or a touch starting, is roughly 100-300ms of warning before the
+ * click. That is enough to have the page in cache by the time the navigation
+ * begins, which is the difference between a wiki that feels quick and one that
+ * feels instant.
+ *
+ * Deliberately modest: same-origin wiki pages only, one in flight at a time,
+ * each URL at most once, and nothing at all when the reader has asked to save
+ * data or is on a connection where speculative traffic would be rude.
+ */
+(function () {
+  'use strict';
+
+  var conn = navigator.connection || {};
+  if (conn.saveData || /(^|-)2g$/.test(conn.effectiveType || '')) {
+    return;
+  }
+
+  var asked = new Set();
+  var inFlight = 0;
+  var timer = null;
+
+  function worthPrefetching(a) {
+    if (!a || !a.href || a.target === '_blank') { return null; }
+    var u;
+    try { u = new URL(a.href); } catch (e) { return null; }
+    if (u.origin !== location.origin) { return null; }
+    if (u.pathname === location.pathname) { return null; }
+    if (!/\.html?$|\/$/.test(u.pathname)) { return null; }
+    u.hash = '';
+    if (asked.has(u.href)) { return null; }
+    return u.href;
+  }
+
+  function prefetch(href) {
+    if (inFlight >= 1) { return; }
+    asked.add(href);
+    inFlight++;
+    // Low priority so it can never compete with what the reader asked for.
+    fetch(href, { credentials: 'same-origin', priority: 'low' })
+      .catch(function () { /* a speculative miss costs nothing */ })
+      .then(function () { inFlight--; });
+  }
+
+  document.addEventListener('mouseover', function (e) {
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    var href = worthPrefetching(a);
+    if (!href) { return; }
+    clearTimeout(timer);
+    // A pointer crossing a link on its way elsewhere is not intent.
+    timer = setTimeout(function () { prefetch(href); }, 120);
+  }, { passive: true });
+
+  document.addEventListener('mouseout', function () { clearTimeout(timer); },
+                            { passive: true });
+
+  // Touch has no hover, so the touch itself is the signal.
+  document.addEventListener('touchstart', function (e) {
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    var href = worthPrefetching(a);
+    if (href) { prefetch(href); }
+  }, { passive: true });
+})();
