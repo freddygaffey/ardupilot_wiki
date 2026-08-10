@@ -3,7 +3,7 @@
  *
  *   node scripts/tests/test_offline_export.js [wiki...]
  *
- * frontend/js/offline-export.js builds the single-file .html from Cache
+ * common/source/_static/offline-export.js builds the single-file .html from Cache
  * Storage. Every bug it has had so far - images resolved to paths that match
  * nothing, the same image written once per page, a sidebar that nested each
  * wiki inside the last - looked fine from the outside and only showed up when
@@ -124,7 +124,7 @@ function loadWiki(wiki, limit) {
 
 function loadExporter() {
   const src = fs.readFileSync(
-    path.join(REPO, 'frontend', 'js', 'offline-export.js'), 'utf8');
+    path.join(REPO, 'common/source/_static/offline-export.js'), 'utf8');
   const sandbox = {
     caches,
     TextEncoder, TextDecoder, URL, btoa, console,
@@ -224,7 +224,7 @@ let stemWord = (w) => w, STOPWORDS = [];
   if (ctx.stopwords) { STOPWORDS = ctx.stopwords; }
 })();
 
-const EXPORTER = path.join(REPO, 'frontend', 'js', 'offline-export.js');
+const EXPORTER = path.join(REPO, 'common/source/_static/offline-export.js');
 
 /**
  * Lift named functions out of the exporter and run them here.

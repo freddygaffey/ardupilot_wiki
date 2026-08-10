@@ -1,4 +1,14 @@
 /*
+ * [copywiki destination="copter,plane,rover,sub,blimp,antennatracker,dev,planner,planner2,ardupilot,mavproxy"]
+ *
+ * The same destinations as docs/common-offline.rst, deliberately: an asset
+ * belongs wherever its page does. Without a marker a .js takes
+ * DEFAULT_COPY_WIKIS, which is four of the eleven, so the panel would have
+ * been scriptless on seven wikis while looking correct on the four anyone
+ * would think to check. (.css is copied to every wiki unconditionally, which
+ * is why the stylesheet needs no marker and this does.)
+ */
+/*
  * Logic for /offline/ - the page where offline content is managed.
  *
  * Everything reported here is measured, not remembered: cached page counts come

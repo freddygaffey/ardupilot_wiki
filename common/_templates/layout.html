@@ -29,5 +29,6 @@
      down the body, so the panel paints unstyled and then jumps. Only that one
      page needs it, hence the guard. #}
   {%- if pagename == 'docs/common-offline' %}
+  <link rel="stylesheet" href="{{ pathto('_static/offline.css', 1) }}" />
   {%- endif %}
 {% endblock %}

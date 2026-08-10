@@ -39,13 +39,10 @@ const SHELL = [
   '/manifest.json',
   '/android-icon-192x192.png',
   '/icon-512x512.png',
-  // The offline manager's own behaviour. These live in frontend/ and are
-  // therefore in no wiki archive, so downloading every wiki still left this
-  // page inert offline: the one screen whose entire job is to work without a
-  // connection. Its styling is inlined into the page itself; this is the part
-  // that cannot be.
-  '/js/offline-page.js',
-  '/js/offline-export.js',
+  // pwa.js only: layout.html loads it on every page, so it is genuinely
+  // site-wide rather than part of any one wiki. The offline panel's own
+  // script and stylesheet are static assets under each wiki's _static, so
+  // they travel in that wiki's archive and need no special case here.
   '/js/pwa.js',
 ];
 
