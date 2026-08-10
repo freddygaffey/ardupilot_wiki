@@ -171,9 +171,35 @@ half a minute.
 `content-visibility: auto` rule for these pages (in `common/_templates/layout.html`
 on the offline branch) reduces layout work but did not make the page usable.
 
-**Suggested fix:** split the page. `--paramversioning` already produces one
-page per firmware version, which would divide it several ways as a side effect.
-Worth measuring whether that alone brings it under control.
+**Suggested fix:** split the page. Note that `--paramversioning` is *not* that
+split, which was worth measuring and has now been measured: a per-version page
+carries nearly the whole list anyway.
+
+| page | size | tags |
+| --- | --- | --- |
+| `parameters.html` (latest dev) | 5.9 MB | 419,450 |
+| `parameters-Copter-stable-V4.7.0.html` | 5.1 MB | 392,510 |
+| `parameters-Copter-stable-V4.5.0.html` | 3.9 MB | not measured |
+
+Versioning divides the list by firmware version, but every version still
+documents nearly every parameter, so it removes about 14% and leaves the page
+in the same condition. A useful split has to be by parameter group, which is
+how the page is already structured and how its sidebar already navigates it.
+
+**A visible consequence of the parse time.** The version selector these pages
+carry is populated by script:
+
+```js
+document.addEventListener("DOMContentLoaded", function() {
+  fetch("../_static/parameters-Copter.json") ...
+```
+
+`DOMContentLoaded` fires when parsing completes, which on this page is
+`domInteractive` at 33.5 s. The dropdown therefore renders empty, and stays
+empty for half a minute, on a page where the data it needs is a 1 KB JSON file
+that was available immediately. Populating it from an inline script next to the
+`<select>`, rather than waiting for the whole document, would fill it in at
+once. This is upstream code in `build_parameters.py`, not the theme.
 
 ---
 
@@ -275,3 +301,46 @@ Anything requiring re-encoding, resizing, or a format change (JPEG, WebP, AVIF)
 is a different proposal with different trade-offs, and should not be mixed into
 this one. Those were measured too: JPEG at q85 gives 69% on the same files, but
 returns least on the pinout diagrams where its artefacts would matter most.
+
+---
+
+## 8. The build emits two classes of Sphinx warning, both pre-existing
+
+Recorded because a reviewer running the build will see them and reasonably ask
+whether the offline branch introduced them. It did not. Both were reproduced by
+building the same tree with and without the offline changes.
+
+**`undefined label`, 8 occurrences, 6 distinct labels.** Present in every build,
+with or without `--paramversioning`:
+
+```
+undefined label: 'max_pos_xy'   undefined label: 'max_vel_xy'
+undefined label: 'max_vel_z'    undefined label: 'max_vel_yaw'
+undefined label: 'max_pos_z'
+```
+
+These are `:ref:` targets that no page defines. The reference renders as plain
+text, so the reader sees an unlinked phrase rather than an error.
+
+**`Duplicate explicit target name`, 240 occurrences.** These appear *only* under
+`--paramversioning`:
+
+```
+Duplicate explicit target name: "rngfnda_grf_st-sub-stable-v4.7.0"
+Duplicate explicit target name: "rngfnda_grf_st-rover-beta-v4.7.0"
+```
+
+One parameter's target name collides with itself once a page exists per
+firmware version. Since `update.sh` in production passes `--paramversioning`,
+the live build emits these too.
+
+**Reproduced:**
+
+| build | `undefined label` | `Duplicate explicit target name` |
+| --- | --- | --- |
+| without `--paramversioning` | 8 | 0 |
+| with `--paramversioning` | 8 | 240 |
+
+Neither is fixed here, and neither is worked around. The duplicate targets are
+worth a look by whoever owns `build_parameters.py`, since 240 of them will bury
+any genuinely new warning in the same build.
