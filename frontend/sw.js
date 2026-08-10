@@ -338,6 +338,10 @@ async function heldOffline(request, cache) {
   return undefined;
 }
 
+function isPage(url) {
+  return /\.html?$/.test(url.pathname) || url.pathname.endsWith('/');
+}
+
 function isStatic(url) {
   // .js and .css are handled earlier, network-first. This covers fonts and the
   // rest of _static, which are large, change rarely, and are safe from cache.
@@ -608,7 +612,12 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  if (request.mode === 'navigate' || request.destination === 'document') {
+  // Routed on what the URL is, not only on how it was asked for. A fetch()
+  // from a page presents mode "cors" and an empty destination, so prefetching
+  // matched none of this and was stored nowhere: the whole point of fetching
+  // early is that the click afterwards finds it already here.
+  if (request.mode === 'navigate' || request.destination === 'document' ||
+      isPage(url)) {
     event.respondWith(safely(staleWhileRevalidate(request, PAGE_CACHE, true), request));
     return;
   }
