@@ -64,9 +64,9 @@ Measured on the same pages, none of them visited earlier in the session:
 =================================  =================  ==============
 Page HTML                          about 1,000 ms     13 to 19 ms
 Theme assets (jQuery, CSS, fonts)  fetched each time  1 to 2 ms
-Network requests per navigation    28                 0
+Resources reaching the network     browser dependent  none of 21 to 26
 The full parameter list (6.2 MB)   about 3,000 ms     served locally
-Reading with no connection         nothing loads      unchanged
+Reading with no connection         not applicable     unchanged
 =================================  =================  ==============
 
 Most readers will notice this rather than the offline capability, since it
