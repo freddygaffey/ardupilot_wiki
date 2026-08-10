@@ -31,8 +31,9 @@ and no account is needed at any point.
                      what puts it inside each wiki's archive; it previously
                      lived in frontend/, outside the Sphinx build, so it
                      reached no archive and the panel was unstyled offline.
-          behaviour  _static/common_offline_page.js    (the panel)
-                     _static/common_offline_export.js  (building the .html file)
+          behaviour  _static/common_offline_page.js      (the panel)
+                     _static/common_offline_export.js    (reading the cache)
+                     _static/common_offline_document.js  (what the .html says)
 
                      Static assets for the same reason the stylesheet is: they
                      travel inside each wiki's archive, so the panel works
@@ -123,6 +124,7 @@ Install as an app
      <span id="install-state" class="apo-hint"></span>
    </div>
 
+   <script src="../_static/common_offline_document.js" defer="defer"></script>
    <script src="../_static/common_offline_export.js" defer="defer"></script>
    <script src="../_static/common_offline_page.js" defer="defer"></script>
 
