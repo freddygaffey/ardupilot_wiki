@@ -8,7 +8,8 @@
     "test:panel": "node scripts/tests/test_offline_page.js",
     "test:export": "node scripts/tests/test_offline_export.js",
     "test:export:multi": "node scripts/tests/test_offline_export.js ardupilot planner2 antennatracker",
-    "test:export:full": "node --max-old-space-size=8192 scripts/tests/test_offline_export.js --full"
+    "test:export:full": "node --max-old-space-size=8192 scripts/tests/test_offline_export.js --full",
+    "test:archives": "python3 scripts/tests/test_offline_archives.py"
   },
   "devDependencies": {
     "jsdom": "^29.0.0"
