@@ -195,3 +195,51 @@ Note the distinction that has to survive any such change: of the 212 source
 links, about 182 point at wiki content and should follow the site, while
 roughly 26 are genuinely different services (`/discord` 24, `/donate` 2, plus
 the firmware server and the forum) and must stay absolute.
+
+---
+
+## 7. The wiki's PNGs have never been through a lossless optimiser
+
+**Where:** the images themselves, wherever authors added them.
+
+Images arrive from whatever tool each contributor happened to use, and nothing
+in the build re-deflates them. Re-encoding losslessly, same dimensions, same
+colours, no artefacts, recovers a useful amount for nothing:
+
+| file | before | after | saved |
+| --- | --- | --- | --- |
+| `AEROFOX-H7_IMG.png` | 12.7 MB | 6.0 MB | 53% |
+| `H743StampFrontBack.png` | 3.8 MB | 3.1 MB | 19% |
+| `JHEMCU-H743HD-Uart-pins.png` | 3.8 MB | 3.4 MB | 10% |
+| `AEROFOX-H7_pinout.png` | 8.3 MB | 8.1 MB | 2% |
+
+Measured across a sample of the largest: **16% saved, pixel-identical.** The
+spread is wide because some files were already well compressed and some were
+not compressed at all.
+
+There are 5,787 PNGs across the eleven wikis. The shared image set alone
+carries 282 MB of them.
+
+**Why lossless and not something with a better ratio.** JPEG or WebP would save
+considerably more, and both were measured: JPEG at q85 gave 69% on these files.
+But the saving is worst exactly where the risk is highest. `AEROFOX-H7_pinout.png`
+is a 9,449px pinout diagram, deliberately large so pin labels stay readable
+when zoomed, and it gives back only 28% to JPEG while gaining ringing artefacts
+along every hard edge. Resizing has the same problem: a cap at 800px would
+touch 1,239 of 2,331 images, and Sphinx links every thumbnail to the full-size
+file, so shrinking the original also removes the zoomed view a reader gets by
+clicking.
+
+**What the offline branch does, and does not do.** `shrink_png()` in
+`scripts/build_offline_artifacts.py` recompresses PNGs **only on the way into
+the downloadable archives.** The built site is read and never written, so the
+wiki as served is byte-for-byte unchanged and this cannot affect anyone who is
+not downloading an offline copy. It falls back to the original bytes if Pillow
+is absent, if anything raises, or if the result is not actually smaller.
+Results are cached by content hash in `offline/.png-cache`, since the work is
+identical on every build.
+
+**For upstream:** running the same pass over the images in the repository would
+give the same saving to every reader of the live site, not just to people
+taking an offline copy. That is a content change rather than a build change,
+and it is a decision for whoever maintains the images.
