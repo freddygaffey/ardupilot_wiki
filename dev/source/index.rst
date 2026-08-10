@@ -167,4 +167,5 @@ Table of Contents
     USB IDs <docs/USB-IDs>
     User Alerts <docs/user-alerts-developer>
     Wiki Editing Guide <docs/common-wiki_editing_guide>
+    Wiki Offline Copies <docs/wiki-offline-copies>
     Appendix <docs/common-appendix>
