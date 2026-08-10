@@ -630,6 +630,17 @@
                   new Response(JSON.stringify({
                     build: CURRENT_BUILD, saved: Date.now(), id: entry.id
                   }), { headers: { 'Content-Type': 'application/json' } }));
+              }).then(function () {
+                // One source of truth, updated the moment it becomes true.
+                //
+                // The rows were painted live as each archive landed while the
+                // footer was computed from a snapshot taken at page load and
+                // refreshed only when the whole queue finished. Mid-download
+                // the panel said every row was Saved and, on the same screen,
+                // that no wikis were saved and the full 696 MB was still to
+                // download. Both readings came from the same run.
+                storedIds[entry.id] = true;
+                return renderStorage();
               });
             });
           });
