@@ -225,7 +225,17 @@ async function notifyClients(message) {
  */
 async function staleWhileRevalidate(request, cacheName, announceChanges) {
   const cache = await caches.open(cacheName);
-  const cached = await heldOffline(request, cache);
+  // What this page cached while reading, and failing that, what a downloaded
+  // wiki holds. Both are copies we already have, and holding a page on disk
+  // while waiting on the network is the slowness readers actually feel.
+  //
+  // A downloaded wiki was previously consulted only after the network failed,
+  // so that a copy saved weeks ago could not silently shadow the live site.
+  // That risk is real but it is answered by revalidating and speaking up, not
+  // by making everyone wait: the fetch below still runs, still compares, and
+  // still fires PAGE_UPDATED when the served copy turns out to be behind.
+  const cached = (await heldOffline(request, cache)) ||
+                 (await heldOffline(request));
 
   const network = fetch(request).then(async (response) => {
     if (!response || !response.ok) {
@@ -255,15 +265,6 @@ async function staleWhileRevalidate(request, cacheName, announceChanges) {
   const response = await Promise.race([network, timeout]);
   if (response) {
     return unredirect(response);
-  }
-
-  // Only once the network has failed do we fall back to a downloaded archive.
-  // Checking it earlier would let a wiki downloaded weeks ago permanently
-  // shadow the live site: the reader would be served stale pages online, with
-  // no indication why, and no amount of redeploying would reach them.
-  const downloaded = await heldOffline(request);
-  if (downloaded) {
-    return downloaded;
   }
 
   return (await caches.match('/offline-fallback.html')) ||
