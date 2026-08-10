@@ -114,6 +114,51 @@ function isImage(url) {
          /\.(png|jpe?g|gif|webp|svg|ico)$/i.test(url.pathname);
 }
 
+/*
+ * The addresses a reader is on are not the addresses we stored.
+ *
+ * Cloudflare Pages canonicalises this site: /x.html 308s to /x, and
+ * /rover/index.html to /rover/. So every page a reader actually sits on has no
+ * extension, while both the archives and Sphinx's own output name the files
+ * exactly as built - /rover/docs/foo.html. An exact cache match therefore
+ * misses for every page opened cold, reloaded or bookmarked, which left
+ * offline reading working only for as long as somebody kept clicking links
+ * whose href still carried the .html.
+ *
+ * So look for the shapes the same page can have been stored under before
+ * deciding it is not held. Paths that already carry an extension get exactly
+ * one candidate, so nothing else pays for this.
+ */
+// Named extensions rather than "looks like it has one": pages here are called
+// things like common-msp-osd-overview-4.2, and treating that trailing .2 as an
+// extension is how the first attempt at this still missed them.
+const ASSET_EXT_RE =
+  /\.(html?|css|m?js|json|xml|txt|map|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf|eot|pdf|zip|gz|tgz|tar|mp4|webm)$/i;
+
+function pageVariants(url) {
+  const path = url.pathname;
+  const out = [path];
+  if (path.endsWith('/')) {
+    out.push(path + 'index.html', path.slice(0, -1) + '.html');
+  } else if (!ASSET_EXT_RE.test(path)) {
+    out.push(path + '.html', path + '/index.html');
+  }
+  return out;
+}
+
+/** cache.match, widened to the shapes a page can be stored under. */
+async function matchVariants(request, cache) {
+  for (const path of pageVariants(new URL(request.url))) {
+    const hit = cache
+      ? await cache.match(path, { ignoreSearch: true })
+      : await caches.match(path, { ignoreSearch: true });
+    if (hit) {
+      return hit;
+    }
+  }
+  return undefined;
+}
+
 function isStatic(url) {
   // .js and .css are handled earlier, network-first. This covers fonts and the
   // rest of _static, which are large, change rarely, and are safe from cache.
@@ -132,7 +177,7 @@ async function notifyClients(message) {
  */
 async function staleWhileRevalidate(request, cacheName, announceChanges) {
   const cache = await caches.open(cacheName);
-  const cached = await cache.match(request);
+  const cached = await matchVariants(request, cache);
 
   const network = fetch(request).then(async (response) => {
     if (!response || !response.ok) {
@@ -168,7 +213,7 @@ async function staleWhileRevalidate(request, cacheName, announceChanges) {
   // Checking it earlier would let a wiki downloaded weeks ago permanently
   // shadow the live site: the reader would be served stale pages online, with
   // no indication why, and no amount of redeploying would reach them.
-  const downloaded = await caches.match(request, { ignoreSearch: true });
+  const downloaded = await matchVariants(request);
   if (downloaded) {
     return downloaded;
   }
@@ -232,7 +277,7 @@ async function networkOnly(request) {
     }
     return unredirect(response);
   } catch (err) {
-    return (await caches.match(request, { ignoreSearch: true })) ||
+    return (await matchVariants(request)) ||
            (await caches.match('/offline-fallback.html')) ||
            new Response('Offline.', { status: 503 });
   }
@@ -243,6 +288,18 @@ async function cacheFirst(request, cacheName) {
   const cached = await cache.match(request);
   if (cached) {
     return cached;
+  }
+
+  // A downloaded wiki stores its own images under exactly the path the page
+  // asks for, in the offline cache. Only IMAGE_CACHE was consulted here, and
+  // that holds nothing but what has been fetched while reading, so an image
+  // belonging to one wiki rather than to the shared set was missing offline
+  // however complete the download was. The shared remap below covers the
+  // common images, which are most of them, and that is what made this look
+  // like scattered broken pictures rather than a missing lookup.
+  const stored = await caches.match(request, { ignoreSearch: true });
+  if (stored) {
+    return stored;
   }
 
   const shared = await matchSharedImage(new URL(request.url));
@@ -277,7 +334,7 @@ function safely(handler, request) {
     try {
       return await fetch(request);
     } catch (netErr) {
-      return (await caches.match(request, { ignoreSearch: true })) ||
+      return (await matchVariants(request)) ||
              (await caches.match('/offline-fallback.html')) ||
              new Response('Offline.', { status: 503 });
     }

@@ -1,0 +1,246 @@
+/*
+ * Verification harness for the service worker's offline lookup.
+ *
+ *   node scripts/tests/test_offline_worker.js [wiki]
+ *
+ * The archives store what Sphinx built - /rover/docs/foo.html - while
+ * Cloudflare Pages canonicalises the site so the address a reader is actually
+ * on is /rover/docs/foo. Nothing in the existing tests compared those two, so
+ * an exact-match lookup passed every test and failed every reader: pages
+ * resolved only while clicking links that still carried the extension, and a
+ * reload or a cold open fell through to the offline page.
+ *
+ * So this builds a cache from the real archive entry names, asks for the URLs
+ * the site really serves, and uses the worker's own matching code to answer.
+ */
+
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+const zlib = require('zlib');
+const { execFileSync } = require('child_process');
+
+const REPO = path.resolve(__dirname, '..', '..');
+const WIKI = process.argv[2] || 'rover';
+const WORKER = path.join(REPO, 'frontend', 'sw.js');
+
+let failures = 0;
+function check(name, ok, detail) {
+  console.log((ok ? '  PASS  ' : '  FAIL  ') + name + (detail ? '   ' + detail : ''));
+  if (!ok) { failures++; }
+}
+
+/* ------------------------------------------------------- the worker's code -- */
+
+/**
+ * Lift the lookup out of sw.js and run it here.
+ *
+ * Importing the worker is not possible - it registers event listeners against
+ * a ServiceWorkerGlobalScope that does not exist here - so the two functions
+ * that decide whether a page is held are taken by name, the same way the
+ * export tests take theirs. A copy in this file would be a copy that can agree
+ * with itself while the shipped worker is wrong.
+ */
+function liftLookup(src) {
+  let out = '';
+  // The extension list the matcher consults, taken with it.
+  const konst = src.match(/const ASSET_EXT_RE\s*=\s*[\s\S]*?;/);
+  if (konst) { out += konst[0] + '\n'; }
+  for (const name of ['pageVariants', 'matchVariants',
+                      'matchSharedImage', 'cacheFirst']) {
+    const at = src.indexOf('function ' + name + '(');
+    if (at === -1) { return null; }
+    const from = src.lastIndexOf('async ', at) === at - 6 ? at - 6 : at;
+    let i = src.indexOf('{', at), depth = 0;
+    for (; i < src.length; i++) {
+      if (src[i] === '{') { depth++; } else if (src[i] === '}') {
+        depth--; if (depth === 0) { break; }
+      }
+    }
+    out += src.slice(from, i + 1) + '\n';
+  }
+  return out;
+}
+
+/* ------------------------------------------------------------ tar reading -- */
+
+/** Entry names in a .tar.gz, without unpacking the bodies. */
+function tarNames(file) {
+  const buf = zlib.gunzipSync(fs.readFileSync(file));
+  const names = [];
+  for (let off = 0; off + 512 <= buf.length;) {
+    const name = buf.toString('utf8', off, off + 100).replace(/\0.*$/, '');
+    if (!name) { off += 512; continue; }
+    const sizeField = buf.toString('ascii', off + 124, off + 136).replace(/\0.*$/, '').trim();
+    const size = parseInt(sizeField, 8) || 0;
+    const type = String.fromCharCode(buf[off + 156]);
+    if (type === '0' || type === '\0') { names.push(name); }
+    off += 512 + Math.ceil(size / 512) * 512;
+  }
+  return names;
+}
+
+/* ------------------------------------------------------------- the run ----- */
+
+function run(workerSrc, label) {
+  const lifted = liftLookup(workerSrc);
+  if (!lifted) {
+    check('lookup lifted from ' + label, false, 'pageVariants/matchVariants not found');
+    return;
+  }
+
+  // Cache keys exactly as offline-page.js writes them: the wiki archive keeps
+  // its own prefix, the common archive is written under /_common/.
+  const store = new Set();
+  const wikiArchive = path.join(REPO, 'offline', WIKI + '-offline.tar.gz');
+  const commonArchive = path.join(REPO, 'offline', 'common-offline.tar.gz');
+  if (!fs.existsSync(wikiArchive) || !fs.existsSync(commonArchive)) {
+    console.log('  (no archives built; run update.py --offline first)');
+    return;
+  }
+  const wikiNames = tarNames(wikiArchive);
+  wikiNames.forEach((n) => store.add('/' + n));
+  tarNames(commonArchive).forEach((n) => store.add('/_common/' + n));
+
+  // Keys are paths; a Request carries a full URL. Normalise so the worker's
+  // code can be run exactly as written.
+  const keyOf = (r) => {
+    const u = typeof r === 'string' ? r : r.url;
+    return u.startsWith('http') ? new URL(u).pathname : u;
+  };
+
+  // IMAGE_CACHE starts empty: that is a reader who downloaded a wiki and then
+  // went offline without having browsed it online first, which is the whole
+  // point of downloading.
+  const runtimeCache = new Map();
+
+  const ctx = {
+    URL,
+    console,
+    caches: {
+      match: async (r) => (store.has(keyOf(r)) ? { url: keyOf(r) } : undefined),
+      open: async () => ({
+        match: async (r) => runtimeCache.get(keyOf(r)),
+        put: async (r, v) => { runtimeCache.set(keyOf(r), v); },
+      }),
+    },
+    // Offline.
+    fetch: async () => { throw new TypeError('Failed to fetch'); },
+    Response: class { constructor(body, init) { this.body = body; Object.assign(this, init); } },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(lifted +
+    'this.pageVariants=pageVariants;this.matchVariants=matchVariants;' +
+    'this.cacheFirst=cacheFirst;', ctx);
+
+  const ask = (u) => ctx.matchVariants({ url: 'https://example.test' + u });
+  const askImage = async (u) => {
+    const r = await ctx.cacheFirst({ url: 'https://example.test' + u }, 'images');
+    return r && r.url ? r : undefined;
+  };
+
+  return { ctx, store, wikiNames, ask, askImage };
+}
+
+/**
+ * The URL Cloudflare Pages serves a built file as. Verified against the live
+ * demo: /x.html 308s to /x, and /index.html to the directory.
+ */
+function canonical(p) {
+  if (p.endsWith('/index.html')) { return p.slice(0, -'index.html'.length); }
+  return p.replace(/\.html$/, '');
+}
+
+async function main() {
+  console.log('\nservice worker: offline lookup\n');
+  const cur = run(fs.readFileSync(WORKER, 'utf8'), 'sw.js');
+  if (!cur) { process.exit(failures ? 1 : 0); }
+  const { store, wikiNames, ask, askImage } = cur;
+
+  const pages = wikiNames.filter((n) => n.endsWith('.html')).map((n) => '/' + n);
+  console.log('  cache holds ' + store.size + ' keys, ' + pages.length +
+              ' of them pages\n');
+
+  // Every page, asked for the way the site actually addresses it.
+  let missed = [];
+  for (const p of pages) {
+    const url = canonical(p);
+    if (url === p) { continue; }
+    if (!(await ask(url))) { missed.push(url); }
+  }
+  check('every page resolves from its canonical (extensionless) URL',
+        missed.length === 0,
+        missed.length ? missed.length + ' missed, e.g. ' + missed[0]
+                      : pages.length + ' pages');
+
+  // The shapes a reader arrives by.
+  check('a page reloaded at its canonical URL resolves',
+        !!(await ask('/' + WIKI + '/docs/common-downloads_firmware')) ||
+        !!(await ask(canonical('/' + pages[Math.floor(pages.length / 2)].slice(1)))),
+        'mid-list page');
+  check("a wiki's root resolves as a directory",
+        !!(await ask('/' + WIKI + '/')), '/' + WIKI + '/');
+  check('a link that still carries .html resolves',
+        !!(await ask('/' + WIKI + '/index.html')), '/' + WIKI + '/index.html');
+
+  // Assets must be untouched by the widening: they already carry an extension.
+  const anImage = wikiNames.find((n) => /_images\/.*\.(png|jpe?g)$/i.test(n));
+  if (anImage) {
+    check('an image still resolves exactly', !!(await ask('/' + anImage)),
+          '/' + anImage);
+    check('an image path gets no extra candidates',
+          cur.ctx.pageVariants(new URL('https://e.test/' + anImage)).length === 1);
+  }
+  check('a page that is genuinely absent still misses',
+        !(await ask('/' + WIKI + '/docs/no-such-page-here')));
+
+  /* ---------------------------------------------------------- images ------ */
+  // With the network down and nothing browsed beforehand, every image a
+  // downloaded wiki holds has to come out of the download. Images unique to
+  // one wiki are the ones that were missing: the shared set resolved through
+  // the /_common/ remap, so most pictures appeared and the rest did not.
+  const ownImages = wikiNames
+    .filter((n) => /^[^/]+\/_images\/[^/]+$/.test(n))
+    .map((n) => '/' + n);
+  const sharedSample = [...store]
+    .filter((k) => k.startsWith('/_common/_images/')).slice(0, 200)
+    .map((k) => '/' + WIKI + '/_images/' + k.split('/').pop());
+
+  let brokeOwn = [];
+  for (const p of ownImages) {
+    if (!(await askImage(p))) { brokeOwn.push(p); }
+  }
+  check("images belonging to this wiki resolve from the download",
+        brokeOwn.length === 0,
+        brokeOwn.length ? brokeOwn.length + ' of ' + ownImages.length +
+                          ' broken, e.g. ' + brokeOwn[0]
+                        : ownImages.length + ' images');
+
+  let brokeShared = [];
+  for (const p of sharedSample) {
+    if (!(await askImage(p))) { brokeShared.push(p); }
+  }
+  check('shared images still resolve through the /_common/ remap',
+        brokeShared.length === 0,
+        brokeShared.length ? brokeShared.length + ' broken, e.g. ' + brokeShared[0]
+                           : sharedSample.length + ' sampled');
+
+  check('an image that was never downloaded still misses',
+        !(await askImage('/' + WIKI + '/_images/no-such-image-here.png')));
+
+  // The same questions against the previous worker, to show the tests bite.
+  let old = null;
+  try {
+    old = execFileSync('git', ['-C', REPO, 'show', 'HEAD:frontend/sw.js']).toString();
+  } catch (e) { /* not in git, skip */ }
+  if (old && old.indexOf('function pageVariants(') === -1) {
+    console.log('\n  (previous sw.js had no variant matching, so the canonical' +
+                ' URL of every page missed)');
+  }
+
+  console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
+                       : '\nall checks passed\n');
+  process.exit(failures ? 1 : 0);
+}
+
+main().catch((err) => { console.error(err); process.exit(1); });
