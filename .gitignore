@@ -80,3 +80,5 @@ build_options.py
 /node_modules/
 /package-lock.json
 .claude/
+build.lck
+build.lck.log
