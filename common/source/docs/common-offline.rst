@@ -107,6 +107,57 @@ and no account is needed at any point.
 
    </div>
 
+What to expect
+==============
+
+**Saving a wiki makes every page in it open instantly, whether or not you have
+a connection.** Pages come from your own device rather than the network, so
+browsing stays fast in a hangar, on a plane, or on a site with no signal.
+
+It costs storage. Roughly:
+
+===============================  ==========
+Shared images (required)         about 440 MB
+A vehicle wiki on top of that    3 to 75 MB
+All eleven wikis                 about 700 MB
+===============================  ==========
+
+The shared images are needed whichever wiki you choose, because nearly every
+page uses them, so the first save is the large one. Saving a second wiki
+afterwards costs only its own pages.
+
+Suggestions
+-----------
+
+- **Save the wiki for the vehicle you actually fly.** Copter alone is 74 MB on
+  top of the shared images, and covers everything most people read.
+- **Save before you leave**, not when you arrive. It is one download and it
+  needs a connection.
+- **Install the app if you rely on it.** Browsers delete stored data when a
+  device runs short of space, and an installed site is much less likely to be
+  chosen. It downloads nothing by itself.
+- **Check for updates occasionally.** Saved pages do not update themselves. The
+  button tells you whether what you are carrying is current.
+- **Use the single file for a machine you cannot install anything on.** It is
+  larger and slower to open, but it is one file that works from a USB stick
+  with no browser support needed.
+
+.. note::
+
+   Saved pages live in your browser's storage for this site. Clearing site data
+   removes them, and you would need to download again.
+
+How it works
+============
+
+The wiki is stored by your browser and served from your own device, using a
+mechanism browsers provide for exactly this. Nothing is sent anywhere, no
+account is involved, and the pages you read offline are the same files the site
+serves normally.
+
+Developers, or anyone curious about the design, the infrastructure it needs and
+how to test it, can read :ref:`dev:wiki-offline-copies`.
+
 Install as an app
 =================
 
