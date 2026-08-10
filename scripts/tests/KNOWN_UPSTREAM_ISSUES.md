@@ -249,15 +249,14 @@ remembering to do it, and there is no large commit touching thousands of binary
 files for reviewers to take on trust.
 
 The cost is build time, and it is bounded: results cache on the content hash,
-so the work happens once per distinct image rather than once per build. The
-offline branch already does exactly this for the downloadable archives
-(``shrink_png()`` in ``scripts/build_offline_artifacts.py``), and applying the
-same pass to the built site is a small extension of it.
+so the work happens once per distinct image rather than once per build.
 
-**This belongs in its own change, not in the offline work.** The offline branch
-touches only what it packs into archives, so the site as served is unaffected
-by it. Compressing the served output changes what every reader receives, which
-is a separate decision and deserves to be reviewed as one.
+**This is deliberately not implemented on the offline branch.** It was written
+and then removed, so that the offline change remains about offline copies
+alone. Compressing images changes what every reader receives and is worth
+proposing on its own terms rather than arriving inside an unrelated feature.
+Until it is done, offline archives carry the images exactly as the build
+produces them.
 
 If proposed, the argument is:
 
