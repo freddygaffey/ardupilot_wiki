@@ -344,7 +344,17 @@ def setup():
         run_git("git reset --hard HEAD", cwd=repo_path)
         run_git("git clean -f -d", cwd=repo_path)
         run_git("git checkout -f master", cwd=repo_path)
+        # Every ref, not just master. The versions to build come from
+        # firmware.ardupilot.org and are checked out by commit hash, and those
+        # commits live on release branches and tags rather than on master. With
+        # only master fetched the checkout fails with "unable to read tree" and
+        # the run produces empty vehicle directories and no parameter files at
+        # all, which reads like a permissions problem rather than a missing
+        # object.
         run_git("git fetch origin master", cwd=repo_path)
+        run_git("git fetch origin --tags --force "
+                "'+refs/heads/*:refs/remotes/origin/*'", cwd=repo_path,
+                check=False)
         run_git("git reset --hard origin/master", cwd=repo_path)
         run_git("git pull", cwd=repo_path)
 
