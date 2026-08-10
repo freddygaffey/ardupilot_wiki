@@ -119,11 +119,21 @@ function run(workerSrc, label) {
   // point of downloading.
   const runtimeCache = new Map();
 
+  // A Response-shaped stub. It returned a bare { url } before, so the moment
+  // the worker did anything a real Response supports - cloning one before
+  // putting it in a cache - the harness threw where the browser would not.
+  // A test that cannot survive correct code is worse than no test.
+  const asResponse = (path) => ({
+    url: path,
+    clone() { return asResponse(path); },
+    text: async () => '',
+  });
+
   const ctx = {
     URL,
     console,
     caches: {
-      match: async (r) => (store.has(keyOf(r)) ? { url: keyOf(r) } : undefined),
+      match: async (r) => (store.has(keyOf(r)) ? asResponse(keyOf(r)) : undefined),
       // Every offline cache a reader would hold, so the named-cache path is
       // exercised rather than silently falling through to the exhaustive one.
       keys: async () => [...new Set([...store].filter((k) => k.startsWith('/'))
@@ -138,7 +148,7 @@ function run(workerSrc, label) {
               ? 'ardupilot-offline-common'
               : 'ardupilot-offline-' + k.split('/')[1];
             if (want !== name) { return undefined; }
-            return store.has(k) ? { url: k } : undefined;
+            return store.has(k) ? asResponse(k) : undefined;
           }
           return runtimeCache.get(k);
         },
