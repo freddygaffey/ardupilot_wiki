@@ -53,25 +53,40 @@ for this site, so clearing that data means saving it again.
 Speed
 =====
 
-The same mechanism makes ordinary browsing faster, whether or not anything has
-been saved and whether or not there is a connection. Once a page or asset is
-held locally it comes from storage, so navigation does not wait on the network.
+The wiki gets faster the more of it you have already seen, because pages and
+the assets they share are kept on the device as you go. None of this requires
+saving a wiki: it happens by itself.
 
-Measured on the same pages, none of them visited earlier in the session:
+The comparison below is the same page: as the wiki behaved before this
+existed, on a first visit with it, and on every visit after that.
 
-=================================  =================  ==============
-\                                  Over the network   Held locally
-=================================  =================  ==============
-Page HTML                          about 1,000 ms     13 to 19 ms
-Theme assets (jQuery, CSS, fonts)  fetched each time  1 to 2 ms
-Resources reaching the network     browser dependent  none of 21 to 26
-Bytes per page after the first     about 156 KB       about 25 KB
-The full parameter list (6.2 MB)   about 3,000 ms     served locally
-Reading with no connection         not applicable     unchanged
-=================================  =================  ==============
+=================================  ===============  ===============  ==============  ==============
+\                                  Before           First visit      Afterwards      Difference
+=================================  ===============  ===============  ==============  ==============
+Time to get the page               about 1,000 ms   about 1,000 ms   13 to 19 ms     60x faster
+Bytes fetched                      about 156 KB     about 202 KB     about 25 KB     6x less
+Requests made                      21 to 26         23 to 28         about 1         \
+The full parameter list (6.2 MB)   about 3,000 ms   about 3,000 ms   no download     \
+=================================  ===============  ===============  ==============  ==============
+
+The first visit is slightly more expensive, by the 46 KB of the worker and the
+script that registers it. That is paid once, and repaid on the second page.
+
+"About 1" rather than none: a stored page is returned immediately, and the
+worker then asks the server whether it has changed. The reader waits for
+nothing, but the request is real and the server sees it.
+
+The bytes figure is the part worth dwelling on. Of the resources a page pulls,
+twelve are shared assets totalling 131 KB, and they are identical on every page
+of the wiki. They are fetched once. After that a page costs its own HTML and
+its own images, and nothing else, which is why the wiki speeds up rather than
+staying the same.
+
+With no connection at all, pages already seen still open, and a saved wiki
+opens completely.
 
 Most readers will notice this rather than the offline capability, since it
-applies on every visit rather than only when travelling.
+applies to ordinary browsing rather than only to travelling.
 
 Implementation
 ==============
