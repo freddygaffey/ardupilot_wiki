@@ -156,7 +156,9 @@ account is involved, and the pages you read offline are the same files the site
 serves normally.
 
 Developers, or anyone curious about the design, the infrastructure it needs and
-how to test it, can read :ref:`dev:wiki-offline-copies`.
+how to test it, can read `How Offline Copies Work
+<https://ardupilot.org/dev/docs/wiki-offline-copies.html>`__ in the developer
+documentation.
 
 Install as an app
 =================
