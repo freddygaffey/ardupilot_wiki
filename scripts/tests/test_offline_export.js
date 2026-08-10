@@ -466,6 +466,10 @@ async function main() {
         html.includes('go.target="_blank"'));
   check('a doubled backslash survives into the built file',
         html.includes('.replace(/\\s+/g," ")'));
+  // The switcher is the page's own control, carried through as markup. The
+  // shell fills it; it does not build one.
+  check('the parameter switcher reaches the file as the theme wrote it',
+        html.includes('id="selectPicker"'));
   check('path anchors', html.includes('#/' + wikis[0] + '/'));
   check('no unresolved relative image srcs', scan.counts[4] === 0,
         scan.counts[4] + ' left');
@@ -800,10 +804,15 @@ async function main() {
         // closes, and the browser swallows the rest of the page into it - on
         // this page that is the entire parameter list, a few lines below the
         // switcher.
+        // Elements, not text: left escaped the page still *contains* the
+        // words, because they end up inside the script element that swallowed
+        // them. What is lost is that they are a paragraph.
+        const paras = [].map.call(doc.querySelectorAll('#ap-doc p'),
+                                  (el) => el.textContent);
         check('the page below its own inline script survives',
-              doc.getElementById('ap-doc').textContent
-                 .indexOf('This is a complete list of the parameters.') !== -1,
-              doc.getElementById('ap-doc').textContent.length + ' chars');
+              paras.some((t) => t.indexOf(
+                'This is a complete list of the parameters.') !== -1),
+              paras.length + ' paragraphs');
 
         sel.value = versions[0].p;
         sel.dispatchEvent(new win.Event('change'));
