@@ -17,6 +17,10 @@ pages* makes the wiki readable offline and works in an ordinary browser tab.
 *Installing* the app downloads nothing at all. It only gives the wiki its own
 window, and makes your browser less likely to delete what you have saved.
 
+Everything here is served from this site. A saved wiki arrives as one ordinary
+file download, and your browser unpacks it locally: nothing is sent anywhere,
+and no account is needed at any point.
+
 .. raw:: html
 
    <!-- The tool. Markup only:
