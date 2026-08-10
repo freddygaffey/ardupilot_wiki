@@ -27,7 +27,22 @@ const CACHE_VERSION = 'v3';
 const PAGE_CACHE = `ardupilot-pages-${CACHE_VERSION}`;
 const IMAGE_CACHE = `ardupilot-images-${CACHE_VERSION}`;
 const STATIC_CACHE = `ardupilot-static-${CACHE_VERSION}`;
-const CURRENT_CACHES = [PAGE_CACHE, IMAGE_CACHE, STATIC_CACHE];
+// Cross-origin assets that never change and so can be served from cache after
+// the first visit. Anything whose freshness matters stays off this list.
+const THIRD_PARTY_CACHE = `ardupilot-thirdparty-${CACHE_VERSION}`;
+const THIRD_PARTY_STATIC =
+  /^https:\/\/(i\.creativecommons\.org\/|licensebuttons\.net\/|plausible\.ardupilot\.org\/js\/)/;
+// User alerts are fetched with a cache-busting query, so every URL is unique
+// and a cache keyed on the whole URL can never hit. They still must not go
+// stale silently - they are how the project warns about a bad release - so
+// they get the same contract as a page: serve what we have at once, refresh
+// behind, and the next navigation shows the newer copy. One navigation behind
+// is a fair price for not spending a second on every page.
+// The offline page and the assets that drive it: markup, panel and exporter.
+const APP_ASSET =
+  /(^\/sw\.js$|^\/js\/pwa\.js$|common_offline(\.css|_page\.js|_export\.js)$|common-offline(\.html)?$)/;
+const THIRD_PARTY_FRESH = /^https:\/\/firmware\.ardupilot\.org\/useralerts\//;
+const CURRENT_CACHES = [PAGE_CACHE, IMAGE_CACHE, STATIC_CACHE, THIRD_PARTY_CACHE];
 // Downloaded wikis, deliberately unversioned so they outlive worker updates.
 const OFFLINE_CACHE_PREFIX = 'ardupilot-offline-';
 
@@ -389,7 +404,49 @@ async function networkOnly(request) {
   }
 }
 
+/*
+ * Serve the previous copy at once and fetch a new one behind it.
+ *
+ * For cross-origin resources whose URL carries a cache-busting query: matching
+ * has to ignore the query or every request is a miss by construction, and the
+ * copy stored has to be keyed the same way or the cache grows without bound,
+ * one entry per page view.
+ */
+async function freshBehind(request, cacheName) {
+  const cache = await caches.open(cacheName);
+  const key = new URL(request.url);
+  key.search = '';
+  const stored = await cache.match(key.href);
+
+  const network = fetch(request)
+    .then(async (response) => {
+      if (response && (response.ok || response.type === 'opaque')) {
+        await cache.put(key.href, response.clone());
+      }
+      return response;
+    })
+    .catch(() => undefined);
+
+  if (stored) {
+    return stored;
+  }
+  return (await network) || new Response('', { status: 504 });
+}
+
 async function cacheFirst(request, cacheName) {
+  // Exact match first, by the whole URL.
+  //
+  // heldOffline answers by path shape and deliberately ignores the origin,
+  // because that is what lets /rover/_images/x.png find the shared copy under
+  // /_common/. A cross-origin asset is stored under its full URL, so that
+  // lookup can never match one: the analytics script was re-fetched on every
+  // page, 1.2 to 2.5 seconds each time, while appearing to be cached.
+  const named = await caches.open(cacheName);
+  const exact = await named.match(request);
+  if (exact) {
+    return exact;
+  }
+
   // One lookup, every cache, every shape: the runtime image cache and a
   // downloaded wiki are both just places this might already be.
   const held = await heldOffline(request);
@@ -398,9 +455,11 @@ async function cacheFirst(request, cacheName) {
   }
   try {
     const response = await fetch(request);
-    if (response && response.ok) {
-      const cache = await caches.open(cacheName);
-      await cache.put(request, response.clone());
+    // An opaque cross-origin response reports ok === false and status 0. It is
+    // still perfectly usable by an <img> or <script>, and storing it is the
+    // whole point here, so accept that shape as well as a real 200.
+    if (response && (response.ok || response.type === 'opaque')) {
+      await named.put(request, response.clone());
     }
     return response;
   } catch (err) {
@@ -461,22 +520,39 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   if (url.origin !== self.location.origin) {
+    // Third-party assets are the slowest thing on a page. Measured on a real
+    // rover page: the licence badge from creativecommons.org took 509ms and
+    // the analytics script 435ms, on every navigation, because a cross-origin
+    // request was handed straight back to the network.
+    //
+    // Static ones can be served from cache after the first visit. The response
+    // is opaque - status 0, body unreadable - which is fine for an <img> or a
+    // <script>, and is why they are only ever stored, never inspected.
+    //
+    // Deliberately NOT cached: firmware.ardupilot.org/useralerts, which is
+    // fetched with a cache-busting query precisely because an alert has to be
+    // current. Making that stale would be a safety problem, not a speed win.
+    if (THIRD_PARTY_STATIC.test(url.href)) {
+      event.respondWith(safely(cacheFirst(request, THIRD_PARTY_CACHE), request));
+    } else if (THIRD_PARTY_FRESH.test(url.href)) {
+      event.respondWith(safely(freshBehind(request, THIRD_PARTY_CACHE), request));
+    }
     return;
   }
 
   // The offline manager is an application screen: its markup and its script
   // have to match, and a cached copy of one paired with a fresh copy of the
-  // other renders as garbage. Never serve it from cache while there is a
-  // network - fall back only when genuinely offline.
-  // All JavaScript and CSS, and the offline page itself, take the network
+  // other renders as garbage. Those, and the worker itself, take the network
   // first and fall back to cache only when there is none.
   //
-  // Script and markup are one unit: a cached copy of either paired with a fresh
-  // copy of the other renders as nonsense, and that failure is silent and
-  // confusing. Scripts are small - a few tens of kilobytes against images
-  // measured in hundreds of megabytes - so serving them fresh costs almost
-  // nothing, while serving them stale costs correctness.
-  if (/\.(js|css)$/.test(url.pathname) || /common-offline(\.html)?$/.test(url.pathname)) {
+  // Scoped to exactly those files, and no longer to every .js and .css on the
+  // site. Applying it site-wide meant about ten network requests per page for
+  // jQuery and the theme, which is most of what made navigation feel slow: one
+  // page measured 1,501ms with no third-party requests at all. Sphinx stamps
+  // its static assets with a content hash (?v=5d32c60e), so a cached copy is
+  // only ever the copy that hash asked for, and serving it from cache cannot
+  // pair the wrong script with the wrong markup.
+  if (APP_ASSET.test(url.pathname)) {
     event.respondWith(safely(networkOnly(request), request));
     return;
   }
@@ -492,6 +568,12 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (isStatic(url)) {
-    event.respondWith(safely(staleWhileRevalidate(request, STATIC_CACHE, false), request));
+    // Cache-first, not stale-while-revalidate. Sphinx stamps these with a
+    // content hash (?v=5d32c60e), so the URL changes whenever the bytes do and
+    // a stored copy can never be the wrong one. Revalidating anyway meant a
+    // background request for every stylesheet, script and font on every page,
+    // roughly twenty per navigation, that could not by construction find
+    // anything new.
+    event.respondWith(safely(cacheFirst(request, STATIC_CACHE), request));
   }
 });

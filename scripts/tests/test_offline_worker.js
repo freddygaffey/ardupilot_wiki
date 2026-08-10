@@ -173,8 +173,35 @@ function canonical(p) {
   return p.replace(/\.html$/, '');
 }
 
+/**
+ * The worker must actually evaluate, not merely parse.
+ *
+ * node --check validates syntax and nothing more, so a const used above its
+ * own declaration passes it and then fails in the browser with "ServiceWorker
+ * script evaluation failed" - which registers as nothing at all: no caching,
+ * no offline, no error on the page. That shipped once, from CURRENT_CACHES
+ * referencing a cache name declared five lines below it.
+ */
+function checkWorkerEvaluates() {
+  const ctx = {
+    self: { addEventListener() {}, skipWaiting() {}, clients: {},
+            location: { origin: 'https://example.test' } },
+    caches: {}, console: { warn() {}, log() {} },
+    fetch() {}, Response: function () {}, URL, setTimeout, Map, Set, Promise,
+  };
+  vm.createContext(ctx);
+  let err = null;
+  try {
+    vm.runInContext(fs.readFileSync(WORKER, 'utf8'), ctx);
+  } catch (e) {
+    err = e.message;
+  }
+  check('the worker evaluates, not just parses', err === null, err || 'clean');
+}
+
 async function main() {
   console.log('\nservice worker: offline lookup\n');
+  checkWorkerEvaluates();
   const cur = run(fs.readFileSync(WORKER, 'utf8'), 'sw.js');
   if (!cur) { process.exit(failures ? 1 : 0); }
   const { store, wikiNames, ask, askImage } = cur;
