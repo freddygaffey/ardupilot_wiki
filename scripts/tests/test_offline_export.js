@@ -224,6 +224,70 @@ let stemWord = (w) => w, STOPWORDS = [];
   if (ctx.stopwords) { STOPWORDS = ctx.stopwords; }
 })();
 
+const EXPORTER = path.join(REPO, 'frontend', 'js', 'offline-export.js');
+
+/**
+ * Lift named functions out of the exporter and run them here.
+ *
+ * The alternative is a second copy of the logic in this file, and that is
+ * precisely how a strict-AND search bug survived a passing test: the copy
+ * carried the same defect, so the two agreed with each other and both were
+ * wrong. Run the shipped code or do not claim to have tested it.
+ */
+function liftFunctions(names) {
+  const src = fs.readFileSync(EXPORTER, 'utf8');
+  let out = '';
+  for (const name of names) {
+    const at = src.indexOf('function ' + name + '(');
+    if (at === -1) { return null; }
+    let i = src.indexOf('{', at), depth = 0;
+    for (; i < src.length; i++) {
+      if (src[i] === '{') { depth++; } else if (src[i] === '}') {
+        depth--; if (depth === 0) { break; }
+      }
+    }
+    out += src.slice(at, i + 1) + '\n';
+  }
+  const ctx = {};
+  vm.createContext(ctx);
+  try {
+    vm.runInContext(out + names.map((n) => 'this.' + n + '=' + n + ';').join(''), ctx);
+  } catch (e) { return null; }
+  return ctx;
+}
+
+/**
+ * The exporter's own full-text search, lifted out of the shell it writes.
+ *
+ * SHELL_JS is an array of string literals joined at export time, so the real
+ * source is recovered by evaluating the array and slicing out the search
+ * block: the same text that ends up inside the .html a reader opens.
+ */
+function liftSearch(fts) {
+  const src = fs.readFileSync(EXPORTER, 'utf8');
+  const s = src.indexOf('var SHELL_JS = [');
+  const e = src.indexOf("].join('')", s);
+  if (s === -1 || e === -1) { return null; }
+  let shell;
+  try {
+    shell = vm.runInNewContext(src.slice(src.indexOf('[', s), e + 1) + ".join('')");
+  } catch (err) { return null; }
+  const from = shell.indexOf('var SI=null;');
+  const END = 'return out;}';
+  const to = shell.indexOf(END, from);
+  if (from === -1 || to === -1) { return null; }
+  const sandbox = { document: { getElementById: (id) =>
+    (id === 'ap-fts' ? { textContent: JSON.stringify(fts) } : null) } };
+  vm.createContext(sandbox);
+  const lang = path.join(REPO, 'rover', 'build', 'html', '_static', 'language_data.js');
+  if (fs.existsSync(lang)) { vm.runInContext(fs.readFileSync(lang, 'utf8'), sandbox); }
+  try {
+    vm.runInContext(shell.slice(from, to + END.length), sandbox);
+  } catch (err) { return null; }
+  return typeof sandbox.fullText === 'function'
+    ? (q) => sandbox.fullText(q.toLowerCase()) : null;
+}
+
 /* ------------------------------------------------------------- the run ---- */
 
 async function main() {
@@ -256,7 +320,10 @@ async function main() {
   const scan = scanFile(htmlPath, [
     /id="i\d+"/g, /data-ap-img=/g, /data:image\//g, /@font-face/g,
     /<img[^>]{0,200}src="\.\.\//g
-  ], ['.wy-nav-content', 'wy-body-for-nav', 'toctree-l1', '#/' + wikis[0] + '/']);
+  ], ['.wy-nav-content', 'wy-body-for-nav', 'toctree-l1', '#/' + wikis[0] + '/',
+      '#ap-toast.on{display:flex}',
+      'if(mapped===null){e.preventDefault();toast(a.href);return;}',
+      'go.target="_blank"']);
 
   const html = { includes: (s) => scan.found[s] };
   const imgBlocks = scan.counts[0];
@@ -273,6 +340,15 @@ async function main() {
         imgBlocks + ' blocks, ' + imgRefs + ' refs, ' + inlineDataUris + ' data URIs');
   check('images actually resolved', imgBlocks > 0);
   check('navigation from toctree', html.includes('toctree-l1'));
+
+  // Links to other hosts are the one kind that genuinely cannot be routed
+  // anywhere, so they used to be followed silently and the reader lost the
+  // document. Leaving has to be a decision rather than an accident.
+  check('a link to another host raises the toast instead of navigating',
+        html.includes('if(mapped===null){e.preventDefault();toast(a.href);return;}'));
+  check('the toast is styled', html.includes('#ap-toast.on{display:flex}'));
+  check('leaving anyway opens a new tab, keeping the offline copy loaded',
+        html.includes('go.target="_blank"'));
   check('path anchors', html.includes('#/' + wikis[0] + '/'));
   check('no unresolved relative image srcs', scan.counts[4] === 0,
         scan.counts[4] + ' left');
@@ -290,47 +366,90 @@ async function main() {
           indexed.join(', '));
     check('sidebar sections are siblings, not nested',
           !/<div/i.test(D.nav) && !/<form/i.test(D.nav));
+    // Under a page cap a sidebar link may legitimately name a page this
+    // export does not hold, so resolution can only be asserted on a full run.
+    // The shape of the anchor can be asserted either way, and that is where
+    // the bug was: a cross-wiki link arriving as /copter/index.html got this
+    // wiki prefixed onto it and became #/ardupilot//copter/index, which
+    // resolves to nothing whether or not copter is in the file.
+    const anchors = (D.nav.match(/href="#([^"]+)"/g) || [])
+      .map((h) => h.slice(7, -1)).filter((p) => p.charAt(0) === '/');
+    const malformed = anchors.filter(
+      (p) => p.indexOf('//') !== -1 || /\.html?$/.test(p));
+    check('sidebar anchors are well formed', malformed.length === 0,
+          malformed.length ? malformed.slice(0, 3).join('  ')
+                           : anchors.length + ' anchors');
     check('sidebar links all point at pages in the file',
-          (D.nav.match(/href="#([^"]+)"/g) || []).every((h) => {
-            const p = h.slice(7, -1);
-            return D.pages.some((x) => x.p === p);
-          }) || cap !== Infinity,
+          anchors.every((p) => D.pages.some((x) => x.p === p)) || cap !== Infinity,
           cap === Infinity ? '' : '(not checked: page cap in effect)');
     check('image index built', Object.keys(D.imgs || {}).length > 0,
           Object.keys(D.imgs || {}).length + ' image paths');
+  }
+
+  // Downloaded archives are the shape this test cannot reach from build/html:
+  // rewrite_site_links turns the About wiki's absolute cross-wiki links into
+  // paths from the site root, and only an archive carries them. So drive the
+  // exporter's own nav rewriting with that shape directly.
+  const navFns = liftFunctions(['innerOf', 'topLevelLists', 'extractNav']);
+  check('nav helpers lifted from the exporter', navFns !== null);
+  if (navFns) {
+    const fixture =
+      '<div class="wy-menu wy-menu-vertical"><ul>' +
+      '<li><a href="docs/common-team.html">Team</a></li>' +
+      '<li><a href="/copter/index.html">Copter</a></li>' +
+      '<li><a href="/plane/docs/common-choosing-a-ground-station.html">GCSes</a></li>' +
+      '<li><a href="https://cloud.ardupilot.org">Drone Engage</a></li>' +
+      '</ul></div>';
+    const got = (navFns.extractNav(fixture, 'ardupilot').match(/href="([^"]+)"/g) || [])
+      .map((h) => h.slice(6, -1));
+    check('a link relative to the wiki keeps its wiki',
+          got.indexOf('#/ardupilot/docs/common-team') !== -1, got.join('  '));
+    check('a cross-wiki link from the site root is not prefixed again',
+          got.indexOf('#/copter/index') !== -1, got.join('  '));
+    check('no anchor has an empty path segment',
+          !got.some((h) => h.indexOf('//') !== -1 && h.charAt(0) === '#'),
+          got.join('  '));
+    check('a link to another host is left alone',
+          got.indexOf('https://cloud.ardupilot.org') !== -1, got.join('  '));
   }
 
   // Sphinx omits stopwords from its index, so a query containing one must not
   // reduce the result set to nothing. Pasting a sentence used to find nothing
   // at all.
   const fts = readSearchPayload(htmlPath);
-  if (fts) {
-    const probe = (q) => {
-      const words = q.toLowerCase().split(/[^a-z0-9_]+/)
-        .filter((w) => w.length > 1 && STOPWORDS.indexOf(w) === -1);
-      if (!words.length) { return 0; }
-      let per = null;
-      for (const w of words) {
-        const s = stemWord(w), hit = {};
-        const mark = (l) => { if (l === undefined) { return; }
-          (typeof l === 'number' ? [l] : l).forEach((n) => { hit[n] = 1; }); };
-        for (const wiki of Object.keys(fts)) {
-          mark(fts[wiki].terms[s]); mark(fts[wiki].titleterms[s]);
-        }
-        if (per === null) { per = hit; } else {
-          const nx = {};
-          Object.keys(hit).forEach((k) => { if (per[k] !== undefined) { nx[k] = 1; } });
-          per = nx;
-        }
-      }
-      return per ? Object.keys(per).length : 0;
-    };
+  const search = fts ? liftSearch(fts) : null;
+  check('search lifted from the exporter', !fts || search !== null);
+  if (search) {
+    const probe = (q) => Object.keys(search(q)).length;
     const bare = probe('vehicle');
     check('full-text search finds a word in body text', bare > 0, bare + ' docs');
     check('a stopword in the query does not empty the results',
           probe('the vehicle') === bare, probe('the vehicle') + ' vs ' + bare);
     check('a whole pasted sentence still matches',
           probe('the vehicle is a copter') > 0, probe('the vehicle is a copter') + ' docs');
+
+    // Requiring every word to match meant one unmatchable word answered
+    // "nothing found" however much of the query pointed somewhere. A reader
+    // dragging a selection clips the first and last words, so this is what
+    // pasting a sentence actually looks like.
+    check('a word that matches nothing does not empty the results',
+          probe('vehicle zzzznotaword') === bare,
+          probe('vehicle zzzznotaword') + ' vs ' + bare);
+
+    // The real report: "industrial-grade" arrived as "rial-grade", which
+    // matches other pages by one edit and the intended page not at all.
+    const CLIPPED = 'rial-grade, dual-band GNSS module designed and ' +
+      'manufactured in India by TeraVolt Labs. It is specifically engineered ' +
+      'to support the NavIC (IRNSS) constellation, making it fully compliant ' +
+      'with DGCA requirements for indigenous dron';
+    const hasPage = Object.keys(fts).some(
+      (w) => (fts[w].docnames || []).some((n) => /AeroNav-1/i.test(n)));
+    if (hasPage) {
+      const hits = Object.keys(search(CLIPPED));
+      check('a sentence clipped mid-word by the selection still finds its page',
+            hits.some((p) => /AeroNav-1/i.test(p)),
+            hits.length + ' hits: ' + (hits.slice(0, 3).join(', ') || 'none'));
+    }
   }
 
   console.log('\nwrote ' + OUT + '/test.html');

@@ -172,7 +172,16 @@
     '.ap-results a{padding:0;border:0}' +
     '.ap-snip{margin:.25em 0 0;color:#4a4a4a;font-size:.9em;line-height:1.5}' +
     '.ap-snip mark{background:#fff3b0;color:inherit;padding:0 2px}' +
-    '.ap-actions{display:flex;flex-wrap:wrap;gap:0 1.5em}';
+    '.ap-actions{display:flex;flex-wrap:wrap;gap:0 1.5em}' +
+    '#ap-toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);' +
+    'z-index:10000;display:none;align-items:center;gap:1em;' +
+    'max-width:min(680px,92vw);padding:12px 16px;border-radius:4px;' +
+    'background:#1f2d3a;color:#fff;font-size:14px;line-height:1.4;' +
+    'box-shadow:0 6px 24px rgba(0,0,0,.3)}' +
+    '#ap-toast.on{display:flex}' +
+    '#ap-toast a{color:#8ecbff;text-decoration:underline;white-space:nowrap}' +
+    '#ap-toast button{background:none;border:0;color:#c3ccd5;font:inherit;' +
+    'cursor:pointer;padding:0;white-space:nowrap}';
 
   var SHELL_JS = [
     '(function(){',
@@ -286,6 +295,39 @@
     'lb.innerHTML="";',
     'var im=document.createElement("img");im.src=uri;lb.appendChild(im);',
     'lb.style.display="flex";}',
+    // An anchor parses the host for us, which beats a regular expression in a
+    // file assembled from single-quoted literals: a backslash written here is
+    // one the built page never sees.
+    'function hostOf(u){var a=document.createElement("a");a.href=u;',
+    'return a.hostname||u;}',
+    // A link to another host is not in this file and never can be. Following
+    // it silently costs the reader the whole document and, with no connection,
+    // gives them a browser error in exchange. So say what is about to happen
+    // and let them choose. This has to replace the navigation rather than
+    // accompany it: a message shown on the way out is one nobody reads, and
+    // the page carrying it is already gone.
+    'var toastTimer=null;',
+    'function toast(href){',
+    'var t=document.getElementById("ap-toast");',
+    'if(!t){t=document.createElement("div");t.id="ap-toast";',
+    'document.body.appendChild(t);}',
+    'clearTimeout(toastTimer);',
+    't.innerHTML="";',
+    'var msg=document.createElement("span");',
+    'msg.textContent=hostOf(href)+" is not part of this offline copy. "',
+    '+"Opening it leaves this file and needs a connection.";',
+    'var go=document.createElement("a");',
+    'go.href=href;go.target="_blank";go.rel="noopener";',
+    'go.textContent="Open anyway";',
+    // Opening in a new tab keeps the offline copy where it was, so choosing to
+    // look does not mean losing the document.
+    'go.addEventListener("click",function(){t.className="";});',
+    'var hide=document.createElement("button");',
+    'hide.type="button";hide.textContent="Dismiss";',
+    'hide.addEventListener("click",function(){t.className="";});',
+    't.appendChild(msg);t.appendChild(go);t.appendChild(hide);',
+    't.className="on";',
+    'toastTimer=setTimeout(function(){t.className="";},9000);}',
     // Links inside page content still point at the original files
     // (docs/x.html, ../index.html). Resolve them against the current page and
     // route internally; without this every cross-reference dead-ends.
@@ -313,12 +355,15 @@
     'if(!href||/^(mailto:|#)/.test(href))return;',
     'if(/^https?:/i.test(href)){',
     'var mapped=siteHref(href);',
-    'if(mapped===null)return;',
+    // Another host: the forum, the firmware server, cloud.ardupilot.org from
+    // the sidebar. These are separate services rather than wiki content, so
+    // there is no offline copy to route to and the link stays what it is. What
+    // changes is that it no longer happens silently.
+    'if(mapped===null){e.preventDefault();toast(a.href);return;}',
     // An ardupilot.org URL is wiki content, so it never leaves the file, for
     // the same reason a relative link does not: offline there is nothing at
     // the other end, and following it costs the reader the whole document.
-    // Say the wiki is missing instead. Other hosts, including the forum and
-    // the firmware server, still open normally.
+    // Say the wiki is missing instead.
     'e.preventDefault();',
     'if(mapped==="/"){go("/");return;}',
     'var hit=lookup(mapped);',
@@ -399,8 +444,9 @@
     'var words=ql.split(/[^a-z0-9_]+/).filter(function(w){',
     'return w.length>1&&STOP.indexOf(w)===-1;});',
     'if(!words.length)return out;',
+    'var all=[],best=0;',
     'Object.keys(idx).forEach(function(w){',
-    'var d=idx[w];var per=null;',
+    'var d=idx[w];var score={},cover={};',
     'words.forEach(function(word){',
     'var s=stem(word);var hit={};',
     'function mark(list,weight){',
@@ -420,13 +466,27 @@
     'if(word.length>=4&&!Object.keys(hit).length){',
     'for(k=0;k<keys.length;k++){',
     'if(within(s,keys[k],1))mark(d.terms[keys[k]],0.25);}}',
-    'if(per===null){per=hit;}else{',
-    'var next={};Object.keys(hit).forEach(function(n){',
-    'if(per[n]!==undefined)next[n]=per[n]+hit[n];});per=next;}});',
-    'if(!per)return;',
-    'Object.keys(per).forEach(function(n){',
-    'var path="/"+w+"/"+d.docnames[n];',
-    'out[path]=Math.max(out[path]||0,per[n]);});});',
+    // Count how many query words reached each document, alongside the score.
+    'Object.keys(hit).forEach(function(n){',
+    'score[n]=(score[n]||0)+hit[n];cover[n]=(cover[n]||0)+1;});});',
+    'Object.keys(cover).forEach(function(n){',
+    'if(cover[n]>best)best=cover[n];',
+    'all.push({p:"/"+w+"/"+d.docnames[n],c:cover[n],s:score[n]});});});',
+    // Requiring every word to match is fatal for a pasted sentence. A reader
+    // dragging a selection clips the first and last words, so "industrial-
+    // grade" arrives as "rial-grade": that matches other pages by one edit,
+    // never the intended one, and intersecting emptied the whole result set.
+    // Twenty-three further words all pointed at a single page - two of them,
+    // "india" and "indigenous", appear on no other page in the wiki - and the
+    // search still answered nothing found.
+    //
+    // Take the best-covered tier instead. When some page really does contain
+    // every word this is exactly the old behaviour, because that page covers
+    // all of them and nothing else can do better. When no page covers them
+    // all, the closest pages surface rather than nothing.
+    'all.forEach(function(r){',
+    'if(r.c<best)return;',
+    'out[r.p]=Math.max(out[r.p]||0,r.s);});',
     'return out;}',
     // One matcher, two views: the sidebar list and the full page both rank the
     // same way, so pressing Enter never reorders what was just on screen.
@@ -657,7 +717,16 @@
     // straight onto our anchors once the extension is dropped.
     return lists.replace(/href="([^"#]+)(#[^"]*)?"/g, function (all, href) {
       if (/^(https?:|mailto:)/.test(href)) { return all; }
-      return 'href="#/' + wiki + '/' + href.replace(/\.html?$/, '') + '"';
+      // A leading slash means the href is already a path from the site root,
+      // not from this wiki. Archives arrive that way: rewrite_site_links turns
+      // the absolute cross-wiki links in the About wiki's sidebar into
+      // /copter/index.html. Prefixing those with the wiki being read produced
+      // #/ardupilot//copter/index, which resolves to nothing, so every
+      // cross-wiki sidebar entry landed on "Not in this offline copy" even
+      // when that wiki was sitting in the same file.
+      var path = href.replace(/\.html?$/, '');
+      return 'href="#' +
+             (href.charAt(0) === '/' ? path : '/' + wiki + '/' + path) + '"';
     });
   }
 
