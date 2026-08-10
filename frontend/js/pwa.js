@@ -267,20 +267,26 @@
 
 
 /*
- * Fetch what this page links to, so the next click is already here.
+ * Fetch the page the pointer is heading for, shortly before it gets there.
  *
- * One layer only: the pages this page links to, never the pages those link to.
- * A reader spends a few seconds on any page, which is ample time to have its
- * neighbours ready.
+ * Prefetching every link a page contains works, but it asks the server for
+ * dozens of pages to guess at one, and a page listing every supported board
+ * links to hundreds. Watching the pointer costs the server nothing until there
+ * is a reason.
  *
- * Bounded three ways, because speculative work stops being free otherwise:
+ * Three signals, in increasing order of how much they mean:
  *
- *   by count  a page listing every supported board links to hundreds. Fetching
- *             all of them to guess at one is not a trade worth making, so past
- *             a threshold we fetch nothing and fall back to hover.
- *   by size   the generated reference pages reach 5.8MB and 215,470 elements.
- *   by pace   one at a time, at low priority, started only once the page the
- *             reader actually asked for has finished loading.
+ *   position      the pointer is already close to a link.
+ *   velocity      projected forward, its path lands on one. Someone crossing a
+ *                 link on the way elsewhere is travelling fast and straight
+ *                 through, and never triggers this.
+ *   acceleration  it is SLOWING as it approaches. People decelerate into a
+ *                 target they mean to hit and not into one they are passing,
+ *                 so this is the signal that separates intent from traffic.
+ *
+ * The reward is modest and that is fine: a page is fetched a few hundred
+ * milliseconds before the click rather than after it, which is most of the
+ * difference between a wiki that feels quick and one that feels instant.
  */
 (function () {
   'use strict';
@@ -290,13 +296,26 @@
     return;
   }
 
-  var MAX_LINKS = 30;
-  var MAX_BYTES = 2 * 1024 * 1024;
-  var asked = new Set();
-  var queue = [];
-  var running = false;
+  // Hard limits, deliberately conservative. Guessing is only worth doing while
+  // it stays cheaper than being wrong, and a clever heuristic that follows an
+  // idle pointer around can quietly turn one reader into a load generator.
+  var MAX_BYTES = 2 * 1024 * 1024;   // the generated reference pages are 5.8MB
+  var MAX_PER_PAGE = 8;              // total guesses allowed per page view
+  var MIN_GAP_MS = 400;              // never two in quick succession
+  var NEAR_PX = 90;                  // close enough to act on by itself
+  var LOOKAHEAD_MS = 250;            // how far ahead the path is projected
+  var SLOW_PX_MS = 0.25;             // slower than this counts as arriving
 
-  function candidate(a) {
+  var asked = new Set();
+  var spent = 0;
+  var lastAt = 0;
+  var busy = false;
+  var inFlight = null;
+  var samples = [];                  // {x, y, t}, newest last
+  var rects = null;
+  var pending = null;
+
+  function fetchable(a) {
     if (!a || !a.href || a.target === '_blank') { return null; }
     var u;
     try { u = new URL(a.href); } catch (e) { return null; }
@@ -307,69 +326,121 @@
     return u.href;
   }
 
-  function pump() {
-    if (running || !queue.length) { return; }
-    running = true;
-    var href = queue.shift();
-    fetch(href, { method: 'HEAD', credentials: 'same-origin' })
-      .then(function (head) {
-        var size = Number(head.headers.get('content-length') || 0);
-        if (size > MAX_BYTES) { return null; }
-        return fetch(href, { credentials: 'same-origin', priority: 'low' });
+  // Recomputed on scroll and resize rather than per pointer move: reading
+  // layout on every mousemove is exactly how a smooth page starts stuttering.
+  function measure() {
+    rects = [];
+    var h = window.innerHeight, w = window.innerWidth;
+    [].forEach.call(document.querySelectorAll('a[href]'), function (a) {
+      var href = fetchable(a);
+      if (!href) { return; }
+      var r = a.getBoundingClientRect();
+      if (r.bottom < 0 || r.top > h || r.right < 0 || r.left > w) { return; }
+      rects.push({ href: href, r: r });
+    });
+  }
+
+  function distanceTo(r, x, y) {
+    var dx = Math.max(r.left - x, 0, x - r.right);
+    var dy = Math.max(r.top - y, 0, y - r.bottom);
+    return Math.sqrt(dx * dx + dy * dy);
+  }
+
+  function prefetch(href) {
+    var now = performance.now();
+    if (busy || asked.has(href)) { return; }
+    if (spent >= MAX_PER_PAGE) { return; }
+    if (now - lastAt < MIN_GAP_MS) { return; }
+
+    asked.add(href);
+    spent++;
+    lastAt = now;
+    busy = true;
+
+    // ONE request, not two. Asking HEAD first and then GET doubled the server
+    // load of every guess, which is the opposite of the point. The size is in
+    // the response headers before the body arrives, so read it there and
+    // abandon anything large mid-flight.
+    var ctl = new AbortController();
+    inFlight = ctl;
+    fetch(href, { credentials: 'same-origin', priority: 'low', signal: ctl.signal })
+      .then(function (res) {
+        var size = Number(res.headers.get('content-length') || 0);
+        if (size > MAX_BYTES) {
+          ctl.abort();
+          return null;
+        }
+        return res.arrayBuffer();   // let the worker store it, then discard
       })
       .catch(function () { /* a speculative miss costs nothing */ })
-      .then(function () { running = false; pump(); });
+      .then(function () { busy = false; inFlight = null; });
   }
 
-  function enqueue(hrefs) {
-    hrefs.forEach(function (h) { asked.add(h); queue.push(h); });
-    pump();
+  // A guess in flight is worthless the moment the reader goes somewhere, and
+  // holding the connection open competes with the page they actually asked for.
+  window.addEventListener('pagehide', function () {
+    if (inFlight) { inFlight.abort(); }
+  });
+
+  function consider() {
+    pending = null;
+    if (!rects) { measure(); }
+    if (!rects.length || samples.length < 3) { return; }
+
+    var n = samples.length;
+    var a = samples[n - 3], b = samples[n - 2], c = samples[n - 1];
+    var dt1 = Math.max(b.t - a.t, 1), dt2 = Math.max(c.t - b.t, 1);
+
+    // First derivative: where it is going, and how fast.
+    var vx = (c.x - b.x) / dt2, vy = (c.y - b.y) / dt2;
+    var speed = Math.sqrt(vx * vx + vy * vy);
+
+    // Second derivative: whether it is winding down or still winding up.
+    var prevSpeed = Math.sqrt(Math.pow((b.x - a.x) / dt1, 2) +
+                              Math.pow((b.y - a.y) / dt1, 2));
+    var slowing = speed < prevSpeed;
+
+    // Where it will be shortly, if it carries on as it is.
+    var px = c.x + vx * LOOKAHEAD_MS, py = c.y + vy * LOOKAHEAD_MS;
+
+    var best = null, bestScore = 0;
+    rects.forEach(function (item) {
+      var now = distanceTo(item.r, c.x, c.y);
+      var soon = distanceTo(item.r, px, py);
+
+      var score = 0;
+      if (now < NEAR_PX) { score += 1; }
+      if (soon < now) { score += 1; }                       // heading for it
+      if (soon < 12) { score += 1; }                        // path lands on it
+      if (slowing && soon < NEAR_PX) { score += 2; }        // arriving at it
+      if (speed < SLOW_PX_MS && now < NEAR_PX) { score += 1; }
+
+      if (score > bestScore) { bestScore = score; best = item.href; }
+    });
+
+    // Two weak signals, or one strong one. A single "it is nearby" is not
+    // enough, or every pointer resting on the page would fetch something.
+    if (best && bestScore >= 2) { prefetch(best); }
   }
 
-  function start() {
-    // The article, not the whole document: the sidebar lists the entire wiki,
-    // and its links are navigation rather than a signal about this page.
-    var root = document.querySelector('[itemprop="articleBody"]') ||
-               document.querySelector('.rst-content') || document.body;
-    var links = [].slice.call(root.querySelectorAll('a[href]'))
-                  .map(candidate).filter(Boolean);
-    var unique = [];
-    links.forEach(function (h) { if (unique.indexOf(h) === -1) { unique.push(h); } });
+  document.addEventListener('mousemove', function (e) {
+    samples.push({ x: e.clientX, y: e.clientY, t: performance.now() });
+    if (samples.length > 4) { samples.shift(); }
+    if (!pending) { pending = requestAnimationFrame(consider); }
+  }, { passive: true });
 
-    if (unique.length && unique.length <= MAX_LINKS) {
-      enqueue(unique);
-      return;                       // hover would be redundant
-    }
-    // Too many to fetch blind, so wait for a sign of intent instead.
-    hoverFallback();
-  }
+  // Touch has no approach to read, so the touch is the intent.
+  document.addEventListener('touchstart', function (e) {
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    var href = fetchable(a);
+    if (href) { prefetch(href); }
+  }, { passive: true });
 
-  function hoverFallback() {
-    var timer = null;
-    document.addEventListener('mouseover', function (e) {
-      var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
-      var href = candidate(a);
-      if (!href) { return; }
-      clearTimeout(timer);
-      timer = setTimeout(function () { enqueue([href]); }, 120);
-    }, { passive: true });
-    document.addEventListener('mouseout', function () { clearTimeout(timer); },
-                              { passive: true });
-    document.addEventListener('touchstart', function (e) {
-      var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
-      var href = candidate(a);
-      if (href) { enqueue([href]); }
-    }, { passive: true });
+  var remeasure = null;
+  function invalidate() {
+    clearTimeout(remeasure);
+    remeasure = setTimeout(function () { rects = null; }, 150);
   }
-
-  // Never compete with the page the reader actually asked for.
-  function whenIdle() {
-    if (window.requestIdleCallback) {
-      requestIdleCallback(start, { timeout: 3000 });
-    } else {
-      setTimeout(start, 1200);
-    }
-  }
-  if (document.readyState === 'complete') { whenIdle(); }
-  else { window.addEventListener('load', whenIdle); }
+  window.addEventListener('scroll', invalidate, { passive: true });
+  window.addEventListener('resize', invalidate, { passive: true });
 })();
