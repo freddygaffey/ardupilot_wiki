@@ -97,6 +97,10 @@ self.addEventListener('activate', (event) => {
  */
 const EXPORTS = new Map();
 
+// How long an export may sit uncollected before its stream is dropped and
+// the worker is released.
+const EXPORT_TIMEOUT_MS = 60000;
+
 self.addEventListener('message', (event) => {
   const data = event.data;
   if (!data) {
@@ -107,10 +111,30 @@ self.addEventListener('message', (event) => {
     return;
   }
   if (data.type === 'EXPORT_START') {
-    EXPORTS.set(data.id, { stream: data.stream, filename: data.filename });
-    // Expire an export that is never collected, so a cancelled save does not
-    // pin its stream here for the lifetime of the worker.
-    setTimeout(() => EXPORTS.delete(data.id), 60000);
+    // Hold this worker alive until the download is collected.
+    //
+    // EXPORTS lives in the worker's memory, and a worker with nothing left to
+    // do is terminated within milliseconds. The page posts the stream here and
+    // then builds an iframe to fetch it, and that gap was enough: the worker
+    // died, a fresh instance answered the fetch with an empty map, and the
+    // reply was 410. Nobody then read the stream, so the page's first write
+    // blocked once the queue filled and the export hung with no error at all.
+    // Measured: fetching in the same tick returned 200, fetching 300ms later
+    // returned 410.
+    //
+    // waitUntil keeps the instance that holds the stream alive until the
+    // download starts, with a cap so a save that is cancelled before it is
+    // collected cannot pin a worker indefinitely.
+    let collected;
+    const untilCollected = new Promise((resolve) => { collected = resolve; });
+    EXPORTS.set(data.id, {
+      stream: data.stream, filename: data.filename, collected: collected,
+    });
+    event.waitUntil(Promise.race([
+      untilCollected,
+      new Promise((resolve) => setTimeout(resolve, EXPORT_TIMEOUT_MS)),
+    ]));
+    setTimeout(() => EXPORTS.delete(data.id), EXPORT_TIMEOUT_MS);
   }
 });
 
@@ -348,6 +372,9 @@ self.addEventListener('fetch', (event) => {
     const entry = EXPORTS.get(id);
     if (entry) {
       EXPORTS.delete(id);
+      // The stream is being read now, so the waitUntil above can settle; the
+      // response itself keeps the worker alive for as long as it streams.
+      if (entry.collected) { entry.collected(); }
       event.respondWith(new Response(entry.stream, {
         headers: {
           'Content-Type': 'application/octet-stream',
