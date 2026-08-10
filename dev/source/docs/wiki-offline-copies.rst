@@ -60,21 +60,30 @@ saving a wiki: it happens by itself.
 The comparison below is the same page: as the wiki behaved before this
 existed, on a first visit with it, and on every visit after that.
 
-=================================  ===============  ===============  ==============  ==============
-\                                  Before           First visit      Afterwards      Difference
-=================================  ===============  ===============  ==============  ==============
-Time to get the page               about 1,000 ms   about 1,000 ms   13 to 19 ms     60x faster
-Bytes fetched                      about 156 KB     about 202 KB     about 25 KB     6x less
-Requests made                      21 to 26         23 to 28         about 1         \
-The full parameter list (6.2 MB)   about 3,000 ms   about 3,000 ms   no download     \
-=================================  ===============  ===============  ==============  ==============
++----------------------------------+----------------+----------------+--------------+--------------+
+|                                  | Before         | After                         | Difference   |
++                                  +                +----------------+--------------+              +
+|                                  |                | First visit    | Once cached  |              |
++==================================+================+================+==============+==============+
+| Time to get the page             | about 1,000 ms | about 1,000 ms | 13 to 19 ms  | 60x faster   |
++----------------------------------+----------------+----------------+--------------+--------------+
+| Bytes fetched                    | about 156 KB   | about 202 KB   | about 25 KB  | 6x less      |
++----------------------------------+----------------+----------------+--------------+--------------+
+| Requests made                    | 21 to 26       | 23 to 28       | about 1      | 26x fewer    |
++----------------------------------+----------------+----------------+--------------+--------------+
+| Parameter list (6.2 MB)          | about 3,000 ms | about 3,000 ms | about 300 ms | 10x faster   |
++----------------------------------+----------------+----------------+--------------+--------------+
 
 The first visit is slightly more expensive, by the 46 KB of the worker and the
 script that registers it. That is paid once, and repaid on the second page.
 
-"About 1" rather than none: a stored page is returned immediately, and the
-worker then asks the server whether it has changed. The reader waits for
+About one request rather than none: a stored page is returned immediately, and
+the worker then asks the server whether it has changed. The reader waits for
 nothing, but the request is real and the server sees it.
+
+The parameter list still takes time once stored, because 6.2 MB has to be read
+and laid out. Its cost is in rendering rather than transfer, which is why it
+stays slow on any connection.
 
 The bytes figure is the part worth dwelling on. Of the resources a page pulls,
 twelve are shared assets totalling 131 KB, and they are identical on every page
