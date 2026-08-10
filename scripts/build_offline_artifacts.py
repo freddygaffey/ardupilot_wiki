@@ -220,6 +220,40 @@ def rewrite_embeds(html: str, wiki: str, thumbs) -> str:
         lambda m: video_card(m.group(1), wiki, m.group(1) in thumbs), html)
 
 
+# The sidebar's donate control is an <input type="image"> whose source is a GIF
+# on paypalobjects.com, and it is on all 3,958 pages. Offline that image cannot
+# load, and a broken input renders as a small grey box: the alt text is not
+# shown, so the control does not read as a donate button, or as anything.
+#
+# It is served by the theme, which is a separate repository, so this cannot be
+# fixed at the source from here. It can be fixed in the copies we produce.
+DONATE_RE = re.compile(
+    r'<input[^>]*paypalobjects\.com[^>]*>',
+    re.IGNORECASE)
+
+DONATE_LINK = (
+    '<a href="https://ardupilot.org/donate" data-ap-external="1" '
+    'style="display:inline-block;padding:8px 22px;border-radius:4px;'
+    'background:#ffc439;color:#111;font-weight:700;text-decoration:none;'
+    'font-family:system-ui,-apple-system,sans-serif;font-size:15px">'
+    'Donate</a>'
+    '<div style="margin-top:6px;font-size:12px;opacity:.75">needs a connection</div>'
+)
+
+
+def rewrite_donate(html: str) -> str:
+    """
+    Replace the remote donate image with a styled link that survives offline.
+
+    Styled inline for the same reason the video cards are: this markup is read
+    under two different stylesheets, a cached wiki page and the single-file
+    export, and inline is the only thing both honour. It keeps PayPal's yellow
+    so it still reads as the same control, and says plainly that following it
+    needs a connection rather than failing silently.
+    """
+    return DONATE_RE.sub(DONATE_LINK, html)
+
+
 SITE_LINK_RE = re.compile(
     r'(href|src)="https?://(?:www\.)?ardupilot\.org(/[^"]*)"', re.IGNORECASE)
 
@@ -335,7 +369,7 @@ def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path, thumbs,
             if path.suffix == ".html":
                 html = path.read_text(encoding="utf-8", errors="replace")
                 rewritten = rewrite_site_links(
-                    rewrite_embeds(html, wiki, thumbs), wikis)
+                    rewrite_donate(rewrite_embeds(html, wiki, thumbs)), wikis)
                 if rewritten != html:
                     add_bytes(tar, arcname, rewritten.encode("utf-8"))
                     continue
