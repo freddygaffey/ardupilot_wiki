@@ -239,26 +239,38 @@ is absent, if anything raises, or if the result is not actually smaller.
 Results are cached by content hash in `offline/.png-cache`, since the work is
 identical on every build.
 
-**For upstream.** Running the same pass over the images in the repository would
-give the saving to every reader of the live site, not only to those taking an
-offline copy. It is a content change rather than a build change, so it needs a
-decision from whoever maintains the images.
+**For upstream: compress on the way out, not in the repository.**
 
-If proposed as a pull request, the argument is:
+The obvious version of this is to recompress the images and commit them. The
+better version is to do it in the build, as a step over the output before it is
+served. The repository keeps the originals exactly as authors supplied them,
+nothing changes for contributors, every future image is covered without anyone
+remembering to do it, and there is no large commit touching thousands of binary
+files for reviewers to take on trust.
+
+The cost is build time, and it is bounded: results cache on the content hash,
+so the work happens once per distinct image rather than once per build. The
+offline branch already does exactly this for the downloadable archives
+(``shrink_png()`` in ``scripts/build_offline_artifacts.py``), and applying the
+same pass to the built site is a small extension of it.
+
+**This belongs in its own change, not in the offline work.** The offline branch
+touches only what it packs into archives, so the site as served is unaffected
+by it. Compressing the served output changes what every reader receives, which
+is a separate decision and deserves to be reviewed as one.
+
+If proposed, the argument is:
 
 * **It is lossless.** Dimensions, colours and every pixel are unchanged; only
   the deflate stream is redone. No diagram, screenshot or pinout degrades, and
-  the result can be verified by decoding both and comparing.
+  it can be verified by decoding both and comparing.
 * **The saving is real but uneven**, so claim it honestly: 16% across a sample
   of the largest files, with individual results from 53% down to nothing.
   Files an author already optimised give back little; files exported straight
   from a tool give back a lot.
-* **It is a one-off**, not a build step. Committing the recompressed images
-  means no ongoing cost, no new dependency, and nothing for contributors to
-  remember. A note in the editing guide asking contributors to optimise images
-  before committing would keep it from regressing.
-* **It is separable.** Doing it in batches, by directory, keeps any single
-  pull request reviewable and makes a regression easy to isolate.
+* **It fails safe.** Return the original bytes when the encoder is unavailable,
+  when anything raises, or when the result is not actually smaller. A build
+  must never break because an image could not be recompressed.
 
 Anything requiring re-encoding, resizing, or a format change (JPEG, WebP, AVIF)
 is a different proposal with different trade-offs, and should not be mixed into
