@@ -223,6 +223,17 @@
       }
       pages.sort(function (a, b) { return a.path < b.path ? -1 : 1; });
 
+      // The parameter list is published once per release, back to 3.x, and one
+      // of those pages is 5.8 MB. Decide which to carry before anything is
+      // written, so the ones left out cost nothing rather than being written
+      // and then ignored.
+      var params = DOC.parameterVersions(pages.map(function (p) {
+        return p.path.replace(/\.html?$/, '');
+      }));
+      pages = pages.filter(function (p) {
+        return !params.drop[p.path.replace(/\.html?$/, '')];
+      });
+
       // Group by wiki from the pages themselves, so a wiki still appears even
       // if its index page was not part of the export.
       var wikis = [];
@@ -286,6 +297,7 @@
             var nav = DOC.buildNav(navState, wikis, pages);
             var payload = { pages: index, nav: nav.html, order: nav.order,
                             wikis: wikis, imgs: imgPaths, homes: homes,
+                            params: params.byWiki,
                             home: homes.length === 1 ? homes[0].path : '' };
 
             var wantIndex = wikis.filter(function (w) { return indexes[w]; });

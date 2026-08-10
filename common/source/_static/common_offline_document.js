@@ -47,10 +47,10 @@
     '#ap-brand small{display:block;font-weight:400;opacity:.85;font-size:12px}' +
     '#ap-crumb{padding:6px 0;color:#666;font-size:13px;text-transform:uppercase;' +
     'letter-spacing:.05em}' +
-    // The theme's own footer sits below the article with air around it; the
-    // buttons alone would otherwise butt straight onto the last paragraph.
+    // The gap the theme leaves between the last paragraph and the buttons. On
+    // the site it comes from the <hr> and copyright block underneath, which an
+    // offline copy has nothing to put in.
     '#ap-foot{margin-top:24px}' +
-    '#ap-foot .rst-footer-buttons{padding-top:12px;border-top:1px solid #e1e4e5}' +
     '#ap-lightbox{position:fixed;top:0;right:0;bottom:0;left:0;z-index:9999;' +
     'display:none;align-items:center;justify-content:center;cursor:zoom-out;' +
     'background:rgba(0,0,0,.85)}' +
@@ -190,6 +190,31 @@
     '+\' aria-label="Footer">\'+(pv?navButton(pv,-1):"")+(nx?navButton(nx,1):"")',
     '+\'</div>\':"";}',
 
+    /* ---------------------------------------- the parameter version switcher */
+    // The wiki's own switcher cannot work inside a single file: its script
+    // fetches ../_static/parameters-<Vehicle>.json over the network and then
+    // navigates by URL, and offline there is neither. The <select> is the
+    // theme's own element, sitting in the page where it always was, so fill it
+    // from the versions this file actually holds and route through the hash.
+    //
+    // Only what is here is offered. A switcher listing every release the site
+    // publishes would be a list of forty ways to reach "not in this offline
+    // copy".
+    'function fillVersions(path){',
+    'var sel=doc.querySelector("#selectPicker");if(!sel)return;',
+    'var box=sel.parentNode;',
+    'var list=(D.params||{})[path.split("/")[1]]||[];',
+    // The sentence beside it promises a choice. With nothing to choose, the
+    // promise is the only thing left, so take that away too.
+    'if(!list.length){if(box)box.style.display="none";return;}',
+    'sel.innerHTML="";',
+    'list.forEach(function(v){',
+    'var o=document.createElement("option");',
+    'o.value=v.p;o.textContent=v.n;',
+    'if(v.p===path)o.selected=true;',
+    'sel.appendChild(o);});',
+    'sel.addEventListener("change",function(){go(sel.value);});}',
+
     // Landing page when the file holds more than one wiki. Picking one of them
     // to open on is a guess, and the reader is the only one who knows.
     'function showPicker(){',
@@ -231,18 +256,28 @@
     'clearFooter();',
     'var sc=document.querySelector(".wy-nav-content-wrap");if(sc)sc.scrollTop=0;}',
 
+    // A page is stored inside an inert <script> block, so any <script> of its
+    // own had to be escaped on the way in or the block would have ended at the
+    // first one. Undo that on the way out. Left escaped, the browser reads
+    // <\/script> as ordinary text, which never closes the script element it
+    // opened, and the whole rest of the page is swallowed into it. The
+    // parameter list is the page this bites: the version switcher's script
+    // sits a few lines below the heading, so everything under it disappeared.
+    'function unblock(s){return s.split("<\\\\/script>").join("<\\/script>");}',
+
     'function show(raw){',
     'var path=lookup(raw);',
     'if(path===undefined){return showMissing(raw);}',
     'var i=byPath[path];',
     'miss.style.display="none";',
     'var el=document.getElementById("p"+i);if(!el)return;',
-    'doc.innerHTML=el.textContent;',
+    'doc.innerHTML=unblock(el.textContent);',
     // Images are stored once and referenced by id; attach them only
     // for the page being shown, so nothing else decodes.
     '[].forEach.call(doc.querySelectorAll("[data-ap-img]"),function(im){',
     'var b=document.getElementById("i"+im.getAttribute("data-ap-img"));',
     'if(b)im.src=b.textContent;});',
+    'fillVersions(path);',
     'var sc=document.querySelector(".wy-nav-content-wrap");if(sc)sc.scrollTop=0;',
     // The page's own <h1> follows, so name the wiki rather than repeat it.
     'var wid=D.pages[i].p.split("/")[1]||"";',
@@ -866,6 +901,78 @@
     return { html: html, order: order };
   }
 
+  /* -------------------------------------- versioned parameter pages */
+
+  /*
+   * How much of the parameter list's history an offline copy carries.
+   *
+   * update.py --paramversioning publishes one page per release, back to 3.x:
+   * about forty per vehicle. One of them is 5.8 MB and around 215,000
+   * elements, so the whole history is several hundred megabytes per vehicle,
+   * and it is history nobody reads offline. Carry the newest few instead.
+   *
+   * Two numbers rather than one, because "release" is ambiguous: 4.7 is a
+   * release and so is 4.7.3. SERIES counts major.minor lines, PER_SERIES how
+   * many releases within each line. Three lines, newest release of each, is
+   * three pages per vehicle. Raising PER_SERIES is what puts a whole line in.
+   */
+  var PARAM_SERIES = 3;
+  var PARAM_PER_SERIES = 1;
+
+  // /rover/docs/parameters-Rover-stable-V4.7.0. The plain /rover/docs/
+  // parameters is the latest, carries no version of its own, and is always
+  // kept - which is also how the site behaves: it is not in the switcher.
+  var PARAM_PAGE = /^\/([^/]+)\/docs\/parameters-([^/]+)$/;
+
+  /**
+   * Which versioned parameter pages the file carries, and what the switcher
+   * offers on each wiki.
+   *
+   * Labels are rebuilt from the filenames rather than read from the wiki's
+   * parameters-<Vehicle>.json, which is not in the export: that is a .json,
+   * and the export carries pages, stylesheets and images. Rebuilding them also
+   * keeps the list honest, because it can only name pages that are here.
+   */
+  function parameterVersions(paths) {
+    var found = {}, byWiki = {}, drop = {};
+
+    paths.forEach(function (p) {
+      var m = PARAM_PAGE.exec(p);
+      if (!m) { return; }
+      var v = /V(\d+)\.(\d+)\.(\d+)/.exec(m[2]);
+      if (!v) { return; }
+      if (!found[m[1]]) { found[m[1]] = []; }
+      found[m[1]].push({
+        p: p,
+        // "parameters-Rover-stable-V4.7.0" -> "Rover stable V4.7.0", which is
+        // exactly what the site's own switcher shows.
+        n: m[2].split('-').join(' '),
+        s: v[1] + '.' + v[2],
+        v: [+v[1], +v[2], +v[3]]
+      });
+    });
+
+    Object.keys(found).forEach(function (w) {
+      var list = found[w].sort(function (a, b) {
+        return b.v[0] - a.v[0] || b.v[1] - a.v[1] || b.v[2] - a.v[2];
+      });
+      var series = [], perSeries = {}, kept = [];
+      list.forEach(function (e) {
+        if (series.indexOf(e.s) === -1) {
+          if (series.length >= PARAM_SERIES) { drop[e.p] = 1; return; }
+          series.push(e.s);
+          perSeries[e.s] = 0;
+        }
+        if (perSeries[e.s] >= PARAM_PER_SERIES) { drop[e.p] = 1; return; }
+        perSeries[e.s]++;
+        kept.push({ n: e.n, p: e.p });
+      });
+      if (kept.length) { byWiki[w] = kept; }
+    });
+
+    return { byWiki: byWiki, drop: drop };
+  }
+
   /* -------------------------------------------------------- the front page */
 
   // Listing order for the picker, most recognisable first. Anything else
@@ -983,6 +1090,7 @@
     addNav: addNav,
     buildNav: buildNav,
     navNodes: navNodes,
+    parameterVersions: parameterVersions,
     wikiHomes: wikiHomes,
     resolvePath: resolvePath,
     SHELL_CSS: SHELL_CSS,
