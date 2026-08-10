@@ -1,0 +1,80 @@
+#!/bin/bash
+#
+# Push a locally built wiki to a mirror.
+#
+#   scripts/deploy_mirror.sh root@203.0.113.10
+#
+# Build first, in place, with the archives:
+#
+#   ARDUPILOT_OFFLINE_BASE=https://your.host/offline \
+#     python3 update.py --fast --cached-parameter-files --offline
+#
+# WHY THIS EXISTS RATHER THAN --destdir
+#
+# update.py --destdir is how production deploys: the build server writes
+# straight into the web root. That is the right thing on a machine that builds.
+# It is wrong here for two reasons. It MOVES <wiki>/build/html rather than
+# copying, so it destroys the local build output and leaves the tests with
+# nothing to run against. And a mirror may not be the machine that builds:
+# Sphinx across eleven wikis wants several GB of RAM, which a small droplet
+# does not have.
+#
+# So: build locally, ship the result. The tree that lands is identical to what
+# --destdir would have written.
+#
+# TODO(mirror): unnecessary once the mirror builds from cron like production.
+
+set -euo pipefail
+
+TARGET="${1:-}"
+if [ -z "$TARGET" ]; then
+    echo "usage: $0 user@host [webroot]" >&2
+    exit 1
+fi
+WEBROOT="${2:-/var/sites/wiki/web}"
+
+WIKIS="copter plane rover sub blimp dev antennatracker planner planner2 ardupilot mavproxy"
+
+for w in $WIKIS; do
+    if [ ! -d "$w/build/html" ]; then
+        echo "missing $w/build/html - build before deploying" >&2
+        exit 1
+    fi
+done
+if [ ! -f offline/offline-manifest.json ]; then
+    echo "no offline/offline-manifest.json - build with --offline" >&2
+    exit 1
+fi
+
+echo "deploying to $TARGET:$WEBROOT"
+
+for w in $WIKIS; do
+    printf '  %-16s' "$w"
+    rsync -az --delete "$w/build/html/" "$TARGET:$WEBROOT/$w/"
+    echo ok
+done
+
+printf '  %-16s' offline
+rsync -az --delete offline/ "$TARGET:$WEBROOT/offline/"
+echo ok
+
+# The frontend goes to the ROOT, not to a frontend/ subdirectory.
+#
+# This is not cosmetic. A service worker's scope is its own directory, so a
+# worker served from /frontend/sw.js registers cleanly, reports no error, and
+# controls no wiki page at all. Verified against production: ardupilot.org/
+# serves the frontend's own index and /frontend/ is a 404.
+#
+# No --delete here, or it would erase the wiki directories just uploaded.
+printf '  %-16s' 'frontend (root)'
+rsync -az frontend/ "$TARGET:$WEBROOT/"
+echo ok
+
+echo
+echo "verifying, on the server:"
+ssh "$TARGET" "
+    echo -n '  wikis present:   '; ls $WEBROOT | grep -cE '^(copter|plane|rover|sub|blimp|dev|antennatracker|planner|planner2|ardupilot|mavproxy)\$'
+    echo -n '  archives:        '; ls $WEBROOT/offline/*.tar.gz 2>/dev/null | wc -l
+    echo -n '  worker at root:  '; [ -f $WEBROOT/sw.js ] && echo yes || echo 'NO - scope will not cover the wikis'
+    echo -n '  frontend index:  '; [ -f $WEBROOT/index.html ] && echo yes || echo NO
+"
