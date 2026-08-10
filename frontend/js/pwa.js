@@ -267,16 +267,20 @@
 
 
 /*
- * Fetch a page when the reader looks like they are about to open it.
+ * Fetch what this page links to, so the next click is already here.
  *
- * A hover, or a touch starting, is roughly 100-300ms of warning before the
- * click. That is enough to have the page in cache by the time the navigation
- * begins, which is the difference between a wiki that feels quick and one that
- * feels instant.
+ * One layer only: the pages this page links to, never the pages those link to.
+ * A reader spends a few seconds on any page, which is ample time to have its
+ * neighbours ready.
  *
- * Deliberately modest: same-origin wiki pages only, one in flight at a time,
- * each URL at most once, and nothing at all when the reader has asked to save
- * data or is on a connection where speculative traffic would be rude.
+ * Bounded three ways, because speculative work stops being free otherwise:
+ *
+ *   by count  a page listing every supported board links to hundreds. Fetching
+ *             all of them to guess at one is not a trade worth making, so past
+ *             a threshold we fetch nothing and fall back to hover.
+ *   by size   the generated reference pages reach 5.8MB and 215,470 elements.
+ *   by pace   one at a time, at low priority, started only once the page the
+ *             reader actually asked for has finished loading.
  */
 (function () {
   'use strict';
@@ -286,48 +290,86 @@
     return;
   }
 
+  var MAX_LINKS = 30;
+  var MAX_BYTES = 2 * 1024 * 1024;
   var asked = new Set();
-  var inFlight = 0;
-  var timer = null;
+  var queue = [];
+  var running = false;
 
-  function worthPrefetching(a) {
+  function candidate(a) {
     if (!a || !a.href || a.target === '_blank') { return null; }
     var u;
     try { u = new URL(a.href); } catch (e) { return null; }
     if (u.origin !== location.origin) { return null; }
-    if (u.pathname === location.pathname) { return null; }
     if (!/\.html?$|\/$/.test(u.pathname)) { return null; }
     u.hash = '';
-    if (asked.has(u.href)) { return null; }
+    if (u.pathname === location.pathname || asked.has(u.href)) { return null; }
     return u.href;
   }
 
-  function prefetch(href) {
-    if (inFlight >= 1) { return; }
-    asked.add(href);
-    inFlight++;
-    // Low priority so it can never compete with what the reader asked for.
-    fetch(href, { credentials: 'same-origin', priority: 'low' })
+  function pump() {
+    if (running || !queue.length) { return; }
+    running = true;
+    var href = queue.shift();
+    fetch(href, { method: 'HEAD', credentials: 'same-origin' })
+      .then(function (head) {
+        var size = Number(head.headers.get('content-length') || 0);
+        if (size > MAX_BYTES) { return null; }
+        return fetch(href, { credentials: 'same-origin', priority: 'low' });
+      })
       .catch(function () { /* a speculative miss costs nothing */ })
-      .then(function () { inFlight--; });
+      .then(function () { running = false; pump(); });
   }
 
-  document.addEventListener('mouseover', function (e) {
-    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
-    var href = worthPrefetching(a);
-    if (!href) { return; }
-    clearTimeout(timer);
-    // A pointer crossing a link on its way elsewhere is not intent.
-    timer = setTimeout(function () { prefetch(href); }, 120);
-  }, { passive: true });
+  function enqueue(hrefs) {
+    hrefs.forEach(function (h) { asked.add(h); queue.push(h); });
+    pump();
+  }
 
-  document.addEventListener('mouseout', function () { clearTimeout(timer); },
-                            { passive: true });
+  function start() {
+    // The article, not the whole document: the sidebar lists the entire wiki,
+    // and its links are navigation rather than a signal about this page.
+    var root = document.querySelector('[itemprop="articleBody"]') ||
+               document.querySelector('.rst-content') || document.body;
+    var links = [].slice.call(root.querySelectorAll('a[href]'))
+                  .map(candidate).filter(Boolean);
+    var unique = [];
+    links.forEach(function (h) { if (unique.indexOf(h) === -1) { unique.push(h); } });
 
-  // Touch has no hover, so the touch itself is the signal.
-  document.addEventListener('touchstart', function (e) {
-    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
-    var href = worthPrefetching(a);
-    if (href) { prefetch(href); }
-  }, { passive: true });
+    if (unique.length && unique.length <= MAX_LINKS) {
+      enqueue(unique);
+      return;                       // hover would be redundant
+    }
+    // Too many to fetch blind, so wait for a sign of intent instead.
+    hoverFallback();
+  }
+
+  function hoverFallback() {
+    var timer = null;
+    document.addEventListener('mouseover', function (e) {
+      var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+      var href = candidate(a);
+      if (!href) { return; }
+      clearTimeout(timer);
+      timer = setTimeout(function () { enqueue([href]); }, 120);
+    }, { passive: true });
+    document.addEventListener('mouseout', function () { clearTimeout(timer); },
+                              { passive: true });
+    document.addEventListener('touchstart', function (e) {
+      var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+      var href = candidate(a);
+      if (href) { enqueue([href]); }
+    }, { passive: true });
+  }
+
+  // Never compete with the page the reader actually asked for.
+  function whenIdle() {
+    if (window.requestIdleCallback) {
+      requestIdleCallback(start, { timeout: 3000 });
+    } else {
+      setTimeout(start, 1200);
+    }
+  }
+  if (document.readyState === 'complete') { whenIdle(); }
+  else { window.addEventListener('load', whenIdle); }
 })();
