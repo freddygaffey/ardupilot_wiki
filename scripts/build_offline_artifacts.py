@@ -186,7 +186,7 @@ def video_card(vid: str, wiki: str, has_thumb: bool) -> str:
     """
     link = f"https://www.youtube.com/watch?v={vid}"
     label = ("&#9654; Watch on YouTube "
-             "<span style=\"opacity:.8\">(needs a connection)</span>")
+             '<span style="opacity:.8">(needs a connection)</span>')
 
     # The placeholder is always present, underneath, and the still is laid over
     # it. A card with no still shows it directly; a card whose still fails to
