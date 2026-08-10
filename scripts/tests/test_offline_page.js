@@ -64,12 +64,15 @@ function makeCaches() {
 }
 
 /**
- * A real gzipped tar, so the download path runs to completion rather than
+ * A real tar, NOT gzipped: the archive is served as a content coding now,
+ * so the browser decompresses before the client sees a byte. Feeding gzip
+ * here would test a pipeline that no longer exists. The download path runs
+ * to completion rather than
  * stopping at the fetch. Without this the completion marker is never written
  * and the freshness contract - download, record the build, compare it on the
  * next check - cannot be tested at all.
  */
-function tarGz(files) {
+function tarBytes(files) {
   const zlib = require('zlib');
   const blocks = [];
   for (const [name, body] of Object.entries(files)) {
@@ -90,7 +93,7 @@ function tarGz(files) {
                 Buffer.alloc((512 - (data.length % 512)) % 512));
   }
   blocks.push(Buffer.alloc(1024));             // end of archive
-  return zlib.gzipSync(Buffer.concat(blocks));
+  return Buffer.concat(blocks);
 }
 
 function streamOf(buf) {
@@ -146,7 +149,7 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
     Response: FakeResponse,
     Request: class { constructor(u) { this.url = u; } },
     AbortController: w.AbortController,
-    TransformStream, DecompressionStream, ReadableStream, Uint8Array,
+    TransformStream, ReadableStream, Uint8Array,
     fetch: (u, o) => {
       fetchCalls.push(String(u));
       fetchOpts.push({ url: String(u), opts: o || {} });
@@ -157,7 +160,7 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
       }
       if (archives) {
         // A real archive, so the unpack runs and the marker gets written.
-        return Promise.resolve({ ok: true, body: streamOf(tarGz(archives)) });
+        return Promise.resolve({ ok: true, body: streamOf(tarBytes(archives)) });
       }
       return Promise.reject(new Error('archive fetch blocked by harness'));
     }
@@ -184,11 +187,11 @@ const MANIFEST = {
   generated: '2026-08-09T00:00:00Z',
   artifact_base: 'https://cdn.example.test',
   common: { id: 'common', name: 'Common (required)', mb: 400, pages: 0, required: true,
-            archive: 'common-offline.tar.gz' },
+            archive: 'common-offline.tar' },
   wikis: [
-    { id: 'copter', name: 'Copter', mb: 74, pages: 846, archive: 'copter-offline.tar.gz' },
-    { id: 'rover', name: 'Rover', mb: 32, pages: 747, archive: 'rover-offline.tar.gz' },
-    { id: 'dev', name: 'Developer', mb: 52, pages: 312, archive: 'dev-offline.tar.gz' }
+    { id: 'copter', name: 'Copter', mb: 74, pages: 846, archive: 'copter-offline.tar' },
+    { id: 'rover', name: 'Rover', mb: 32, pages: 747, archive: 'rover-offline.tar' },
+    { id: 'dev', name: 'Developer', mb: 52, pages: 312, archive: 'dev-offline.tar' }
   ]
 };
 
@@ -317,7 +320,7 @@ async function main() {
     await settle();
     $(doc, 'check-btn').click();
     await settle(); await settle();
-    const archive = fetchCalls.filter(u => u.indexOf('.tar.gz') !== -1);
+    const archive = fetchCalls.filter(u => u.indexOf('.tar') !== -1);
     check('update check re-fetches the stale wiki', archive.some(u => u.indexOf('copter') !== -1),
           JSON.stringify(archive));
     check('update check does not re-fetch a current wiki',
@@ -342,7 +345,7 @@ async function main() {
           ($(doc, 'check-result').textContent || '').toLowerCase().includes('up to date'),
           JSON.stringify($(doc, 'check-result').textContent));
     check('up to date downloads nothing',
-          !fetchCalls.some(u => u.indexOf('.tar.gz') !== -1));
+          !fetchCalls.some(u => u.indexOf('.tar') !== -1));
   }
 
   console.log('\nremove all');
@@ -383,7 +386,7 @@ async function main() {
     $(doc, 'download-cache-btn').click();
     await settle(); await settle();
     check('falls back to <id>-offline.tar.gz when the manifest omits a filename',
-          fetchCalls.some(u => u.indexOf('copter-offline.tar.gz') !== -1),
+          fetchCalls.some(u => u.indexOf('copter-offline.tar') !== -1),
           JSON.stringify(fetchCalls.filter(u => u.indexOf('tar.gz') !== -1)));
   }
   {
@@ -413,7 +416,7 @@ async function main() {
     $(doc, 'check-btn').click();
     await settle(); await settle();
     check('a marker with no id is still updated, using the cache name',
-          fetchCalls.some(u => u.indexOf('copter-offline.tar.gz') !== -1),
+          fetchCalls.some(u => u.indexOf('copter-offline.tar') !== -1),
           JSON.stringify(fetchCalls.filter(u => u.indexOf('tar.gz') !== -1)));
     check('and it is not reported as up to date',
           !($(doc, 'check-result').textContent || '').toLowerCase().includes('up to date'),
@@ -443,7 +446,7 @@ async function main() {
     await settle();
     $(doc, 'download-cache-btn').click();
     for (let i = 0; i < 12; i++) { await settle(); }
-    const arch = fetchCalls.filter(u => u.indexOf('.tar.gz') !== -1);
+    const arch = fetchCalls.filter(u => u.indexOf('.tar') !== -1);
     check('every archive in the queue is tagged, not just the first',
           arch.length > 1 && arch.every(u => u.indexOf('?v=') !== -1),
           arch.length + ' archives');
@@ -464,14 +467,14 @@ async function main() {
     $(a.doc, 'select-all').click(); await settle();
     $(a.doc, 'download-cache-btn').click();
     for (let i = 0; i < 12; i++) { await settle(); }
-    const oldTags = a.fetchCalls.filter(u => u.indexOf('.tar.gz') !== -1);
+    const oldTags = a.fetchCalls.filter(u => u.indexOf('.tar') !== -1);
 
     const b = load({ manifest: MANIFEST, archives: { 'x/index.html': '<html>' } });
     await settle();
     $(b.doc, 'select-all').click(); await settle();
     $(b.doc, 'download-cache-btn').click();
     for (let i = 0; i < 12; i++) { await settle(); }
-    const newTags = b.fetchCalls.filter(u => u.indexOf('.tar.gz') !== -1);
+    const newTags = b.fetchCalls.filter(u => u.indexOf('.tar') !== -1);
 
     check('a different build produces a different URL',
           oldTags.length && newTags.length && oldTags[0] !== newTags[0],
@@ -491,7 +494,7 @@ async function main() {
     await settle();
     $(doc, 'download-cache-btn').click();
     for (let i = 0; i < 12; i++) { await settle(); }
-    const arch = fetchCalls.filter(u => u.indexOf('.tar.gz') !== -1);
+    const arch = fetchCalls.filter(u => u.indexOf('.tar') !== -1);
     check('no build id means an untagged URL, never ?v=undefined',
           arch.length && arch.every(u => u.indexOf('undefined') === -1 &&
                                           u.indexOf('?v=') === -1),
@@ -528,7 +531,7 @@ async function main() {
           ($(same.doc, 'check-result').textContent || '').toLowerCase().includes('up to date'),
           JSON.stringify($(same.doc, 'check-result').textContent));
     check('and downloads nothing',
-          !same.fetchCalls.some(u => u.indexOf('.tar.gz') !== -1));
+          !same.fetchCalls.some(u => u.indexOf('.tar') !== -1));
 
     // A newer build: the wiki is stale and must be re-fetched with the new tag.
     const newer = JSON.parse(JSON.stringify(MANIFEST));
@@ -538,7 +541,7 @@ async function main() {
     await settle();
     $(next.doc, 'check-btn').click();
     for (let i = 0; i < 15; i++) { await settle(); }
-    const arch = next.fetchCalls.filter(u => u.indexOf('.tar.gz') !== -1);
+    const arch = next.fetchCalls.filter(u => u.indexOf('.tar') !== -1);
     check('a newer build makes the stored copy stale',
           arch.length > 0, JSON.stringify(arch));
     check('the refetch carries the new build tag, not the stored one',
