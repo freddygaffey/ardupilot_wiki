@@ -123,6 +123,47 @@ function loadWiki(wiki, limit) {
   return { pages, images, css };
 }
 
+/*
+ * The versioned parameter pages, which no build here has.
+ *
+ * update.py produces them only with --paramversioning; without it the build
+ * calls cleanup_versioned_parameters(), which deletes them, and every build so
+ * far has used --cached-parameter-files. So there is nothing on disk to load
+ * and the shape has to be written out: the markup is the site's, copied from
+ * ardupilot.org/rover/docs/parameters-Rover-stable-V4.7.0.html, down to the
+ * script that fetches a JSON list the export cannot carry.
+ */
+function paramPageHtml(vehicle, label) {
+  return '<!DOCTYPE html><html><head><title>Complete Parameter List &mdash; ' +
+    vehicle + ' documentation</title></head><body>' +
+    '<div itemprop="articleBody">' +
+    '<section id="complete-parameter-list"><h1>Complete Parameter List</h1>' +
+    '<h2>Full Parameter List of ' + label + '</h2>' +
+    '<p>You can change and check the parameters for another version:\n' +
+    '  <select class="selectpicker" id="selectPicker"></select>\n</p>\n' +
+    '<script type="text/javascript">\n' +
+    'document.addEventListener("DOMContentLoaded", function() {\n' +
+    '  fetch("../_static/parameters-' + vehicle + '.json")\n' +
+    '    .then(function(r) { return r.json(); }).then(appendToSelect);\n' +
+    '});\n</script>\n' +
+    '<p>This is a complete list of the parameters.</p>' +
+    '</section></div><footer>x</footer></body></html>';
+}
+
+/** Put a set of versioned parameter pages in a wiki's cache. */
+function loadParameterVersions(wiki, vehicle, versions) {
+  const cache = caches._all.get('ardupilot-offline-' + wiki);
+  const made = [];
+  for (const v of versions) {
+    const label = vehicle + ' stable ' + v;
+    const rel = '/' + wiki + '/docs/parameters-' + vehicle + '-stable-' + v + '.html';
+    cache.put(rel, new FakeResponse(Buffer.from(paramPageHtml(vehicle, label))));
+    made.push({ path: rel.replace(/\.html$/, ''), label,
+                body: paramPageHtml(vehicle, label) });
+  }
+  return made;
+}
+
 /* --------------------------------------------------------- module load ---- */
 
 function loadExporter() {
@@ -286,14 +327,16 @@ function shellSource() {
  * document - but the routing payload, the sidebar HTML and the reading order
  * are the genuine article, straight out of the exported file.
  */
-function bootShell(D) {
+function bootShell(D, bodies) {
   let JSDOM;
   try { ({ JSDOM } = require('jsdom')); } catch (e) { return null; }
   const src = shellSource();
   if (!src) { return null; }
 
   const blocks = D.pages.map((p, i) =>
-    '<script type="text/plain" id="p' + i + '">' + p.p + '</script>').join('');
+    '<script type="text/plain" id="p' + i + '">' +
+    ((bodies && bodies[p.p]) || p.p).split('</script>').join('<\\/script>') +
+    '</script>').join('');
   const dom = new JSDOM(
     '<!DOCTYPE html><html><body class="wy-body-for-nav">' +
     '<div class="wy-menu wy-menu-vertical" id="ap-nav"></div>' +
@@ -351,6 +394,22 @@ async function main() {
     const r = loadWiki(w, cap);
     totals.pages += r.pages; totals.images += r.images; totals.css += r.css;
   }
+  // Six releases across four major lines, so the window can be seen to bite at
+  // both ends: a line beyond the newest three, and an older patch inside a
+  // line that is kept. PARAM_SERIES x PARAM_PER_SERIES in
+  // common_offline_document.js decides which three survive.
+  const PARAM_KEPT = ['V4.7.1', 'V4.6.0', 'V4.5.2'];
+  const PARAM_DROPPED = ['V4.7.0', 'V4.4.0', 'V4.3.0'];
+  const paramWiki = wikis.includes('rover') ? 'rover' : wikis[0];
+  const paramVehicle = paramWiki.charAt(0).toUpperCase() + paramWiki.slice(1);
+  const paramPages = loadParameterVersions(
+    paramWiki, paramVehicle, PARAM_KEPT.concat(PARAM_DROPPED));
+  // Only the kept ones are expected in the file, so the page count asserts the
+  // window on its own.
+  totals.pages += PARAM_KEPT.length;
+  const paramBodies = {};
+  paramPages.forEach((p) => { paramBodies[p.path] = p.body; });
+
   const loaded = totals;
   console.log('\ncache: ' + loaded.pages + ' pages, ' + loaded.images +
               ' shared images, ' + loaded.css + ' stylesheets' +
@@ -376,7 +435,10 @@ async function main() {
       // written once is a backslash the built file never sees. This one turned
       // /\s+/ into /s+/ and stripped every letter "s" out of search snippets,
       // which reads as bad data rather than as a broken regex.
-      '.replace(/\\s+/g," ")']);
+      '.replace(/\\s+/g," ")',
+      // The theme's own element, carried through as markup rather than
+      // rebuilt, so the switcher is the site's switcher.
+      'id="selectPicker"']);
 
   const html = { includes: (s) => scan.found[s] };
   const imgBlocks = scan.counts[0];
@@ -439,6 +501,32 @@ async function main() {
           cap === Infinity ? '' : '(not checked: page cap in effect)');
     check('image index built', Object.keys(D.imgs || {}).length > 0,
           Object.keys(D.imgs || {}).length + ' image paths');
+
+    /*
+     * The parameter list is published once per release, back to 3.x. One of
+     * those pages is 5.8 MB and about 215,000 elements, so the whole history
+     * is several hundred megabytes per vehicle. The export carries a window of
+     * it and the switcher offers exactly that window - a list naming versions
+     * the file does not hold is a list of ways to reach "not in this copy".
+     */
+    const offered = (D.params || {})[paramWiki] || [];
+    const want = PARAM_KEPT.map((v) =>
+      '/' + paramWiki + '/docs/parameters-' + paramVehicle + '-stable-' + v);
+    check('the switcher offers one release per major line, newest first',
+          offered.map((v) => v.p).join() === want.join(),
+          offered.map((v) => v.p).join(' ') || 'none');
+    check('the labels are the ones the site shows',
+          offered.length > 0 &&
+          offered[0].n === paramVehicle + ' stable ' + PARAM_KEPT[0],
+          offered.length ? offered[0].n : 'none');
+    const carried = new Set(D.pages.map((p) => p.p));
+    check('versions outside the window are not carried at all',
+          PARAM_DROPPED.every((v) => !carried.has(
+            '/' + paramWiki + '/docs/parameters-' + paramVehicle +
+            '-stable-' + v)),
+          PARAM_DROPPED.join(' '));
+    check('versions inside it are',
+          want.every((p) => carried.has(p)));
   }
 
   // Downloaded archives are the shape this test cannot reach from build/html:
@@ -545,7 +633,7 @@ async function main() {
       if (!seen.has(p)) { seen.add(p); rendered.push(p); }
     });
     const missing = rendered.filter((p) => order.indexOf(p) === -1 &&
-                                           p.split('/')[1] === wikis[0]);
+                                           p.split('/')[1] === D.wikis[0]);
     check('every page the sidebar lists is in the reading order',
           missing.length === 0,
           missing.length ? missing.slice(0, 3).join('  ')
@@ -580,7 +668,7 @@ async function main() {
 
   /* ------------------------------------------- the shell, driven in a DOM -- */
 
-  const win = D ? bootShell(D) : null;
+  const win = D ? bootShell(D, paramBodies) : null;
   if (D && win === null) {
     console.log('  SKIP  shell behaviour: jsdom is not installed');
   }
@@ -588,6 +676,10 @@ async function main() {
     const doc = win.document;
     const nav = doc.getElementById('ap-nav');
     const inFile = new Set(D.pages.map((p) => p.p));
+    // The export's own wiki order, not the order they were asked for: the
+    // first section of the sidebar is the one with a wiki after it, which is
+    // where the reading order has to stop.
+    const wiki0 = D.wikis[0];
 
     // Sidebar anchors in the order the tree renders them, which is the order a
     // reader walking the sidebar top to bottom would meet the pages. Derived
@@ -597,7 +689,7 @@ async function main() {
     const seenA = new Set();
     [].forEach.call(nav.querySelectorAll('a[href^="#/"]'), (a) => {
       const p = a.getAttribute('href').slice(1);
-      if (p.split('/')[1] !== wikis[0] || seenA.has(p)) { return; }
+      if (p.split('/')[1] !== wiki0 || seenA.has(p)) { return; }
       seenA.add(p);
       walk.push(p);
     });
@@ -632,8 +724,15 @@ async function main() {
             !!prev && prev.getAttribute('href') === '#' + reachable[at - 1],
             (prev ? prev.getAttribute('href') : 'none') +
             ' wanted #' + reachable[at - 1]);
-      check('the buttons stay inside one wiki',
-            !!next && next.getAttribute('href').split('/')[1] === wikis[0]);
+      // The live wiki stops at its own last page rather than handing the
+      // reader to a different vehicle, and so does this.
+      if (wikis.length > 1) {
+        shellGo(win, reachable[reachable.length - 1]);
+        check('the last page of a wiki offers no next',
+              !doc.getElementById('ap-foot').querySelector('a[rel="next"]'),
+              reachable[reachable.length - 1]);
+        shellGo(win, target);
+      }
 
       // The theme drives the whole tree off one class: an <li> is open when it
       // carries "current", and theme.css hides every other list.
@@ -663,18 +762,63 @@ async function main() {
       if (shut.length) {
         const li = shut[0];
         const btn = li.querySelector('button.toctree-expand');
-        const before = win.location.hash;
-        btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+        const ev = new win.MouseEvent('click',
+                                      { bubbles: true, cancelable: true });
+        btn.dispatchEvent(ev);
         check('clicking the arrow opens that branch',
               li.classList.contains('current'));
-        // The arrow lives inside the anchor, exactly as the theme puts it, so
-        // without the handler it navigates instead of opening.
-        check('opening a branch does not navigate away',
-              win.location.hash === before,
-              win.location.hash + ' was ' + before);
-        btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+        // The arrow sits inside the anchor, exactly as the theme puts it, so
+        // unless the click is cancelled the browser follows the link and the
+        // reader is taken to the branch instead of shown it.
+        check('opening a branch does not navigate away', ev.defaultPrevented);
+        btn.dispatchEvent(new win.MouseEvent('click',
+                                             { bubbles: true, cancelable: true }));
         check('clicking it again closes the branch',
               !li.classList.contains('current'));
+      }
+    }
+
+    /* --------------------------------------- the parameter version switcher */
+
+    const versions = (D.params || {})[paramWiki] || [];
+    if (versions.length > 1) {
+      shellGo(win, versions[1].p);
+      const sel = doc.querySelector('#selectPicker');
+      check('the version switcher is filled in', !!sel && sel.options.length ===
+            versions.length,
+            sel ? sel.options.length + ' options' : 'no select');
+      if (sel) {
+        check('the version being read is the one selected',
+              sel.value === versions[1].p, sel.value);
+        check('the options are labelled as the site labels them',
+              [].map.call(sel.options, (o) => o.textContent).join() ===
+              versions.map((v) => v.n).join(),
+              [].map.call(sel.options, (o) => o.textContent).join(' '));
+
+        // The page is stored inside an inert <script> block, so its own inline
+        // <script> is escaped going in. Left escaped coming out it never
+        // closes, and the browser swallows the rest of the page into it - on
+        // this page that is the entire parameter list, a few lines below the
+        // switcher.
+        check('the page below its own inline script survives',
+              doc.getElementById('ap-doc').textContent
+                 .indexOf('This is a complete list of the parameters.') !== -1,
+              doc.getElementById('ap-doc').textContent.length + ' chars');
+
+        sel.value = versions[0].p;
+        sel.dispatchEvent(new win.Event('change'));
+        check('choosing a version opens it',
+              win.location.hash === '#' + versions[0].p, win.location.hash);
+      }
+
+      // A wiki with nothing to switch to still has the theme's markup on the
+      // page, promising a choice in the sentence beside the empty control.
+      const bare = bootShell(Object.assign({}, D, { params: {} }), paramBodies);
+      if (bare) {
+        shellGo(bare, versions[1].p);
+        const box = bare.document.querySelector('#selectPicker').parentNode;
+        check('with no versions to offer, the switcher is taken away',
+              box.style.display === 'none', box.style.display || 'shown');
       }
     }
   }
