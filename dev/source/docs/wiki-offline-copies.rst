@@ -65,6 +65,7 @@ Measured on the same pages, none of them visited earlier in the session:
 Page HTML                          about 1,000 ms     13 to 19 ms
 Theme assets (jQuery, CSS, fonts)  fetched each time  1 to 2 ms
 Resources reaching the network     browser dependent  none of 21 to 26
+Bytes per page after the first     about 156 KB       about 25 KB
 The full parameter list (6.2 MB)   about 3,000 ms     served locally
 Reading with no connection         not applicable     unchanged
 =================================  =================  ==============
@@ -150,6 +151,13 @@ requests resolve directly: 84 ms against 1 ms.
 **Fingerprinted assets are cache-first.** Sphinx stamps them
 (``theme.css?v=5d32c60e``), so a stored copy can only be the copy that
 fingerprint names.
+
+The last of those is also why the wiki costs the server less to serve. Of the
+21 to 26 resources a page pulls, twelve are shared assets totalling 131 KB and
+are byte-identical on every page. Once held they are never requested again, so
+the second page and every page after it costs the HTML plus its own images: a
+median of 25 KB against about 156 KB. That applies to every reader from their
+second page onward, whether or not they ever save a wiki.
 
 Prefetching
 -----------

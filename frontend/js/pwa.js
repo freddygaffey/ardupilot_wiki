@@ -306,9 +306,9 @@
   // click. Past this, guess nothing: those pages are indexes, and a reader on
   // one is scanning rather than being led anywhere in particular.
   var MAX_TRACKED = 250;
-  var MAX_PER_PAGE = 8;              // total guesses allowed per page view
+  var MAX_PER_PAGE = 5;              // total guesses allowed per page view
   var MIN_GAP_MS = 400;              // never two in quick succession
-  var NEAR_PX = 90;                  // close enough to act on by itself
+  var NEAR_PX = 72;                  // close enough to act on by itself
   var LOOKAHEAD_MS = 250;            // how far ahead the path is projected
   var SLOW_PX_MS = 0.25;             // slower than this counts as arriving
 
@@ -452,9 +452,12 @@
       if (score > bestScore) { bestScore = score; best = item.href; }
     });
 
-    // Two weak signals, or one strong one. A single "it is nearby" is not
-    // enough, or every pointer resting on the page would fetch something.
-    if (best && bestScore >= 2) { prefetch(best); }
+    // Three points, so proximity alone is never enough and neither is
+    // proximity plus vague movement toward something. In practice this means
+    // the path lands on a link, or the pointer is slowing as it arrives at
+    // one. A page costs about 25 KB to guess at, and the reader asked for
+    // none of it, so the evidence should be good before spending it.
+    if (best && bestScore >= 3) { prefetch(best); }
   }
 
   document.addEventListener('mousemove', function (e) {
