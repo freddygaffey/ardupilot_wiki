@@ -70,7 +70,7 @@ def check_assets_follow_pages():
     different file, derive it: find every wiki that has the page, then require
     the assets beside it. If the page moves, this moves with it.
     """
-    ASSETS = ["offline.css", "offline-page.js", "offline-export.js"]
+    ASSETS = ["common_offline.css", "common_offline_page.js", "common_offline_export.js"]
     have_page, missing = [], []
 
     for wiki in WIKIS:
