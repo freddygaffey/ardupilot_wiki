@@ -82,6 +82,48 @@ self.addEventListener('install', (event) => {
   })());
 });
 
+/*
+ * Warm the theme's own assets after activation.
+ *
+ * Every page loads the same dozen files - jQuery, the theme script and
+ * stylesheet, the fonts - and they were fetched lazily, so the first page
+ * anyone opened paid for all of them and only the second was quick. They are
+ * small, shared by all 3,958 pages, and content-hashed, so fetching them once
+ * up front is cheap and never wrong.
+ *
+ * Failures are ignored one by one: a wiki the reader has never opened will
+ * 404 here, and that must not stop the rest.
+ */
+const WARM_PER_WIKI = [
+  '_static/css/theme.css',
+  '_static/js/theme.js',
+  '_static/jquery.js',
+  '_static/doctools.js',
+  '_static/sphinx_highlight.js',
+  '_static/common_theme_override.css',
+];
+
+async function warmTheme() {
+  const wikis = (await caches.keys())
+    .filter((n) => n.startsWith(OFFLINE_CACHE_PREFIX))
+    .map((n) => n.slice(OFFLINE_CACHE_PREFIX.length))
+    .filter((n) => n !== 'common');
+  if (!wikis.length) {
+    return;
+  }
+  const cache = await caches.open(STATIC_CACHE);
+  await Promise.all(wikis.flatMap((wiki) => WARM_PER_WIKI.map(async (rel) => {
+    const url = `/${wiki}/${rel}`;
+    if (await cache.match(url)) {
+      return;
+    }
+    const held = await heldOffline(new Request(url));
+    if (held) {
+      await cache.put(url, held.clone());
+    }
+  })));
+}
+
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
@@ -97,6 +139,8 @@ self.addEventListener('activate', (event) => {
         .map((name) => caches.delete(name))
     );
     await self.clients.claim();
+    // After claiming, so it never delays taking control.
+    await warmTheme().catch(() => undefined);
   })());
 });
 
@@ -451,6 +495,13 @@ async function cacheFirst(request, cacheName) {
   // downloaded wiki are both just places this might already be.
   const held = await heldOffline(request);
   if (held) {
+    // Promote it. Answering from a downloaded wiki means a shape lookup across
+    // caches on EVERY request, because nothing else ever fills this one:
+    // measured 84ms for jquery.js served that way against 2ms for a stylesheet
+    // already here. Under stale-while-revalidate the background fetch used to
+    // populate it, so switching to cache-first quietly removed the only thing
+    // that did.
+    await named.put(request, held.clone());
     return held;
   }
   try {

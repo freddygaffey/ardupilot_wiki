@@ -57,7 +57,18 @@ BASEURL = "https://firmware.ardupilot.org/"
 ALLVEHICLES = ["AntennaTracker", "Copter", "Plane", "Rover", "Sub", "Blimp"]
 VEHICLES = ALLVEHICLES
 # Filter out versions below this semantic version threshold.
-PARAM_PARSE_MINIMUM_VERSION = (3, 9, 0)
+#
+# Settable, because the count is a judgement rather than a constant: every
+# version kept is another copy of a parameter list that already runs to 5.8MB
+# and 215,470 DOM elements per vehicle, and readers overwhelmingly want the
+# last few releases. Default unchanged, so an ordinary build behaves exactly as
+# before.
+#
+#   ARDUPILOT_PARAM_MIN_VERSION=4.5.0 python3 build_parameters.py
+PARAM_PARSE_MINIMUM_VERSION = tuple(
+    int(part) for part in
+    os.environ.get("ARDUPILOT_PARAM_MIN_VERSION", "3.9.0").split(".")
+)
 
 BASEPATH = ""
 error_count = 0
