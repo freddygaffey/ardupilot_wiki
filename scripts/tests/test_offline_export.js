@@ -33,6 +33,9 @@ const ALL_WIKIS = ['copter', 'plane', 'rover', 'sub', 'blimp', 'dev',
                    'antennatracker', 'planner', 'planner2', 'ardupilot', 'mavproxy'];
 const OUT = '/tmp/ap-export-test';
 
+const EXPORTER = path.join(REPO, 'common/source/_static/common_offline_export.js');
+const DOCUMENT = path.join(REPO, 'common/source/_static/common_offline_document.js');
+
 let failures = 0;
 function check(name, ok, detail) {
   console.log((ok ? '  PASS  ' : '  FAIL  ') + name + (detail ? '   ' + detail : ''));
@@ -123,8 +126,9 @@ function loadWiki(wiki, limit) {
 /* --------------------------------------------------------- module load ---- */
 
 function loadExporter() {
-  const src = fs.readFileSync(
-    path.join(REPO, 'common/source/_static/common_offline_export.js'), 'utf8');
+  // Two files, in the order common-offline.rst loads them: the exporter reads
+  // the document module out of the global, so running it alone would throw.
+  const src = [DOCUMENT, EXPORTER].map((f) => fs.readFileSync(f, 'utf8')).join('\n');
   const sandbox = {
     caches,
     TextEncoder, TextDecoder, URL, btoa, console,
@@ -224,18 +228,16 @@ let stemWord = (w) => w, STOPWORDS = [];
   if (ctx.stopwords) { STOPWORDS = ctx.stopwords; }
 })();
 
-const EXPORTER = path.join(REPO, 'common/source/_static/common_offline_export.js');
-
 /**
- * Lift named functions out of the exporter and run them here.
+ * Lift named functions out of one of the shipped scripts and run them here.
  *
  * The alternative is a second copy of the logic in this file, and that is
  * precisely how a strict-AND search bug survived a passing test: the copy
  * carried the same defect, so the two agreed with each other and both were
  * wrong. Run the shipped code or do not claim to have tested it.
  */
-function liftFunctions(names) {
-  const src = fs.readFileSync(EXPORTER, 'utf8');
+function liftFunctions(names, file) {
+  const src = fs.readFileSync(file || EXPORTER, 'utf8');
   let out = '';
   for (const name of names) {
     const at = src.indexOf('function ' + name + '(');
@@ -263,15 +265,61 @@ function liftFunctions(names) {
  * source is recovered by evaluating the array and slicing out the search
  * block: the same text that ends up inside the .html a reader opens.
  */
-function liftSearch(fts) {
-  const src = fs.readFileSync(EXPORTER, 'utf8');
+function shellSource() {
+  const src = fs.readFileSync(DOCUMENT, 'utf8');
   const s = src.indexOf('var SHELL_JS = [');
   const e = src.indexOf("].join('')", s);
   if (s === -1 || e === -1) { return null; }
-  let shell;
   try {
-    shell = vm.runInNewContext(src.slice(src.indexOf('[', s), e + 1) + ".join('')");
+    return vm.runInNewContext(src.slice(src.indexOf('[', s), e + 1) + ".join('')");
   } catch (err) { return null; }
+}
+
+/**
+ * The whole shell, running in a DOM, over the payload the export just wrote.
+ *
+ * The sidebar and the footer buttons are behaviour, not markup: a tree that
+ * renders correctly and never opens, or buttons that render and point at the
+ * wrong page, both look perfect in the bytes. So drive the real script.
+ *
+ * The page blocks are stand-ins - the shell only reads their text into the
+ * document - but the routing payload, the sidebar HTML and the reading order
+ * are the genuine article, straight out of the exported file.
+ */
+function bootShell(D) {
+  let JSDOM;
+  try { ({ JSDOM } = require('jsdom')); } catch (e) { return null; }
+  const src = shellSource();
+  if (!src) { return null; }
+
+  const blocks = D.pages.map((p, i) =>
+    '<script type="text/plain" id="p' + i + '">' + p.p + '</script>').join('');
+  const dom = new JSDOM(
+    '<!DOCTYPE html><html><body class="wy-body-for-nav">' +
+    '<div class="wy-menu wy-menu-vertical" id="ap-nav"></div>' +
+    '<input id="ap-search">' +
+    '<section class="wy-nav-content-wrap">' +
+    '<div id="ap-miss"></div><div id="ap-crumb"></div>' +
+    '<div itemprop="articleBody" id="ap-doc"></div>' +
+    '<footer id="ap-foot"></footer></section>' + blocks +
+    '<script type="application/json" id="ap-index"></script></body></html>',
+    { url: 'https://example.org/', runScripts: 'outside-only' });
+
+  const win = dom.window;
+  win.document.getElementById('ap-index').textContent = JSON.stringify(D);
+  try { win.eval(src); } catch (e) { return null; }
+  return win;
+}
+
+/** Navigate the shell the way a click on an anchor would. */
+function shellGo(win, p) {
+  win.location.hash = '#' + p;
+  win.dispatchEvent(new win.Event('hashchange'));
+}
+
+function liftSearch(fts) {
+  const shell = shellSource();
+  if (shell === null) { return null; }
   const from = shell.indexOf('var SI=null;');
   const END = 'return out;}';
   const to = shell.indexOf(END, from);
@@ -323,7 +371,12 @@ async function main() {
   ], ['.wy-nav-content', 'wy-body-for-nav', 'toctree-l1', '#/' + wikis[0] + '/',
       '#ap-toast.on{display:flex}',
       'if(mapped===null){e.preventDefault();toast(a.href);return;}',
-      'go.target="_blank"']);
+      'go.target="_blank"',
+      // SHELL_JS is assembled from single-quoted literals, so a backslash
+      // written once is a backslash the built file never sees. This one turned
+      // /\s+/ into /s+/ and stripped every letter "s" out of search snippets,
+      // which reads as bad data rather than as a broken regex.
+      '.replace(/\\s+/g," ")']);
 
   const html = { includes: (s) => scan.found[s] };
   const imgBlocks = scan.counts[0];
@@ -349,6 +402,8 @@ async function main() {
   check('the toast is styled', html.includes('#ap-toast.on{display:flex}'));
   check('leaving anyway opens a new tab, keeping the offline copy loaded',
         html.includes('go.target="_blank"'));
+  check('a doubled backslash survives into the built file',
+        html.includes('.replace(/\\s+/g," ")'));
   check('path anchors', html.includes('#/' + wikis[0] + '/'));
   check('no unresolved relative image srcs', scan.counts[4] === 0,
         scan.counts[4] + ' left');
@@ -390,8 +445,10 @@ async function main() {
   // rewrite_site_links turns the About wiki's absolute cross-wiki links into
   // paths from the site root, and only an archive carries them. So drive the
   // exporter's own nav rewriting with that shape directly.
-  const navFns = liftFunctions(['innerOf', 'topLevelLists', 'extractNav']);
-  check('nav helpers lifted from the exporter', navFns !== null);
+  const navFns = liftFunctions(
+    ['resolvePath', 'innerOf', 'topLevelLists', 'textOf', 'navHref', 'prune',
+     'parseToc', 'navNodes', 'mergeToc'], DOCUMENT);
+  check('nav helpers lifted from the document module', navFns !== null);
   if (navFns) {
     const fixture =
       '<div class="wy-menu wy-menu-vertical"><ul>' +
@@ -400,17 +457,226 @@ async function main() {
       '<li><a href="/plane/docs/common-choosing-a-ground-station.html">GCSes</a></li>' +
       '<li><a href="https://cloud.ardupilot.org">Drone Engage</a></li>' +
       '</ul></div>';
-    const got = (navFns.extractNav(fixture, 'ardupilot').match(/href="([^"]+)"/g) || [])
-      .map((h) => h.slice(6, -1));
+    const nodes = navFns.navNodes(fixture, '/ardupilot/index.html');
+    const got = nodes.map((n) => n.href);
     check('a link relative to the wiki keeps its wiki',
-          got.indexOf('#/ardupilot/docs/common-team') !== -1, got.join('  '));
+          got.indexOf('/ardupilot/docs/common-team') !== -1, got.join('  '));
     check('a cross-wiki link from the site root is not prefixed again',
-          got.indexOf('#/copter/index') !== -1, got.join('  '));
+          got.indexOf('/copter/index') !== -1, got.join('  '));
     check('no anchor has an empty path segment',
-          !got.some((h) => h.indexOf('//') !== -1 && h.charAt(0) === '#'),
+          !nodes.some((n) => !n.external && n.href.indexOf('//') !== -1),
           got.join('  '));
     check('a link to another host is left alone',
           got.indexOf('https://cloud.ardupilot.org') !== -1, got.join('  '));
+
+    /*
+     * The theme is built with collapse_navigation on, so no single page holds
+     * the whole tree: each one expands only the branch it sits in. Reading one
+     * page - which is what the export used to do, and it chose the index page,
+     * the one page that expands nothing - yields a flat list. These two pages
+     * are what the theme really emits for two sides of the same tree.
+     */
+    const pageA =
+      '<div class="wy-menu wy-menu-vertical"><ul class="current">' +
+      '<li class="toctree-l1"><a href="common-autopilots.html">Autopilots</a></li>' +
+      '<li class="toctree-l1 current"><a href="additional-information.html">More</a>' +
+      '<ul class="current">' +
+      '<li class="toctree-l2"><a href="reference-frames.html">Frames</a></li>' +
+      '<li class="toctree-l2 current"><a class="current" href="#">Appendix</a>' +
+      '<ul><li class="toctree-l3"><a href="#a-heading">A heading</a></li></ul>' +
+      '</li></ul></li>' +
+      '<li class="toctree-l1"><a href="common-user-alerts.html">Alerts</a></li>' +
+      '</ul></div>';
+    const pageB =
+      '<div class="wy-menu wy-menu-vertical"><ul class="current">' +
+      '<li class="toctree-l1"><a href="common-autopilots.html">Autopilots</a></li>' +
+      '<li class="toctree-l1 current"><a href="additional-information.html">More</a>' +
+      '<ul class="current">' +
+      '<li class="toctree-l2 current"><a href="reference-frames.html">Frames</a>' +
+      '<ul class="current"><li class="toctree-l3 current">' +
+      '<a class="current" href="#">Body frame</a></li></ul></li>' +
+      '<li class="toctree-l2"><a href="common-appendix.html">Appendix</a></li>' +
+      '</ul></li>' +
+      '<li class="toctree-l1"><a href="common-user-alerts.html">Alerts</a></li>' +
+      '</ul></div>';
+
+    const one = navFns.navNodes(pageA, '/copter/docs/common-appendix.html');
+    check('a page sidebar parses as a tree, not a flat list',
+          one.length === 3 && one[1].children.length === 2,
+          one.length + ' top level, ' +
+          one.map((n) => n.children.length).join('/') + ' children');
+    check('headings inside the page being read are not toctree entries',
+          one[1].children[1].children.length === 0 &&
+          one[1].children[1].href === '/copter/docs/common-appendix',
+          JSON.stringify(one[1].children[1].href) + ', ' +
+          one[1].children[1].children.length + ' children');
+
+    const merged = [];
+    navFns.mergeToc(merged, one);
+    navFns.mergeToc(merged,
+      navFns.navNodes(pageB, '/copter/docs/reference-frames.html'));
+    const frames = merged[1].children[0];
+    check('a branch only another page expands survives the merge',
+          frames.href === '/copter/docs/reference-frames' &&
+          frames.children.length === 1 &&
+          frames.children[0].href === '/copter/docs/reference-frames',
+          frames.children.map((c) => c.href).join(' '));
+    check('merging two pages does not duplicate what both list',
+          merged.length === 3 && merged[1].children.length === 2,
+          merged.length + ' top level, ' +
+          merged[1].children.length + ' under the expanded one');
+  }
+
+  /*
+   * The sidebar and the reading order have to be one derivation. Built apart
+   * they drift, and "next" starts skipping pages the sidebar is showing. So
+   * assert they agree: every internal anchor the sidebar renders for a wiki is
+   * in that wiki's order, in the same sequence.
+   */
+  if (D) {
+    const order = D.order || [];
+    check('a reading order was published', order.length > 0,
+          order.length + ' pages');
+
+    const rendered = [];
+    const seen = new Set();
+    (D.nav.match(/href="#(\/[^"]+)"/g) || []).forEach((h) => {
+      const p = h.slice(7, -1);
+      if (!seen.has(p)) { seen.add(p); rendered.push(p); }
+    });
+    const missing = rendered.filter((p) => order.indexOf(p) === -1 &&
+                                           p.split('/')[1] === wikis[0]);
+    check('every page the sidebar lists is in the reading order',
+          missing.length === 0,
+          missing.length ? missing.slice(0, 3).join('  ')
+                         : rendered.length + ' sidebar anchors');
+
+    const inOrder = rendered.filter((p) => order.indexOf(p) !== -1)
+                            .map((p) => order.indexOf(p));
+    let sorted = true;
+    for (let i = 1; i < inOrder.length; i++) {
+      // Wikis follow one another in both, so the whole sequence is monotonic.
+      if (inOrder[i] < inOrder[i - 1]) { sorted = false; break; }
+    }
+    check('the reading order runs down the sidebar, not past it', sorted,
+          inOrder.length + ' compared');
+
+    // A flat list is what this used to render, and it is the failure that
+    // hides best: the sidebar still works, it just shows a tenth of the wiki.
+    const depth = (n) => (D.nav.match(
+      new RegExp('class="toctree-l' + n + '"', 'g')) || []).length;
+    check('the sidebar has nested levels, not one flat list',
+          depth(2) > 0, 'l1 ' + depth(1) + ', l2 ' + depth(2) +
+          ', l3 ' + depth(3));
+
+    // theme.js prepends this button to every sidebar link that has a list
+    // beside it. Without it a branch can be opened only by visiting a page
+    // inside it, which is the thing the reader cannot do yet.
+    const buttons = (D.nav.match(/<button class="toctree-expand"/g) || []).length;
+    const parents = (D.nav.match(/<\/a><ul>/g) || []).length;
+    check('every branch has the theme expand button', buttons === parents &&
+          buttons > 0, buttons + ' buttons for ' + parents + ' branches');
+  }
+
+  /* ------------------------------------------- the shell, driven in a DOM -- */
+
+  const win = D ? bootShell(D) : null;
+  if (D && win === null) {
+    console.log('  SKIP  shell behaviour: jsdom is not installed');
+  }
+  if (win) {
+    const doc = win.document;
+    const nav = doc.getElementById('ap-nav');
+    const inFile = new Set(D.pages.map((p) => p.p));
+
+    // Sidebar anchors in the order the tree renders them, which is the order a
+    // reader walking the sidebar top to bottom would meet the pages. Derived
+    // from the markup rather than from D.order, so the two are checked against
+    // each other rather than against themselves.
+    const walk = [];
+    const seenA = new Set();
+    [].forEach.call(nav.querySelectorAll('a[href^="#/"]'), (a) => {
+      const p = a.getAttribute('href').slice(1);
+      if (p.split('/')[1] !== wikis[0] || seenA.has(p)) { return; }
+      seenA.add(p);
+      walk.push(p);
+    });
+    const reachable = walk.filter((p) => inFile.has(p));
+
+    // A page with something on either side of it, so both buttons are due.
+    const at = reachable.findIndex((p, i) => i > 0 && i < reachable.length - 1);
+    const target = at === -1 ? null : reachable[at];
+    check('a page with neighbours to test against', target !== null,
+          reachable.length + ' of ' + walk.length + ' sidebar pages in the file');
+
+    if (target) {
+      shellGo(win, target);
+      const foot = doc.getElementById('ap-foot');
+      const next = foot.querySelector('a[rel="next"]');
+      const prev = foot.querySelector('a[rel="prev"]');
+
+      check('the page footer carries next and previous buttons',
+            !!next && !!prev,
+            (prev ? 'prev ' : '') + (next ? 'next' : '') || 'neither');
+      check('the buttons are the theme\'s own',
+            !!next && next.className === 'btn btn-neutral float-right' &&
+            !!prev && prev.className === 'btn btn-neutral float-left',
+            next ? next.className : '');
+      // The ordering bug this is here for: a "next" taken from the page list
+      // rather than the toctree skips whatever the sidebar shows in between.
+      check('next is the page the sidebar shows next',
+            !!next && next.getAttribute('href') === '#' + reachable[at + 1],
+            (next ? next.getAttribute('href') : 'none') +
+            ' wanted #' + reachable[at + 1]);
+      check('previous is the page the sidebar shows before',
+            !!prev && prev.getAttribute('href') === '#' + reachable[at - 1],
+            (prev ? prev.getAttribute('href') : 'none') +
+            ' wanted #' + reachable[at - 1]);
+      check('the buttons stay inside one wiki',
+            !!next && next.getAttribute('href').split('/')[1] === wikis[0]);
+
+      // The theme drives the whole tree off one class: an <li> is open when it
+      // carries "current", and theme.css hides every other list.
+      const here = [].slice.call(nav.querySelectorAll('a[href^="#/"]'))
+        .filter((a) => a.getAttribute('href') === '#' + target)[0];
+      check('the sidebar marks the page being read',
+            !!here && here.classList.contains('current'));
+      if (here) {
+        let li = here.parentNode, open = 0, all = 0;
+        while (li && li !== nav) {
+          if (li.tagName === 'LI') { all++; if (li.classList.contains('current')) { open++; } }
+          li = li.parentNode;
+        }
+        check('the branch down to it is open, not just the entry',
+              all > 0 && open === all, open + ' of ' + all + ' ancestors');
+      }
+
+      // Every other branch stays shut, which is the point of the dropdowns:
+      // several thousand entries expanded at once is not navigation.
+      const branches = [].slice.call(nav.querySelectorAll('button.toctree-expand'))
+        .map((b) => b.closest('li'));
+      const shut = branches.filter((li) => !li.classList.contains('current'));
+      check('branches the reader is not in stay collapsed',
+            branches.length > 0 && shut.length > 0,
+            shut.length + ' of ' + branches.length + ' closed');
+
+      if (shut.length) {
+        const li = shut[0];
+        const btn = li.querySelector('button.toctree-expand');
+        const before = win.location.hash;
+        btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+        check('clicking the arrow opens that branch',
+              li.classList.contains('current'));
+        // The arrow lives inside the anchor, exactly as the theme puts it, so
+        // without the handler it navigates instead of opening.
+        check('opening a branch does not navigate away',
+              win.location.hash === before,
+              win.location.hash + ' was ' + before);
+        btn.dispatchEvent(new win.MouseEvent('click', { bubbles: true }));
+        check('clicking it again closes the branch',
+              !li.classList.contains('current'));
+      }
+    }
   }
 
   // Sphinx omits stopwords from its index, so a query containing one must not
