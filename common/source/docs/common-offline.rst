@@ -21,6 +21,10 @@ Everything here is served from this site. A saved wiki arrives as one ordinary
 file download, and your browser unpacks it locally: nothing is sent anywhere,
 and no account is needed at any point.
 
+For how any of this works, what it needs to run and how to test it, see `How
+Offline Copies Work <https://ardupilot.org/dev/docs/wiki-offline-copies.html>`__
+in the developer documentation.
+
 .. raw:: html
 
    <!-- The tool. Markup only:
@@ -107,7 +111,7 @@ and no account is needed at any point.
 
    </div>
 
-What to expect
+What to Expect
 ==============
 
 **Saving a wiki makes every page in it open instantly, whether or not you have
@@ -126,28 +130,12 @@ The shared images are needed whichever wiki you choose, because nearly every
 page uses them, so the first save is the large one. Saving a second wiki
 afterwards costs only its own pages.
 
-Suggestions
------------
-
-- **Save the wiki for the vehicle you actually fly.** Copter alone is 74 MB on
-  top of the shared images, and covers everything most people read.
-- **Save before you leave**, not when you arrive. It is one download and it
-  needs a connection.
-- **Install the app if you rely on it.** Browsers delete stored data when a
-  device runs short of space, and an installed site is much less likely to be
-  chosen. It downloads nothing by itself.
-- **Check for updates occasionally.** Saved pages do not update themselves. The
-  button tells you whether what you are carrying is current.
-- **Use the single file for a machine you cannot install anything on.** It is
-  larger and slower to open, but it is one file that works from a USB stick
-  with no browser support needed.
-
 .. note::
 
    Saved pages live in your browser's storage for this site. Clearing site data
    removes them, and you would need to download again.
 
-How it works
+How It Works
 ============
 
 The wiki is stored by your browser and served from your own device, using a
@@ -155,12 +143,7 @@ mechanism browsers provide for exactly this. Nothing is sent anywhere, no
 account is involved, and the pages you read offline are the same files the site
 serves normally.
 
-Developers, or anyone curious about the design, the infrastructure it needs and
-how to test it, can read `How Offline Copies Work
-<https://ardupilot.org/dev/docs/wiki-offline-copies.html>`__ in the developer
-documentation.
-
-Install as an app
+Install as an App
 =================
 
 .. note::

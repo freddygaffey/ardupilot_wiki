@@ -4,61 +4,88 @@
 How Offline Copies Work
 =======================
 
-The wiki can be read without a connection, and is noticeably faster to browse
-with one. This page covers what the feature does, how to get the most from it,
-and, further down, how it is built.
+The wiki can be read with no internet connection, and is noticeably faster to
+browse even when you have one. This page explains what the feature does, how to
+get the most out of it, and how it is built.
 
-For the download controls themselves, see :ref:`common-offline`.
+The controls for downloading a wiki are on the :ref:`common-offline` page.
 
 Features
 ========
 
-Three, and they are easily confused with one another:
+Three separate things are provided here, and they are easily confused with one
+another.
 
-**Faster browsing, with nothing asked of you.** Pages you visit are kept on the
-device and served from there next time. No decision, no setup, and it applies
-from your second visit onward.
+Faster Browsing
+---------------
 
-**Saving a wiki for offline use.** The one part that costs real bandwidth, and
-always a deliberate choice. It fetches the wiki you pick plus the shared image
-set, which is needed whichever wiki you choose and is much the larger of the
-two. Afterwards every page in that wiki opens with no connection at all.
+Every page you visit is stored on your device and served from there the next
+time it is requested. There is nothing to configure and no decision to make,
+and it begins working from your second visit onwards. This applies to ordinary
+browsing over a normal internet connection, and most readers will notice it
+more than they notice the offline support.
 
-**Exporting the wiki as a single file.** One ``.html`` holding the pages, the
-images and a full text search index. Double-click to open it, nothing to
-install, and it runs from a USB stick. For a machine you cannot install
-software on, or for handing the documentation to someone on a memory card.
+Saving a Wiki for Offline Use
+-----------------------------
 
-Using it well
-=============
+Saving downloads the wiki you select together with the shared image set that
+all of the wikis draw on. The shared images are needed whichever wiki you
+choose and are the larger part of the download: roughly 440 MB of images, plus
+about 80 MB for Copter. Once the download has finished, every page in that wiki
+opens with no connection at all.
 
-**Save the wiki for the vehicle you actually work on.** The shared images are
-the bulk of the download and are needed regardless, so the first save is the
-expensive one. A second wiki afterwards costs only its own pages.
+Saving is a deliberate choice rather than something that happens automatically.
+The reason is not the size of the download, which is unremarkable for anyone
+who has cloned the firmware repository or installed a toolchain. It is that
+somebody reading a single page should not have several hundred megabytes arrive
+uninvited. If you work from the documentation regularly you will probably want
+to save it, because a saved wiki is also the fastest way to read it.
 
-**Save before you need it.** Saving requires a connection. In the workshop it
-is a minute; in the field it is not possible.
+Exporting the Wiki as a Single File
+-----------------------------------
 
-**Install the site as an app if you rely on it.** This downloads nothing by
-itself. It makes the browser far less likely to reclaim the saved data when the
-device runs short of space, which is a real risk with several hundred
-megabytes.
+The export produces one ``.html`` file containing the pages, the images and a
+full text search index. Open it by double clicking it: there is nothing to
+install and it will run from a USB stick. This is intended for machines you
+cannot install software on, or for giving the documentation to somebody on a
+memory card.
 
-**Check for updates deliberately.** Saved pages do not update themselves. The
-page reports whether what is stored still matches what has been published.
+Getting the Most Out of It
+==========================
 
-**Clearing site data removes it.** A saved wiki lives in the browser's storage
-for this site, so clearing that data means saving it again.
+Save the wiki for the vehicle you actually work on. The shared images make up
+most of the download and are required regardless, so the first save is the
+large one. A second wiki after that costs only its own pages, which is tens of
+megabytes rather than hundreds.
+
+Saving needs an internet connection, so save the wiki before you need it rather
+than when you arrive.
+
+Installing the site as an app downloads nothing by itself. What it does is make
+the browser much less likely to reclaim your saved data when the device runs
+short of space, which is worth doing if you are relying on several hundred
+megabytes of stored pages.
+
+.. note::
+
+   Saved pages do not update themselves. Use the update check on the
+   :ref:`common-offline` page to find out whether what you have stored still
+   matches what has been published.
+
+.. warning::
+
+   A saved wiki lives in your browser's storage for this site. Clearing site
+   data removes it, and you will need to download it again.
 
 Speed
 =====
 
-The wiki gets faster the more of it you have already seen, because pages and
-the assets they share are kept on the device as you go. None of this requires
-saving a wiki: it happens by itself.
+The wiki gets faster the more of it you have already read, because pages and
+the assets they share are stored on the device as you go. None of this requires
+saving a wiki, and it happens on its own.
 
-The comparison below is the same page: as the wiki behaved before this
-existed, on a first visit with it, and on every visit after that.
+The table below compares the same page as the wiki behaved before this feature
+existed, on a first visit with it, and on every visit afterwards.
 
 +----------------------------------+----------------+----------------+----------------+--------------+
 |                                  | Before         | After                           | Difference   |
@@ -74,32 +101,29 @@ existed, on a first visit with it, and on every visit after that.
 | Parameter list (6.1 MB)          | about 8,300 ms | about 8,300 ms | about 2,300 ms | 3.5x faster  |
 +----------------------------------+----------------+----------------+----------------+--------------+
 
-The first visit is slightly more expensive, by the 46 KB of the worker and the
-script that registers it. That is paid once, and repaid on the second page.
+The first visit costs slightly more, by the 46 KB of the service worker and the
+script that registers it. That is paid once and is repaid by the second page.
 
-About one request rather than none: a stored page is returned immediately, and
-the worker then asks the server whether it has changed. The reader waits for
-nothing, but the request is real and the server sees it.
+The request row says "about one" rather than none because a stored page is
+returned immediately and the worker then asks the server whether it has
+changed. You wait for nothing, but the request is real and the server sees it.
 
 The parameter list is the one page where the saving is not mostly about the
-network. It is 6.1 MB across roughly 210,000 elements, and the browser spends
-about six seconds of the eight laying it out rather than fetching it. The
-``content-visibility`` rule these pages carry cuts that rendering work about
-threefold, which is where most of its improvement comes from. It remains a
-two-second page, and no amount of caching will change that: the cost is in the
-size of the document itself.
+network. It is 6.1 MB and contains roughly 210,000 elements, and the browser
+spends about six of its eight seconds laying the page out rather than fetching
+it. The ``content-visibility`` rule these pages carry reduces that work by
+about a factor of three, which is where most of the improvement comes from. It
+remains a two second page, and caching will not change that, because the cost
+is the size of the document itself.
 
-The bytes figure is the part worth dwelling on. Of the resources a page pulls,
-twelve are shared assets totalling 131 KB, and they are identical on every page
-of the wiki. They are fetched once. After that a page costs its own HTML and
-its own images, and nothing else, which is why the wiki speeds up rather than
-staying the same.
+The reduction in bytes is worth explaining. Of the resources a page pulls in,
+twelve are shared assets totalling 131 KB and are identical on every page of
+the wiki, so they are fetched only once. After that a page costs its own HTML
+and its own images and nothing else, which is why the wiki gets faster as you
+read rather than staying the same.
 
-With no connection at all, pages already seen still open, and a saved wiki
-opens completely.
-
-Most readers will notice this rather than the offline capability, since it
-applies to ordinary browsing rather than only to travelling.
+With no connection at all, pages you have already visited still open, and a
+saved wiki opens completely.
 
 Implementation
 ==============
@@ -108,11 +132,13 @@ Everything below this point describes how the feature is built, and is aimed at
 anyone changing it or reviewing changes to it. It is not needed in order to use
 the wiki offline.
 
-.. image:: ../images/wiki-offline-request-flow.svg
+.. figure:: ../images/wiki-offline-request-flow.svg
     :target: ../_images/wiki-offline-request-flow.svg
     :width: 100%
 
-The service worker
+    How the service worker answers a request for a page.
+
+The Service Worker
 ------------------
 
 A service worker is a script the browser runs in the background, independently
@@ -161,73 +187,86 @@ the ``/_common/`` path used for images shared between wikis.
    stripping ``.html`` for instance, breaks offline reading while leaving
    online browsing unaffected, which makes it a difficult fault to attribute.
 
-Why browsing is fast
+Why Browsing Is Fast
 --------------------
 
-**Local content is preferred over the network.** A page held locally is
-returned at once and revalidated behind; if the fetched copy differs, the page
-is told and offers a reload.
+Four things account for most of it.
 
-**Lookups are directed rather than exhaustive.** ``caches.match()`` without a
-store name searches every store in turn, and a reader with every wiki saved has
-fourteen. The URL identifies the single store that can hold it: 692 ms against
-89 ms for the same request. The exhaustive search remains as a fallback.
+Content held locally is preferred over the network. A page that is stored is
+returned immediately and revalidated in the background, and if the copy that
+comes back differs, the page is told and offers you a reload.
 
-**Content found in a saved wiki is promoted** into the runtime store, so later
-requests resolve directly: 84 ms against 1 ms.
+Lookups are directed rather than exhaustive. Calling ``caches.match()`` without
+naming a store searches every store in turn, and a reader who has saved every
+wiki has fourteen of them. Since the URL identifies the single store that could
+hold it, the worker looks only there, which takes 89 ms against 692 ms for the
+same request. The exhaustive search is kept as a fallback.
 
-**Fingerprinted assets are cache-first.** Sphinx stamps them
-(``theme.css?v=5d32c60e``), so a stored copy can only be the copy that
-fingerprint names.
+Content found in a saved wiki is copied into the runtime store the first time
+it is used, so later requests for it resolve directly. This takes 1 ms against
+84 ms.
 
-The last of those is also why the wiki costs the server less to serve. Of the
-21 to 26 resources a page pulls, twelve are shared assets totalling 131 KB and
-are byte-identical on every page. Once held they are never requested again, so
-the second page and every page after it costs the HTML plus its own images: a
-median of 25 KB against about 156 KB. That applies to every reader from their
-second page onward, whether or not they ever save a wiki.
+Assets carrying a fingerprint are served from storage without checking the
+network. Sphinx stamps them, as in ``theme.css?v=5d32c60e``, so a stored copy
+can only be the copy that the fingerprint names.
+
+That last point is also why the wiki costs the server less to serve. Of the 21
+to 26 resources a page pulls in, twelve are shared assets totalling 131 KB and
+are byte-identical on every page. Once they are held they are never requested
+again, so the second page and every page after it costs its own HTML plus its
+own images: a median of 25 KB against about 156 KB. This applies to every
+reader from their second page onwards, whether or not they ever save a wiki.
 
 Prefetching
 -----------
 
-``pwa.js`` fetches a page shortly before it is likely to be wanted, from
-pointer position, velocity projected forward, and whether the pointer is
-decelerating as it nears a link. A pointer crossing a link at speed triggers
-nothing.
+``pwa.js`` fetches a page shortly before it is likely to be wanted, judging
+from the pointer's position, its velocity projected forward, and whether it is
+slowing down as it approaches a link. A pointer crossing a link at speed
+triggers nothing.
 
-Speculative traffic is bounded: at most eight per page view, at least 400 ms
-apart, one in flight, each URL once, anything over 2 MB abandoned, and
-in-flight requests cancelled on navigation. Pages already held bypass the
-budget, generating no traffic. Nothing is fetched when the reader has asked for
-reduced data usage, or on pages carrying more than 250 links, where the links
-are an index rather than a sign of intent.
+Speculative traffic is deliberately bounded. At most eight pages are fetched
+per page view, at least 400 ms apart, with only one request in flight at a
+time and each URL fetched at most once. Anything larger than 2 MB is abandoned,
+and requests still in flight are cancelled when you navigate. Pages that are
+already stored bypass the budget entirely and generate no traffic at all.
 
-Saving a wiki
+.. note::
+
+   Nothing is fetched speculatively if you have asked your browser to reduce
+   data usage, or on pages carrying more than 250 links. On those pages the
+   links are an index rather than a sign of where you intend to go.
+
+Saving a Wiki
 -------------
 
-Fetching pages one at a time would be roughly 3,400 requests per reader for
-Copter. Each wiki is packed at build time instead, and unpacked by the browser.
+Fetching the pages one at a time would be roughly 3,400 requests per reader for
+Copter alone. Each wiki is packed into an archive at build time instead, and
+unpacked by the browser.
 
-``common_offline_page.js`` streams the archive and unpacks entries as they
-arrive rather than buffering the file. Each entry is written to Cache Storage
-under the URL the site serves it at, so saved content is retrieved by the same
-path as content kept while browsing.
+``common_offline_page.js`` streams the archive and unpacks each entry as it
+arrives rather than buffering the whole file first. Every entry is written to
+Cache Storage under the URL the site serves it at, so saved content is
+retrieved by exactly the same path as content that was stored while browsing.
 
 Two constraints apply:
 
-* Archives are served with a content coding, so the browser decompresses them
-  before the script sees the body. This avoids requiring
-  ``DecompressionStream``, absent in Safari before 16.4 and Firefox before 113.
-* A completion marker is written last, and a saved wiki counts as usable only
-  once it exists, so an interrupted download is never mistaken for a complete
-  one.
+* The archives are served with a content coding, so the browser decompresses
+  them before the script sees the body. This avoids relying on
+  ``DecompressionStream``, which is missing from Safari before 16.4 and Firefox
+  before 113.
+* A completion marker is written last, and a saved wiki only counts as usable
+  once that marker exists, so an interrupted download is never mistaken for a
+  complete one.
 
-Building and serving
+Building and Serving
 ====================
 
-.. image:: ../images/wiki-offline-build-and-deploy.svg
+.. figure:: ../images/wiki-offline-build-and-deploy.svg
     :target: ../_images/wiki-offline-build-and-deploy.svg
     :width: 100%
+
+    How the archives are built and served.
 
 ``scripts/build_offline_artifacts.py`` runs during a build when ``--offline``
 is passed, writing into ``<destdir>/offline/``:
@@ -250,21 +289,20 @@ produces byte-identical output and a deploy can skip it.
 Requirements
 ------------
 
-The archives are static files. No application server or database is involved.
+The archives are static files, and no application server or database is
+involved. The host must meet four requirements:
 
-**Serve pages at their built URLs.** ``/copter/docs/foo.html`` must return that
-page, not a redirect to ``/copter/docs/foo``.
-
-**Do not cache the worker.** ``/sw.js`` must be served
-``Cache-Control: no-cache``.
-
-**Pair archives with their compressed form.** Under nginx, ``gzip_static on``
-in the ``/offline/`` location serves ``<name>.tar.gz`` for ``<name>.tar`` and
-sets the content coding.
-
-**Serve the frontend at the web root.** A worker's scope is its own path and
-below, so a worker at ``/frontend/sw.js`` registers successfully and controls
-no wiki page.
+- Pages must be served at their built URLs. ``/copter/docs/foo.html`` must
+  return that page rather than redirecting to ``/copter/docs/foo``.
+- The worker must not be cached. ``/sw.js`` must be served with
+  ``Cache-Control: no-cache``.
+- Archives must be paired with their compressed form. Under nginx,
+  ``gzip_static on`` in the ``/offline/`` location serves ``<name>.tar.gz`` in
+  place of ``<name>.tar`` and sets the content coding.
+- The frontend must be served from the web root. A service worker's scope is
+  its own path and everything below it, so a worker placed at
+  ``/frontend/sw.js`` registers successfully and then controls no wiki page at
+  all.
 
 ``deploy/nginx-wiki.conf`` is a working configuration.
 
@@ -316,7 +354,7 @@ Limitations
 ===========
 
 * The shared image set is required whichever wiki is chosen, so the first save
-  is large before anything is readable offline.
+  is about 440 MB before anything is readable offline, whichever wiki that is.
 * The generated reference pages, such as the full parameter lists and the board
   feature tables, reach several megabytes and hundreds of thousands of
   elements. Their cost is in rendering rather than transfer, so caching does
