@@ -54,8 +54,27 @@ for w in $WIKIS; do
     echo ok
 done
 
-printf '  %-16s' offline
-rsync -az --delete offline/ "$TARGET:$WEBROOT/offline/"
+# The offline directory, in two passes so the manifest lands LAST.
+#
+# rsync transfers in sorted order, which puts offline-manifest.json ahead of
+# five of the archives (plane, planner, planner2, rover, sub) and every
+# <wiki>-files.json ahead of its own <wiki>-offline.tar.gz. A reader who
+# checks for updates in that window reads a manifest, or a hash table, that
+# points at archives not yet replaced, and fetches content from the wrong
+# build. The hash verification added to the client catches the bad bytes, but
+# it is better not to publish the mismatch at all.
+#
+# So: everything EXCEPT the manifest first, then the manifest by itself as the
+# final step. The manifest is the one file a client uses to decide anything is
+# new, so nothing else should ever be newer than it. --delete on the first pass
+# still removes retired archives; the second pass carries only the manifest.
+printf '  %-16s' 'offline (files)'
+rsync -az --delete --exclude='offline-manifest.json' \
+    offline/ "$TARGET:$WEBROOT/offline/"
+echo ok
+
+printf '  %-16s' 'offline (manifest)'
+rsync -az offline/offline-manifest.json "$TARGET:$WEBROOT/offline/"
 echo ok
 
 # The frontend goes to the ROOT, not to a frontend/ subdirectory.
