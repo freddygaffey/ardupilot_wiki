@@ -91,6 +91,7 @@
 
   <!-- response back to the page -->
   <path d="M 96 294 L 96 344 L 323 344 L 323 309" fill="none"
-        stroke="#4a5058" stroke-width="1.6" stroke-dasharray="4 3" marker-end="url(#rfArrow)"/>
+        stroke="#4a5058" stroke-width="1.6" stroke-dasharray="4 3"
+        marker-start="url(#rfArrow)" marker-end="url(#rfArrow)"/>
   <text x="120" y="364" font-size="11.5" fill="#4a5058">a response is returned either way</text>
 </svg>
