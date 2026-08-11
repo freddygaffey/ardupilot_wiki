@@ -75,7 +75,7 @@ const THIRD_PARTY_STATIC =
 // changed. It gets stale-while-revalidate below, so it is served instantly and
 // is at most one navigation behind, which for this file is harmless.
 const APP_ASSET =
-  /(^\/sw\.js$|common_offline(\.css|_page\.js|_export\.js)$|common-offline(\.html)?$)/;
+  /(^\/sw\.js$|common_offline(\.css|_page\.js|_export\.js|_document\.js)$|common-offline(\.html)?$)/;
 // Marks a request as part of a differential update, which must not be served
 // from the very cache it is refreshing.
 const UPDATE_PARAM = 'ap-update';
@@ -185,7 +185,11 @@ async function warmTheme() {
       return;
     }
     const held = await heldOffline(new Request(url));
-    if (held) {
+    // Guarded like every other write into the versioned cache: a saved wiki is
+    // a source of bytes, not a trusted one, and a bad body here outlives the
+    // wiki it came from until CACHE_VERSION bumps. This is the same path that
+    // once poisoned the stylesheets.
+    if (held && plausibleBody(new Request(url), held)) {
       await cache.put(url, held.clone());
     }
   })));
