@@ -551,3 +551,108 @@
   }
   window.addEventListener('hashchange', reveal);
 })();
+
+/*
+ * Bring saved video cards to life when there is a connection.
+ *
+ * A saved wiki stores a still and a link where the embed was, because an
+ * archive cannot carry YouTube and a page full of dead iframes is worse than a
+ * page of pictures. But the saved copy is served even when the reader is
+ * online, so somebody with a perfectly good connection was being handed the
+ * offline compromise and had to click through to watch anything.
+ *
+ * So: paint the still instantly, as now, and quietly replace it with the real
+ * player when the reader is likely to want it. Two triggers, because scrolling
+ * is not the only way a video ends up in front of somebody: the card coming
+ * into view, and the pointer entering it. An anchor jump, a resize or a find-
+ * in-page all move a card into view without a scroll event, and the observer
+ * catches every one of them.
+ *
+ * Nothing autoplays. The iframe is the ordinary embed, loaded early so it is
+ * ready, and the still stays underneath it so there is no flash of empty box
+ * while it arrives.
+ *
+ * Needs no change to the build: the card already carries the video in its href
+ * and the still in its <img>, so this works on archives that are already saved.
+ */
+(function () {
+  'use strict';
+
+  var ID = /[?&]v=([\w-]{6,})/;
+
+  function upgrade(a) {
+    if (a.dataset.apLive) { return; }
+    var m = ID.exec(a.getAttribute('href') || '');
+    if (!m) { return; }
+    a.dataset.apLive = '1';
+
+    var img = a.querySelector('img');
+    var still = img ? img.getAttribute('src') : null;
+
+    var box = document.createElement('div');
+    box.className = 'ap-video ap-video-live';
+    box.style.cssText = 'position:relative;max-width:640px;margin:1em 0;' +
+      'border-radius:4px;overflow:hidden;background:#2f2f2f' +
+      (still ? ' url("' + still + '") center/cover no-repeat' : '');
+
+    var ratio = document.createElement('span');
+    ratio.style.cssText = 'display:block;padding-bottom:56.25%';
+
+    var frame = document.createElement('iframe');
+    frame.src = 'https://www.youtube-nocookie.com/embed/' + m[1] + '?rel=0';
+    frame.title = 'YouTube video';
+    frame.loading = 'lazy';
+    frame.allowFullscreen = true;
+    frame.setAttribute('allow',
+      'accelerometer; encrypted-media; gyroscope; picture-in-picture');
+    frame.style.cssText =
+      'position:absolute;top:0;left:0;width:100%;height:100%;border:0';
+
+    // If the embed cannot be reached after all - the connection went away
+    // between the check and the load - put the card back rather than leaving a
+    // blank rectangle where a picture used to be.
+    frame.addEventListener('error', function () {
+      if (box.parentNode) { box.parentNode.replaceChild(a, box); }
+      a.dataset.apLive = '';
+    });
+
+    box.appendChild(ratio);
+    box.appendChild(frame);
+    if (a.parentNode) { a.parentNode.replaceChild(box, a); }
+  }
+
+  function start() {
+    // Offline the embed cannot load, and the still with its link is exactly
+    // the right thing to show. This is the whole condition for doing anything.
+    if (navigator.onLine === false) { return; }
+
+    var cards = [].slice.call(document.querySelectorAll('a.ap-video'));
+    if (!cards.length) { return; }
+
+    if (typeof IntersectionObserver === 'function') {
+      var seen = new IntersectionObserver(function (entries) {
+        entries.forEach(function (e) {
+          if (e.isIntersecting) { seen.unobserve(e.target); upgrade(e.target); }
+        });
+      }, { rootMargin: '200px' });
+      cards.forEach(function (c) { seen.observe(c); });
+    } else {
+      cards.forEach(upgrade);
+    }
+
+    // The pointer arriving is a stronger signal than being on screen, and it
+    // fires on a mouse that moves without the page moving at all.
+    cards.forEach(function (c) {
+      c.addEventListener('pointerenter', function () { upgrade(c); });
+    });
+  }
+
+  // A reader who was offline and comes back should get the players too.
+  window.addEventListener('online', start);
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', start);
+  } else {
+    start();
+  }
+})();
