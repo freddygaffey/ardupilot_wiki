@@ -58,7 +58,7 @@ const STATIC_CACHE = `ardupilot-static-${CACHE_VERSION}`;
 // the first visit. Anything whose freshness matters stays off this list.
 const THIRD_PARTY_CACHE = `ardupilot-thirdparty-${CACHE_VERSION}`;
 const THIRD_PARTY_STATIC =
-  /^https:\/\/(i\.creativecommons\.org\/|licensebuttons\.net\/|plausible\.ardupilot\.org\/js\/)/;
+  /^https:\/\/(i\.creativecommons\.org\/|licensebuttons\.net\/|plausible\.ardupilot\.org\/js\/|www\.paypalobjects\.com\/)/;
 // User alerts are fetched with a cache-busting query, so every URL is unique
 // and a cache keyed on the whole URL can never hit. They still must not go
 // stale silently - they are how the project warns about a bad release - so
@@ -141,6 +141,35 @@ const WARM_PER_WIKI = [
   '_static/common_theme_override.css',
 ];
 
+/*
+ * Third-party furniture that is on every page and never changes.
+ *
+ * The donate button's image lives on paypalobjects.com and the licence badge on
+ * creativecommons.org, and both appear on all 3,958 pages. Cache-first makes
+ * them cost the same as one of our own images, but only from the second page
+ * onwards, and the first page was paying 138 ms for the donate button alone.
+ *
+ * Fetched no-cors, because a cross-origin image gives an opaque response: the
+ * body cannot be read, which is fine for an <img> and is exactly why cacheFirst
+ * stores opaque responses on purpose. Failures are ignored one at a time; this
+ * is decoration, and a reader offline at install time must not be held up by it.
+ */
+const WARM_THIRD_PARTY = [
+  'https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif',
+  'https://i.creativecommons.org/l/by-sa/3.0/88x31.png',
+];
+
+async function warmThirdParty() {
+  const cache = await caches.open(THIRD_PARTY_CACHE);
+  await Promise.all(WARM_THIRD_PARTY.map(async (url) => {
+    try {
+      if (await cache.match(url)) { return; }
+      const response = await fetch(url, { mode: 'no-cors' });
+      if (response) { await cache.put(url, response.clone()); }
+    } catch (err) { /* decoration; never worth failing activation for */ }
+  }));
+}
+
 async function warmTheme() {
   const wikis = (await caches.keys())
     .filter((n) => n.startsWith(OFFLINE_CACHE_PREFIX))
@@ -179,6 +208,7 @@ self.addEventListener('activate', (event) => {
     await self.clients.claim();
     // After claiming, so it never delays taking control.
     await warmTheme().catch(() => undefined);
+    await warmThirdParty().catch(() => undefined);
   })());
 });
 
