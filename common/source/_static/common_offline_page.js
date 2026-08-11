@@ -687,19 +687,30 @@
   }
 
   /*
-   * Where to fetch a changed file from.
+   * Where to fetch a changed file from, best source first.
    *
-   * A wiki entry is served at its own path. A shared image is not: it is stored
-   * once under /_common/, which is a path this site never serves, and is
-   * published under each wiki that uses it. Shared means at least two wikis
-   * have it, so trying them in turn finds it; the wiki being read is tried
-   * first because it is nearly always one of them.
+   * The build publishes rewritten HTML and generated stills at
+   * <base>/files/<name>. Those are the exact bytes the file table hashes, so a
+   * differential update must prefer them: fetching the ORIGINAL page from the
+   * live path instead mismatches the table (the table is the rewritten hash)
+   * and drops the whole wiki into a full re-download. Files that are identical
+   * to the live path are not published there, so the loose URL 404s for them
+   * and the fall-throughs below serve them, verifying fine.
+   *
+   * After the loose copy: a wiki entry is served at its own path. A shared
+   * image is not - it is stored once under /_common/, a path this site never
+   * serves, and published under each wiki that uses it - so those wikis are
+   * tried in turn, the one being read first.
    */
   function sourcesFor(id, name) {
-    if (id !== 'common') { return ['/' + name]; }
+    var out = [ARTIFACT_BASE + '/files/' + name];
+    if (id !== 'common') {
+      out.push('/' + name);
+      return out;
+    }
     var here = location.pathname.split('/')[1];
     var ids = [here].concat(WIKIS.map(function (w) { return w.id; }));
-    var seen = {}, out = [];
+    var seen = {};
     ids.forEach(function (w) {
       if (w && !seen[w]) { seen[w] = 1; out.push('/' + w + '/' + name); }
     });

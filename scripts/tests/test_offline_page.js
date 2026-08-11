@@ -175,7 +175,8 @@ function panelMarkup() {
  */
 function load({ manifest = null, caches = makeCaches(), persisted = false,
                 usage = 0, quota = 10e9, archives = null,
-                tables = null, served = null, rateLimit = false } = {}) {
+                tables = null, served = null, rateLimit = false,
+                loose = null } = {}) {
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => { console.log('    [page error] ' + e.message);
                                if (e.stack) console.log('    ' + e.stack.split('\n')[1]); });
@@ -228,6 +229,23 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
       if (rateLimit && String(u).indexOf('ap-update=') !== -1) {
         return Promise.resolve({ ok: false, status: 429,
                                  blob: () => Promise.reject(new Error('429')) });
+      }
+      // The rewritten copies the build publishes under <base>/files/<name>.
+      // The client tries these first for a changed file.
+      if (loose) {
+        const m = String(u).split('?')[0].match(/\/files\/(.+)$/);
+        if (m && Object.prototype.hasOwnProperty.call(loose, m[1])) {
+          const buf = Buffer.from(loose[m[1]]);
+          return Promise.resolve({
+            ok: true,
+            blob: () => Promise.resolve(buf),
+            arrayBuffer: () => Promise.resolve(
+              buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)),
+          });
+        }
+        if (/\/files\//.test(String(u).split('?')[0])) {
+          return Promise.resolve({ ok: false, blob: () => Promise.reject(new Error('404')) });
+        }
       }
       // An individual file, at the path the site really serves it from.
       if (served) {
@@ -924,9 +942,13 @@ async function main() {
     await settle();
     $(doc, 'check-btn').click();
     for (let i = 0; i < 25; i++) { await settle(); }
+    // Every source is tagged ap-update, so the refusal lands on the first one
+    // tried - now the loose /files/ copy - and the walk stops there. Count all
+    // tagged fetches, not just same-origin ones: exactly one, then it gives up.
+    const tagged = fetchCalls.filter(u => u.indexOf('ap-update=') !== -1);
     check('a 429 stops the update rather than trying every other source',
-          siteCalls(fetchCalls).length === 1,
-          siteCalls(fetchCalls).length + ' requests made after being refused');
+          tagged.length === 1,
+          tagged.length + ' tagged requests made after being refused');
   }
 
   console.log('\nautomatic updates are spread out, not synchronised');
@@ -1060,6 +1082,42 @@ async function main() {
     check('the changed file was tried on the network, then the update gave up',
           siteCalls(fetchCalls).some(u => u.indexOf('/copter/docs/a.html') !== -1),
           JSON.stringify(siteCalls(fetchCalls)));
+  }
+
+  console.log('\ndifferential update: rewritten files come from /files/');
+  {
+    // The build publishes rewritten HTML at <base>/files/<name>; those are the
+    // bytes the table hashes. The update must prefer them, or it fetches the
+    // original from the live path, mismatches, and re-downloads the whole wiki.
+    const cachesObj = makeCaches();
+    const copter = await seedSaved(cachesObj, 'copter', OLD_BUILD, {
+      'copter/docs/a.html': ['h1', 'old a'],
+    });
+    (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'common'));
+    const rewritten = '<html>REWRITTEN a (donate + stills replaced)</html>';
+    const { doc, fetchCalls } = load({
+      manifest: MANIFEST, caches: cachesObj,
+      tables: { 'copter-files.json': { 'copter/docs/a.html': await fileHash(rewritten) } },
+      // The loose copy has the rewritten bytes (hash matches the table). The
+      // live path has the ORIGINAL, which would NOT match - if the client used
+      // it, verification would reject and this would fall back to the archive.
+      loose: { 'copter/docs/a.html': rewritten },
+      served: { '/copter/docs/a.html': '<html>ORIGINAL a</html>' },
+    });
+    await settle();
+    $(doc, 'check-btn').click();
+    for (let i = 0; i < 25; i++) { await settle(); }
+
+    check('the rewritten copy is fetched from /files/ and stored',
+          (await bodyAt(copter, '/copter/docs/a.html')) === rewritten,
+          JSON.stringify(await bodyAt(copter, '/copter/docs/a.html')));
+    check('no archive fallback was needed',
+          !fetchCalls.some(u => u.indexOf('.tar') !== -1),
+          JSON.stringify(fetchCalls.filter(u => u.indexOf('.tar') !== -1)));
+    check('the /files/ source was tried',
+          fetchCalls.some(u => u.indexOf('/files/copter/docs/a.html') !== -1),
+          'loose URL requested');
   }
 
   console.log('\ndifferential update: a shared file is found under some wiki');

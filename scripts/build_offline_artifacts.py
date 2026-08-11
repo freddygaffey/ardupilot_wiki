@@ -292,13 +292,34 @@ def rewrite_site_links(html: str, wikis) -> str:
     return SITE_LINK_RE.sub(swap, html)
 
 
-def add_bytes(tar, arcname: str, data: bytes, files=None):
-    """Add generated content with the same normalisation as a real file."""
+def add_bytes(tar, arcname: str, data: bytes, files=None, loose_dir=None):
+    """
+    Add generated or rewritten content to the archive.
+
+    When loose_dir is given, the SAME bytes are also written to
+    loose_dir/<arcname>. This is what makes differential updates work.
+
+    The archive holds rewritten HTML (the donate button and video embeds are
+    replaced so they survive offline) and generated video stills. Neither is
+    served anywhere else: the live site serves the ORIGINAL page, and a still
+    exists nowhere but here. A differential update fetches a changed file and
+    now verifies its hash against the table, which is the hash of the REWRITTEN
+    bytes, so fetching the original from the live path mismatches and the whole
+    wiki falls back to a full re-download - the 400 MB-to-fix-a-typo case the
+    mechanism exists to prevent. Publishing the rewritten bytes at a stable path
+    gives the update the exact content the table describes. Files that are byte
+    for byte identical to the live path (images, css, js) are NOT published
+    here; the update fetches those from the live path and they verify fine.
+    """
     info = tarfile.TarInfo(arcname)
     info.size = len(data)
     tar.addfile(_normalise(info), io.BytesIO(data))
     if files is not None:
         files[arcname] = content_hash(data)
+    if loose_dir is not None:
+        dest = Path(loose_dir) / arcname
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(data)
 
 
 def content_hash(data: bytes) -> str:
@@ -376,7 +397,8 @@ def write_common_archive(wikis, common_names, out_dir: Path, thumbs,
         # to find /<wiki>/_images/ here, and neither needs teaching about
         # another path.
         for vid, path in sorted(thumbs.items()):
-            add_bytes(tar, f"_images/yt-{vid}.jpg", path.read_bytes(), files)
+            add_bytes(tar, f"_images/yt-{vid}.jpg", path.read_bytes(), files,
+                      loose_dir=out_dir / "files")
     return archive.stat().st_size
 
 
@@ -404,7 +426,8 @@ def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path, thumbs,
                 rewritten = rewrite_site_links(
                     rewrite_donate(rewrite_embeds(html, wiki, thumbs)), wikis)
                 if rewritten != html:
-                    add_bytes(tar, arcname, rewritten.encode("utf-8"), files)
+                    add_bytes(tar, arcname, rewritten.encode("utf-8"), files,
+                              loose_dir=out_dir / "files")
                     continue
             tar.add(path, arcname=arcname, filter=_normalise)
             if files is not None:
