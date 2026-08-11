@@ -744,5 +744,26 @@ self.addEventListener('fetch', (event) => {
     // roughly twenty per navigation, that could not by construction find
     // anything new.
     event.respondWith(safely(cacheFirst(request, STATIC_CACHE), request));
+    return;
   }
+
+  /*
+   * Anything else a saved wiki holds.
+   *
+   * searchindex.js and objects.inv sit at a wiki's root, so they match none of
+   * the routes above: not a page, not an image, not under _static. They were
+   * therefore never served from storage, and with no network the browser's own
+   * load simply failed. Offline search was broken the whole time, silently, by
+   * a file that was sitting in the archive the entire time.
+   *
+   * Network first, so nothing about the online path changes: this only decides
+   * what happens when the fetch fails.
+   */
+  event.respondWith((async () => {
+    try {
+      return await fetch(request);
+    } catch (err) {
+      return (await heldOffline(request)) || new Response('', { status: 504 });
+    }
+  })());
 });
