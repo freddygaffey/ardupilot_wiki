@@ -245,14 +245,22 @@
 
       // No button: browsers routinely decline a bare persist() request, so it
       // appeared to do nothing. Installing is the signal they do act on.
-      el('storage-warning').innerHTML = persisted
+      var evicted = evictedIds();
+      var evictNote = evicted.length
+        ? '<div class="apo-note apo-note-warn">&#9888; ' +
+          (evicted.length === 1 ? 'A wiki you saved is' : evicted.length + ' wikis you saved are') +
+          ' no longer here. Your browser reclaimed the space. Save ' +
+          (evicted.length === 1 ? 'it' : 'them') + ' again, and install the ' +
+          'wiki as an app to make that less likely.</div>'
+        : '';
+      el('storage-warning').innerHTML = evictNote + (persisted
         ? ''
         : '<div class="apo-note apo-note-warn">&#9888; Storage is ' +
           '<strong>temporary</strong>. Your browser can delete these saved pages ' +
           'without warning if this device runs low on space. Installing the wiki ' +
           'as an app makes that less likely. ' +
           '<a href="#install-as-an-app" data-ap-install>Install it now</a>, ' +
-          'or read what that means below.</div>';
+          'or read what that means below.</div>');
 
       // Nothing cached means nothing to remove, so the button should not invite
       // a press. Disarm it too, in case it was armed when the last of it went.
@@ -288,6 +296,52 @@
   }
 
   var storedIds = {};
+
+  /* ---------- eviction detection ----------
+   *
+   * "Temporary" browser storage can be reclaimed without warning when a device
+   * runs low on space, and a saved wiki simply vanishes. The panel reads what
+   * is actually in Cache Storage, so an evicted wiki correctly shows as not
+   * saved - but silently, as if the reader had never saved it, which is a poor
+   * thing to discover in a hangar. So the ids we have saved are also written to
+   * localStorage; a record with no matching cache is one the browser reclaimed,
+   * and the panel can say so.
+   */
+  var SAVED_IDS_KEY = 'ap-saved-ids';
+
+  function savedRecord() {
+    try {
+      var raw = window.localStorage.getItem(SAVED_IDS_KEY);
+      var arr = raw ? JSON.parse(raw) : [];
+      return Array.isArray(arr) ? arr : [];
+    } catch (err) { return []; }
+  }
+
+  function rememberSaved(id) {
+    try {
+      var rec = savedRecord();
+      if (rec.indexOf(id) === -1) {
+        rec.push(id);
+        window.localStorage.setItem(SAVED_IDS_KEY, JSON.stringify(rec));
+      }
+    } catch (err) { /* private browsing: eviction notices are a nicety */ }
+  }
+
+  function forgetSaved(id) {
+    try {
+      var rec = savedRecord().filter(function (x) { return x !== id; });
+      window.localStorage.setItem(SAVED_IDS_KEY, JSON.stringify(rec));
+    } catch (err) { /* ignore */ }
+  }
+
+  // Ids we recorded as saved but that are no longer in Cache Storage: the
+  // browser reclaimed them. 'common' is excluded because it is not a wiki a
+  // reader thinks of themselves as having saved.
+  function evictedIds() {
+    return savedRecord().filter(function (id) {
+      return id !== 'common' && !storedIds[id];
+    });
+  }
   // Set while waiting for the browser to finish reclaiming deleted space.
   var reclaimTimer = null;
 
@@ -483,6 +537,8 @@
         .filter(function (n) { return n.indexOf('ardupilot-') === 0; })
         .map(function (n) { return caches.delete(n); }));
     }).then(function () {
+      // Deliberately removed, so it is not an eviction.
+      try { window.localStorage.removeItem(SAVED_IDS_KEY); } catch (err) { /* ignore */ }
       notifyWorkerCachesChanged();
       return renderWikis().then(renderStorage);
     });
@@ -646,6 +702,7 @@
                 // that no wikis were saved and the full 696 MB was still to
                 // download. Both readings came from the same run.
                 storedIds[entry.id] = true;
+                rememberSaved(entry.id);
                 notifyWorkerCachesChanged();
                 return renderStorage();
               });
