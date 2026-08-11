@@ -152,24 +152,40 @@ up a build server from these scripts hits it immediately, and the failure is a
 | `copter/docs/binary-features.html` | 8.0 MB | not measured |
 | `copter/docs/parameters.html` | 5.8 MB | 215,470 |
 
-**Measured on `parameters.html`,** served from cache with zero network
-requests:
+**Measured on `parameters.html`**, live site against the offline branch, same
+page, same browser, back to back:
 
-```
-HTML arrived           321 ms
-domInteractive      33,512 ms
-domComplete         38,206 ms
-```
+| | ardupilot.org | offline branch, served from cache |
+| --- | --- | --- |
+| the page's bytes have all arrived | 1,970 ms | 273 ms |
+| the browser has read the page to the end | 4,048 ms | 1,569 ms |
+| the page is fully built and displayed | 8,178 ms | 2,241 ms |
+| everything has finished loading | 8,289 ms | 2,344 ms |
+| **spent building the page after the bytes arrived** | **6,208 ms** | **1,968 ms** |
+| elements on the page | 216,620 | 208,674 |
 
-Thirty-three seconds before the page responds, and in repeated testing it froze
-the renderer outright: Chrome stopped answering automation commands entirely.
-Jumping to an anchor such as `#brd-alt-config` appears to "take a second"
-because the browser reaches that point partway through a layout that runs for
-half a minute.
+(The figures come from the browser's own navigation timings: `responseEnd`,
+`domInteractive`, `domComplete` and `loadEventEnd` respectively, for anyone
+wanting to reproduce them.)
 
-**Not a caching or hosting problem.** Nothing is being fetched. A
-`content-visibility: auto` rule for these pages (in `common/_templates/layout.html`
-on the offline branch) reduces layout work but did not make the page usable.
+Eight seconds on the live site, of which six are spent rendering rather than
+fetching. The transfer is not the problem: the document is 6.1 MB but gzips to
+454 KB, and arrives in under two seconds.
+
+**Correcting an earlier measurement.** This note previously recorded
+`domInteractive` at 33,512 ms and described the renderer freezing outright.
+That figure does not reproduce and should not be quoted. Re-measured on the
+live site, the browser finishes reading the page at 4,048 ms. The original was
+taken under some condition not captured at the time, most likely an attached
+debugger, and it overstated the fault by roughly eight times. The page is
+genuinely slow; it is not half-a-minute slow.
+
+**Not a caching or hosting problem.** Nothing is being fetched in the
+right-hand column above. The `content-visibility: auto` rule for these pages
+(in `common/_templates/layout.html` on the offline branch) accounts for most of
+the difference in the rendering row, cutting it about threefold. That is a
+worthwhile improvement and it is still a two-second page, so the underlying
+fault stands.
 
 **Suggested fix:** split the page. Note that `--paramversioning` is *not* that
 split, which was worth measuring and has now been measured: a per-version page
@@ -194,12 +210,13 @@ document.addEventListener("DOMContentLoaded", function() {
   fetch("../_static/parameters-Copter.json") ...
 ```
 
-`DOMContentLoaded` fires when parsing completes, which on this page is
-`domInteractive` at 33.5 s. The dropdown therefore renders empty, and stays
-empty for half a minute, on a page where the data it needs is a 1 KB JSON file
-that was available immediately. Populating it from an inline script next to the
-`<select>`, rather than waiting for the whole document, would fill it in at
-once. This is upstream code in `build_parameters.py`, not the theme.
+That first line tells the browser to wait until it has read the entire page
+before doing anything, which on this page is 4.0 s on the live site and 1.6 s
+on the offline branch. The dropdown therefore sits empty for that whole period,
+even though the data it needs is a 1 KB file that was ready immediately. Filling
+it from a script placed next to the `<select>` itself, rather than waiting for
+the rest of the document, would populate it at once. This is upstream code in
+`build_parameters.py`, not the theme.
 
 ---
 
