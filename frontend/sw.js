@@ -24,10 +24,19 @@
  */
 
 /*
- * Bump this whenever this file changes. It is the only way anything already
- * stored gets thrown away: the activate handler deletes caches whose NAME is
- * no longer current, so a bad entry inside a cache that is still named v3
- * lives forever, however wrong it is.
+ * Bump this when the CONTENT of a cache can no longer be trusted, not on every
+ * edit to this file.
+ *
+ * It is the only way anything already stored gets thrown away: the activate
+ * handler deletes caches whose NAME is no longer current, so a bad entry inside
+ * a cache that is still named v3 lives forever, however wrong it is.
+ *
+ * But a bump is not free. It empties every runtime cache, so the next page the
+ * reader opens is slow and every shared asset is fetched again. Bumping on each
+ * edit during a session of debugging makes the site look like it is regressing
+ * and makes timings meaningless, which happened repeatedly on 11 August 2026.
+ * Change a caching strategy or discover poisoned entries: bump. Fix a bug in
+ * how a response is stored: usually do not.
  *
  * That is not hypothetical. A debugging session wrote 17-byte placeholders
  * over the theme's stylesheets and scripts in ardupilot-static-v3. Static
@@ -41,7 +50,7 @@
  * the activate handler skips it, so a bump costs a reader nothing but a few
  * re-fetched assets.
  */
-const CACHE_VERSION = 'v7';
+const CACHE_VERSION = 'v8';
 const PAGE_CACHE = `ardupilot-pages-${CACHE_VERSION}`;
 const IMAGE_CACHE = `ardupilot-images-${CACHE_VERSION}`;
 const STATIC_CACHE = `ardupilot-static-${CACHE_VERSION}`;
@@ -441,14 +450,29 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
   const cached = (await heldOffline(request, cache)) ||
                  (await heldOffline(request));
 
+  // Clone NOW, while the body is certainly untouched.
+  //
+  // The comparison below runs inside the background fetch, which settles long
+  // after this function has handed `cached` back to the browser. By then the
+  // browser has read it to render the page, so cloning it there threw
+  // "Response body is already used", the whole revalidation rejected, and the
+  // put that follows never ran. The page cache therefore never filled: on the
+  // mirror it held one entry after a session of browsing, and it was /sw.js.
+  //
+  // The effect was that a saved wiki shadowed the live site permanently. Pages
+  // stayed hours stale against a server rebuilt repeatedly, video stills never
+  // gave way to real embeds, and PAGE_UPDATED never fired once. The old comment
+  // here claimed the comparison happened "before either body is consumed",
+  // which was the intent and not what the code did.
+  const cachedForCompare = (announceChanges && cached) ? cached.clone() : null;
+
   const network = fetch(request).then(async (response) => {
     if (!response || !response.ok) {
       return response;
     }
-    if (announceChanges && cached) {
-      // Compare before either body is consumed.
+    if (cachedForCompare) {
       const [oldText, newText] = await Promise.all([
-        cached.clone().text(),
+        cachedForCompare.text(),
         response.clone().text(),
       ]);
       if (oldText !== newText) {
@@ -459,7 +483,13 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
       await cache.put(request, response.clone());
     }
     return response;
-  }).catch(() => undefined);
+  }).catch((err) => {
+    // Swallowing this silently is how a broken revalidation stayed invisible:
+    // the page still rendered, from the copy we already had, so nothing looked
+    // wrong while the cache quietly never filled.
+    console.warn('[sw] revalidate failed for', request.url, err && err.message);
+    return undefined;
+  });
 
   // Without this the browser may terminate the worker the moment the cached
   // copy is handed back, and the fetch above is dropped on the floor.
