@@ -151,11 +151,7 @@ html_static_path = ['_static']
 
 html_js_files = [
     './useralerts.js',
-    # Analytics is injected by /js/pwa.js after the load event instead of
-    # being declared here. Declared here it is fetched during the initial
-    # load of every page, and even deferred and served from cache it was
-    # 14 ms on a page whose own document took 4 ms. It counts the same
-    # pageview and binds the same outbound-link handlers a moment later.
+    ('https://plausible.ardupilot.org/js/script.outbound-links.js', {"data-domain": "ardupilot.org", "defer": "defer"}),
 ]
 
 # Add any extra paths that contain custom files (such as robots.txt or

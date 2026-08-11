@@ -311,11 +311,17 @@ def content_hash(data: bytes) -> str:
     boundary. An attacker who can choose what the server sends can simply send
     whatever they like, hash and all, so a longer digest would buy nothing.
 
-    blake2b rather than sha256 because it is roughly twice as fast here and the
-    build hashes every file of every wiki: measured at 1.1s for the 628MB of
-    Copter, against a build already measured in minutes.
+    sha256 truncated to eight bytes, and the choice is the client's, not ours:
+    the browser verifies every fetched file against this table before storing
+    it, crypto.subtle has sha256 and does not have blake2b, and shipping a hash
+    implementation in the page to save a second of build time would be exactly
+    backwards. blake2b was measured at 1.1s for the 628MB of Copter; sha256 is
+    roughly twice that, against a build measured in minutes.
+
+    Truncation is fine here for the same reason the digest was always 8 bytes:
+    this is a freshness check, not a security boundary.
     """
-    return hashlib.blake2b(data, digest_size=8).hexdigest()
+    return hashlib.sha256(data).hexdigest()[:16]
 
 
 def raw_size(path: Path) -> int:

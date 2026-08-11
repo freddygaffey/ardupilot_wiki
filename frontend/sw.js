@@ -58,7 +58,7 @@ const STATIC_CACHE = `ardupilot-static-${CACHE_VERSION}`;
 // the first visit. Anything whose freshness matters stays off this list.
 const THIRD_PARTY_CACHE = `ardupilot-thirdparty-${CACHE_VERSION}`;
 const THIRD_PARTY_STATIC =
-  /^https:\/\/(i\.creativecommons\.org\/|licensebuttons\.net\/|plausible\.ardupilot\.org\/js\/|www\.paypalobjects\.com\/)/;
+  /^https:\/\/(i\.creativecommons\.org\/|licensebuttons\.net\/|www\.paypalobjects\.com\/)/;
 // User alerts are fetched with a cache-busting query, so every URL is unique
 // and a cache keyed on the whole URL can never hit. They still must not go
 // stale silently - they are how the project warns about a bad release - so
@@ -240,6 +240,7 @@ self.addEventListener('message', (event) => {
   if (data.type === 'CACHES_CHANGED') {
     knownCacheNames = null;
     openedCaches.clear();
+    markerChecked.clear();
     return;
   }
   if (data.type === 'EXPORT_START') {
@@ -341,6 +342,34 @@ function likelyCacheName(path) {
 let knownCacheNames = null;
 const openedCaches = new Map();
 
+/*
+ * The panel writes /__ap_complete__ only after every file of a download is in
+ * place, and its whole accounting is built on it: entries without the marker
+ * are an aborted or quota-killed download, not a copy anyone can rely on.
+ *
+ * This worker used to ignore the marker entirely and go by cache NAME alone,
+ * which split the feature into two halves that disagreed about what "saved"
+ * means. Observed directly: a half-written cache served its fragment of a page
+ * in preference to the network, while the panel - which does check - read
+ * "no wikis saved" and offered no way to see or remove what was being served.
+ *
+ * So an offline cache is consulted only once its marker has been seen. The
+ * check runs once per cache name and the verdict is remembered; a download
+ * completing in the meantime is picked up when the panel's COMPLETE message
+ * resets this state, as it already resets knownCacheNames.
+ */
+const markerChecked = new Map();
+
+async function isComplete(name) {
+  if (!markerChecked.has(name)) {
+    markerChecked.set(name, (async () => {
+      const cache = await caches.open(name);
+      return !!(await cache.match('/__ap_complete__'));
+    })());
+  }
+  return markerChecked.get(name);
+}
+
 async function offlineCacheFor(path) {
   const name = likelyCacheName(path);
   if (!name) {
@@ -350,6 +379,9 @@ async function offlineCacheFor(path) {
     knownCacheNames = new Set(await caches.keys());
   }
   if (!knownCacheNames.has(name)) {
+    return undefined;
+  }
+  if (!(await isComplete(name))) {
     return undefined;
   }
   if (!openedCaches.has(name)) {
@@ -417,11 +449,20 @@ async function heldOffline(request, cache) {
   }
 
   // Fallback: a wiki downloaded since this worker started, or anything stored
-  // somewhere the path does not predict.
-  for (const path of shapes) {
-    const hit = await caches.match(path);
-    if (hit) {
-      return hit;
+  // somewhere the path does not predict. Searched cache by cache rather than
+  // with the global caches.match, because that would happily answer from a
+  // half-written download the named path above just refused.
+  const names = await caches.keys();
+  for (const name of names) {
+    if (name.startsWith(OFFLINE_CACHE_PREFIX) && !(await isComplete(name))) {
+      continue;
+    }
+    const candidate = await caches.open(name);
+    for (const path of shapes) {
+      const hit = await candidate.match(path);
+      if (hit) {
+        return hit;
+      }
     }
   }
   return undefined;
@@ -671,7 +712,17 @@ async function cacheFirst(request, cacheName) {
     // already here. Under stale-while-revalidate the background fetch used to
     // populate it, so switching to cache-first quietly removed the only thing
     // that did.
-    await named.put(request, held.clone());
+    //
+    // Guarded like every network write, and this one especially: it copies
+    // into the VERSIONED cache, where a wrong body outlives the wiki it came
+    // from and survives until CACHE_VERSION changes. This exact path was used
+    // to poison ardupilot-static with a text/html "stylesheet" while the
+    // guard on the fetch paths stood intact - a saved wiki is one more source
+    // of bytes, not a trusted one. Served either way: a bad decoration
+    // renders wrong once, which is strictly better than permanently.
+    if (plausibleBody(request, held)) {
+      await named.put(request, held.clone());
+    }
     return held;
   }
   try {
