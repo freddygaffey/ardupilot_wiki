@@ -45,6 +45,16 @@ GZIP_LEVEL = 1
 # Left unset, the page falls back to its built-in default.
 ARTIFACT_BASE_ENV = "ARDUPILOT_OFFLINE_BASE"
 
+# Downsize large images in the archives (only), to attack the first-download
+# barrier: the shared-image set is ~440 MB and is required before any wiki is
+# readable. Set ARDUPILOT_OFFLINE_MAX_IMAGE_DIM to a pixel size (1600 is a good
+# retina-friendly default) to resize anything larger and re-encode it. Measured
+# on a real sample: 174 MB of large images fell to 34 MB, an 80% cut (JPEG 94%,
+# PNG 62%). Off by default (0), because it changes what a reader sees online
+# too - saved images are served cache-first - so it is a quality call, not a
+# silent default. The LIVE site is never touched; only the archive copies.
+IMAGE_MAX_DIM = int(os.environ.get("ARDUPILOT_OFFLINE_MAX_IMAGE_DIM", "0"))
+
 # The manifest overrides the names the offline page falls back to, so these
 # have to be the real ones. Capitalising the directory gave "Dev", "Planner2"
 # and "Ardupilot", which read as though they were not proper platforms.
@@ -292,6 +302,63 @@ def rewrite_site_links(html: str, wikis) -> str:
     return SITE_LINK_RE.sub(swap, html)
 
 
+def downsize_image(data: bytes, name: str) -> "bytes | None":
+    """
+    A smaller copy of an oversized image, or None if it would not help.
+
+    JPEG photos re-encode small; PNG stays PNG so screenshot text keeps its
+    sharp edges (a JPEG of a text screenshot smears them). Only images larger
+    than IMAGE_MAX_DIM on their long side are resized, and the result is used
+    only if it is actually smaller. Any failure returns None: a build must never
+    die over one awkward image.
+    """
+    if not IMAGE_MAX_DIM:
+        return None
+    ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in ("jpg", "jpeg", "png"):
+        return None
+    try:
+        from PIL import Image
+        img = Image.open(io.BytesIO(data))
+        w, h = img.size
+        # Only touch genuinely oversized images. Re-compressing something that
+        # already fits the cap trades a little quality for a little space AND
+        # forces it to be published loose (it now differs from the live path),
+        # which is a bad deal for the many already-small screenshots.
+        if max(w, h) <= IMAGE_MAX_DIM:
+            return None
+        scale = IMAGE_MAX_DIM / max(w, h)
+        img = img.resize((round(w * scale), round(h * scale)), Image.LANCZOS)
+        out = io.BytesIO()
+        if ext in ("jpg", "jpeg"):
+            img.convert("RGB").save(out, "JPEG", quality=82, optimize=True)
+        else:
+            img.save(out, "PNG", optimize=True)
+        result = out.getvalue()
+        return result if len(result) < len(data) else None
+    except Exception:
+        return None
+
+
+def add_image(tar, path, arcname: str, files, loose_dir):
+    """
+    Add an image to the archive, downsized if that is enabled and it helps.
+
+    A downsized image differs from what the live site serves, so - exactly like
+    rewritten HTML - it is published loose under loose_dir so a differential
+    update fetches the archive's copy and its hash verifies. An unchanged image
+    is byte-identical to the live path and needs no loose copy.
+    """
+    data = path.read_bytes()
+    smaller = downsize_image(data, arcname)
+    if smaller is not None:
+        add_bytes(tar, arcname, smaller, files, loose_dir=loose_dir)
+        return
+    tar.add(path, arcname=arcname, filter=_normalise)
+    if files is not None:
+        files[arcname] = content_hash(data)
+
+
 def add_bytes(tar, arcname: str, data: bytes, files=None, loose_dir=None):
     """
     Add generated or rewritten content to the archive.
@@ -401,9 +468,7 @@ def write_common_archive(wikis, common_names, out_dir: Path, thumbs,
             for name in sorted(common_names - seen):
                 path = images / name
                 if path.is_file():
-                    tar.add(path, arcname=f"_images/{name}", filter=_normalise)
-                    if files is not None:
-                        files[f"_images/{name}"] = content_hash(path.read_bytes())
+                    add_image(tar, path, f"_images/{name}", files, out_dir / "files")
                     seen.add(name)
         # Stills go in with the shared images rather than a directory of their
         # own. The service worker and the HTML exporter both already know how
@@ -442,6 +507,11 @@ def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path, thumbs,
                     add_bytes(tar, arcname, rewritten.encode("utf-8"), files,
                               loose_dir=out_dir / "files")
                     continue
+            # Wiki-unique images can be downsized too; everything else (css, js,
+            # fonts) is added as-is.
+            if parts and parts[0] == "_images":
+                add_image(tar, path, arcname, files, out_dir / "files")
+                continue
             tar.add(path, arcname=arcname, filter=_normalise)
             if files is not None:
                 files[arcname] = content_hash(path.read_bytes())
