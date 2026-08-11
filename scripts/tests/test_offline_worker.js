@@ -222,12 +222,14 @@ function checkWorkerEvaluates() {
  * `networkFails` is the case that matters most: an update whose request fails
  * must fail, not quietly resolve to the stale copy it was sent to replace.
  */
-function bootWorker({ networkFails = false } = {}) {
-  const seen = { fetches: [], cacheReads: [] };
+function bootWorker({ networkFails = false, serve = null,
+                     existingCaches = [] } = {}) {
+  const seen = { fetches: [], cacheReads: [], puts: [], deleted: [] };
+  let cacheNames = existingCaches.slice();
   const listeners = {};
   const emptyCache = {
     match: async (r) => { seen.cacheReads.push(String(r && r.url ? r.url : r)); },
-    put: async () => {},
+    put: async (k) => { seen.puts.push(String(k && k.url ? k.url : k)); },
     keys: async () => [],
   };
   const ctx = {
@@ -240,15 +242,29 @@ function bootWorker({ networkFails = false } = {}) {
     caches: {
       match: async (r) => { seen.cacheReads.push(String(r && r.url ? r.url : r)); },
       open: async () => emptyCache,
-      keys: async () => [],
-      delete: async () => true,
+      keys: async () => cacheNames.slice(),
+      delete: async (n) => {
+        seen.deleted.push(n);
+        cacheNames = cacheNames.filter((x) => x !== n);
+        return true;
+      },
     },
     console: { warn() {}, log() {}, error() {} },
     fetch: async (req) => {
-      seen.fetches.push(String(req && req.url ? req.url : req));
+      const url = String(req && req.url ? req.url : req);
+      seen.fetches.push(url);
       if (networkFails) { throw new TypeError('Failed to fetch'); }
-      return { ok: true, status: 200, url: String(req && req.url ? req.url : req),
-               clone() { return this; } };
+      // What the server said it was sending. The point of the guard is that
+      // this can contradict what was asked for.
+      const spec = serve ? serve(url) : {};
+      return {
+        ok: true, status: 200, url, type: spec.type || 'basic',
+        headers: { get: (h) => (String(h).toLowerCase() === 'content-type'
+                                  ? (spec.ct === undefined ? null : spec.ct)
+                                  : null) },
+        clone() { return this; },
+        text: async () => spec.body || '',
+      };
     },
     Response: class {
       constructor(body, init) { this.body = body; Object.assign(this, init || {}); }
@@ -263,14 +279,21 @@ function bootWorker({ networkFails = false } = {}) {
   const ask = (path, req = {}) => {
     let answered;
     const request = Object.assign({
-      url: 'https://example.test' + path, method: 'GET',
+      url: /^https?:\/\//.test(path) ? path : 'https://example.test' + path,
+      method: 'GET',
       mode: 'no-cors', destination: '',
     }, req);
     listeners.fetch({ request, respondWith: (p) => { answered = p; },
                       waitUntil: () => {} });
     return answered;
   };
-  return { ask, seen, handled: !!listeners.fetch };
+  const activate = async () => {
+    let waited;
+    listeners.activate({ waitUntil: (p) => { waited = p; } });
+    if (waited) { await waited; }
+    return cacheNames;
+  };
+  return { ask, activate, seen, handled: !!listeners.fetch };
 }
 
 async function checkUpdateRouting() {
@@ -339,12 +362,115 @@ async function checkUpdateRouting() {
   }
 }
 
+/*
+ * A response that contradicts the request must not be stored.
+ *
+ * Static assets are served cache-first, so one bad answer is kept and served
+ * until the cache name changes. That is not theoretical: placeholders written
+ * during a debugging session survived in ardupilot-static-v3 and rendered the
+ * site unstyled on every ordinary load. Captive wifi does the same thing to
+ * real readers, answering every request with a login page at 200.
+ */
+async function checkPoisonGuard() {
+  console.log('\nservice worker: refusing an implausible body\n');
+
+  const CSS = '/dev/_static/css/ardupilot.css?v=ae9666d5';
+  const JS = '/dev/_static/js/theme.js';
+  const IMG = '/dev/_images/thing.png';
+
+  const run = async (path, spec) => {
+    const w = bootWorker({ serve: () => spec });
+    const a = w.ask(path);
+    if (a) { await a; }
+    return w.seen;
+  };
+
+  // The honest cases: stored.
+  let seen = await run(CSS, { ct: 'text/css' });
+  check('a stylesheet served as text/css is stored',
+        seen.puts.length === 1, JSON.stringify(seen.puts));
+  seen = await run(JS, { ct: 'application/javascript' });
+  check('a script served as javascript is stored',
+        seen.puts.length === 1, JSON.stringify(seen.puts));
+
+  // The captive-portal shape: a login page, at 200, for every request.
+  seen = await run(CSS, { ct: 'text/html', body: '<html>login</html>' });
+  check('a stylesheet served as text/html is NOT stored',
+        seen.puts.length === 0 && seen.fetches.length === 1,
+        JSON.stringify(seen.puts));
+  seen = await run(JS, { ct: 'text/html', body: '<html>login</html>' });
+  check('a script served as text/html is NOT stored',
+        seen.puts.length === 0, JSON.stringify(seen.puts));
+  seen = await run(IMG, { ct: 'text/html', body: '<html>login</html>' });
+  check('an image served as text/html is NOT stored',
+        seen.puts.length === 0, JSON.stringify(seen.puts));
+
+  // Deliberately narrow: only a positive contradiction rejects.
+  seen = await run(CSS, {});
+  check('no content type at all is not treated as evidence',
+        seen.puts.length === 1, JSON.stringify(seen.puts));
+  seen = await run(CSS, { ct: 'text/css; charset=utf-8' });
+  check('a charset on the content type is still a stylesheet',
+        seen.puts.length === 1, JSON.stringify(seen.puts));
+  seen = await run('/dev/_static/fonts/lato.woff2', { ct: 'application/octet-stream' });
+  check('an extension with no expectation is left alone',
+        seen.puts.length === 1, JSON.stringify(seen.puts));
+
+  // Cross-origin assets expose no headers and are stored on purpose.
+  const w = bootWorker({ serve: () => ({ type: 'opaque', ct: null }) });
+  const a = w.ask('https://i.creativecommons.org/l/by-sa/3.0/88x31.png');
+  if (a) { await a; }
+  check('an opaque cross-origin response is still stored',
+        w.seen.puts.length === 1, JSON.stringify(w.seen.puts));
+}
+
+/*
+ * Bumping CACHE_VERSION is the only thing that discards what is already stored,
+ * so what it discards had better be right. A downloaded wiki is hundreds of
+ * megabytes the reader chose to keep, and losing it because the worker changed
+ * would be indefensible.
+ */
+async function checkVersionBump() {
+  console.log('\nservice worker: what a version bump throws away\n');
+
+  const src = fs.readFileSync(WORKER, 'utf8');
+  const version = (src.match(/const CACHE_VERSION = '([^']+)'/) || [])[1];
+  check('the worker declares a cache version', !!version, String(version));
+
+  const w = bootWorker({ existingCaches: [
+    'ardupilot-pages-v3', 'ardupilot-static-v3', 'ardupilot-images-v3',
+    'ardupilot-thirdparty-v3',
+    'ardupilot-pages-' + version, 'ardupilot-static-' + version,
+    'ardupilot-offline-dev', 'ardupilot-offline-common',
+    'something-else-entirely',
+  ] });
+  const left = await w.activate();
+
+  check('caches from an older version are thrown away',
+        !left.some((n) => /-v3$/.test(n)) && seenDeleted(w, 'ardupilot-static-v3'),
+        JSON.stringify(w.seen.deleted));
+  check('caches at the current version are kept',
+        left.includes('ardupilot-pages-' + version) &&
+        left.includes('ardupilot-static-' + version), JSON.stringify(left));
+  // The one that matters: a reader's downloaded wikis are not versioned and
+  // must survive, or a one-character edit costs everybody 500 MB.
+  check('downloaded wikis survive the bump',
+        left.includes('ardupilot-offline-dev') &&
+        left.includes('ardupilot-offline-common'), JSON.stringify(left));
+  check('caches belonging to something else are left alone',
+        left.includes('something-else-entirely'), JSON.stringify(left));
+}
+
+function seenDeleted(w, name) { return w.seen.deleted.includes(name); }
+
 async function main() {
   console.log('\nservice worker: offline lookup\n');
   checkWorkerEvaluates();
   const cur = run(fs.readFileSync(WORKER, 'utf8'), 'sw.js');
   if (!cur) {
     await checkUpdateRouting();
+    await checkPoisonGuard();
+    await checkVersionBump();
     console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                          : '\nall checks passed\n');
     process.exit(failures ? 1 : 0);
@@ -436,6 +562,8 @@ async function main() {
   }
 
   await checkUpdateRouting();
+  await checkPoisonGuard();
+  await checkVersionBump();
 
   console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                        : '\nall checks passed\n');
