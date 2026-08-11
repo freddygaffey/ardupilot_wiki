@@ -1297,6 +1297,21 @@ class WikiUpdater:
 
         check_build(self.args.site)
 
+        # A YouTube embed costs a cross-origin connection and about a megabyte
+        # of YouTube's code, started during the initial load of every page that
+        # carries one, whether or not anybody watches. Measured on a page served
+        # entirely from cache: 511 ms for the embed against 4 ms for the page's
+        # own document. loading="lazy" defers it until it is nearly on screen
+        # and changes nothing else. Done here because the iframe comes from
+        # sphinxcontrib.youtube, which is a third-party package.
+        try:
+            from scripts.lazy_embeds import run as make_embeds_lazy
+            wikis = [self.args.site] if self.args.site else ALL_WIKIS
+            n = make_embeds_lazy(wikis, Path(self.args.destdir or "."))
+            info(f"deferred YouTube embeds on {n} pages")
+        except Exception as ex:  # never let this fail an otherwise good build
+            error(f"could not defer YouTube embeds: {ex}")
+
         # Offline artefacts are produced as part of an ordinary build so that a
         # maintainer has nothing extra to run or configure. They are assembled
         # from the html output that already exists, so the cost is packing time
