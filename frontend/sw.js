@@ -466,7 +466,29 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
   // which was the intent and not what the code did.
   const cachedForCompare = (announceChanges && cached) ? cached.clone() : null;
 
-  const network = fetch(request).then(async (response) => {
+  /*
+   * The refresh has to reach the server.
+   *
+   * A fetch made inside the worker does not re-enter this handler, but it does
+   * go through the browser's HTTP cache, and the wiki's HTML carries no
+   * Cache-Control at all: only an ETag and a Last-Modified. So the browser
+   * caches it heuristically and answered the refresh from its own stale copy,
+   * which was then written into the page cache. The revalidation ran, stored
+   * something, and left the reader exactly as behind as before.
+   *
+   * 'no-cache' means revalidate, not bypass: the ETag still goes up and an
+   * unchanged page still comes back as a 304, so this costs a conditional
+   * request rather than a download.
+   *
+   * Only when there is a cached copy to refresh. With nothing stored, the
+   * response below is what the reader gets, and a navigation request is passed
+   * through untouched for the reasons networkOnly explains.
+   */
+  const refresh = cached
+    ? new Request(request.url, { cache: 'no-cache', credentials: 'same-origin' })
+    : request;
+
+  const network = fetch(refresh).then(async (response) => {
     if (!response || !response.ok) {
       return response;
     }
