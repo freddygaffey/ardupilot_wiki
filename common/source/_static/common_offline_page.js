@@ -26,7 +26,7 @@
   // Bumped when this file changes in a way worth telling apart at runtime.
   // window.ArduPilotOfflineVersion answers "is the page running the code I just
   // deployed?" without inferring it from behaviour.
-  var VERSION = 'rate-limited-1';
+  var VERSION = 'verified-bytes-1';
   global.ArduPilotOfflineVersion = VERSION;
 
 
@@ -664,7 +664,23 @@
                 : Promise.resolve();
   }
 
-  function fetchInto(cache, id, name) {
+  /*
+   * Hash of a body, exactly as the build computes it: sha256, first eight
+   * bytes, hex (scripts/build_offline_artifacts.py, file_hash). The two must
+   * agree byte for byte or every update rejects everything.
+   */
+  function hashBytes(buf) {
+    return crypto.subtle.digest('SHA-256', buf).then(function (d) {
+      var v = new Uint8Array(d);
+      var out = '';
+      for (var i = 0; i < 8; i++) {
+        out += (v[i] < 16 ? '0' : '') + v[i].toString(16);
+      }
+      return out;
+    });
+  }
+
+  function fetchInto(cache, id, name, expected) {
     // Tagged so the service worker sends it to the network. Without this the
     // worker answers from the cache being refreshed, and the update stores what
     // it already had while reporting that it updated.
@@ -692,10 +708,32 @@
           throw e;
         }
         if (!r.ok) { return attempt(i + 1); }
-        return r.blob().then(function (body) {
-          return cache.put(new Request(key), new Response(body, {
-            headers: { 'Content-Type': mimeFor(name) }
-          }));
+        return r.arrayBuffer().then(function (body) {
+          /*
+           * The table gave us a hash for this file, so use it. Without this, a
+           * 200 with the wrong body - captive portal, error page dressed as
+           * 200, mid-deploy skew - was stored verbatim, and then the table was
+           * rewritten to say the wiki was healthy. Stored table equalled
+           * published table, so no later update could ever see the damage:
+           * verified corrupt, permanently, by the exact mechanism built to
+           * detect corruption. Observed, not hypothesised: "Updated 1 file"
+           * over an HTML body where a script belonged.
+           *
+           * A mismatch is treated exactly like a failed fetch: try the next
+           * source, and if none is right, the update rejects and the archive
+           * fallback takes over. Nothing wrong is ever written.
+           */
+          if (!expected) {
+            return cache.put(new Request(key), new Response(body, {
+              headers: { 'Content-Type': mimeFor(name) }
+            }));
+          }
+          return hashBytes(body).then(function (got) {
+            if (got !== expected) { return attempt(i + 1); }
+            return cache.put(new Request(key), new Response(body, {
+              headers: { 'Content-Type': mimeFor(name) }
+            }));
+          });
         });
       }, function (err) {
         if (err && (err.name === 'AbortError' || err.name === 'RateLimited')) {
@@ -769,7 +807,8 @@
         var done = 0;
         function next(i) {
           if (i >= changed.length) { return Promise.resolve(); }
-          return fetchInto(cache, entry.id, changed[i]).then(function () {
+          return fetchInto(cache, entry.id, changed[i],
+                           published[changed[i]]).then(function () {
             done += 1;
             if (onProgress) { onProgress(done, changed.length); }
             return next(i + 1);
@@ -1032,6 +1071,31 @@
             }
             return renderWikis();
           }
+          /*
+           * The cheap path could not cover these, so what remains is a full
+           * archive download, hundreds of megabytes for common alone.
+           *
+           * On a quiet, timer-driven run that MUST NOT start by itself. It was
+           * observed doing exactly that: a background tick, no click anywhere,
+           * and the button flipped to Cancel with 439 MB on its way, which on
+           * mobile data is an expensive surprise nobody consented to. A
+           * download that size is a decision, and decisions belong to the
+           * reader: announce that a full refresh is waiting and leave the
+           * button armed.
+           *
+           * A manual press of Check for updates is that consent, and proceeds
+           * as before.
+           */
+          if (quiet) {
+            var names = full.map(function (id) {
+              return (byId[id] && byId[id].name) || id;
+            });
+            announce('A full download is needed to update ' +
+                     names.join(', ') +
+                     '. Press Check for updates to start it.');
+            return renderWikis();
+          }
+
           // Re-select what could not be updated differentially and reuse the
           // download path, so there is one implementation of fetching and
           // unpacking.
@@ -1187,11 +1251,14 @@
    * do this on a timer rather than only on demand.
    * --------------------------------------------------------------------- */
 
-  // Deliberately short while the update path is being exercised end to end.
-  // For a real deployment this belongs in the tens of minutes: every reader
-  // holding a saved wiki asks for the manifest this often, and the wiki is
-  // rebuilt a few times a day at most.
-  var AUTOUPDATE_MS = 30000;
+  // Thirty minutes, jittered +/-50% by the scheduler, so a reader's cost is a
+  // few hundred bytes an hour and a rebuild reaches saved copies within the
+  // hour. The wiki is rebuilt a few times a day at most, so anything tighter
+  // buys nothing and multiplies manifest traffic by every open tab. During
+  // development this was 30 seconds; that value must not ship, because with
+  // eleven wikis' worth of panels able to run their own timers it is a
+  // manifest request every few seconds per reader.
+  var AUTOUPDATE_MS = 30 * 60 * 1000;
 
   var autoTimer = null;
   var autoBusy = false;

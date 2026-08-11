@@ -22,11 +22,15 @@ let JSDOM, VirtualConsole;
 try {
   ({ JSDOM, VirtualConsole } = require('jsdom'));
 } catch (e) {
-  console.log('\nSKIPPED: this harness needs jsdom, which is not installed.\n' +
-              '  npm install --no-save jsdom\n' +
-              'The panel is a DOM application; testing it without one would mean\n' +
-              'hand-rolling a DOM, and a shim with its own bugs is worse than none.\n');
-  process.exit(0);
+  // Exit NON-zero. This used to exit 0, so `npm test` reported "all checks
+  // passed" while running none of the 99 assertions below - a green suite that
+  // proved nothing, on every machine where jsdom was not already installed.
+  // A test run that cannot run is a failure, not a pass.
+  console.error('\nFAILED: this harness needs jsdom, which is not installed.\n' +
+                '  npm install --no-save jsdom\n' +
+                'The panel is a DOM application; testing it without one would mean\n' +
+                'hand-rolling a DOM, and a shim with its own bugs is worse than none.\n');
+  process.exit(1);
 }
 
 const REPO = path.resolve(__dirname, '..', '..');
@@ -55,6 +59,7 @@ class FakeResponse {
   constructor(body) {
     this._b = typeof body === 'string' ? body
             : Buffer.isBuffer(body) ? body
+            : body instanceof ArrayBuffer ? Buffer.from(body)
             : ArrayBuffer.isView(body)
                 ? Buffer.from(body.buffer, body.byteOffset, body.byteLength)
                 : JSON.stringify(body);
@@ -65,6 +70,10 @@ class FakeResponse {
   json() { return this.text().then((t) => JSON.parse(t)); }
   blob() {
     return Promise.resolve(Buffer.isBuffer(this._b) ? this._b : Buffer.from(this._b));
+  }
+  arrayBuffer() {
+    const b = Buffer.isBuffer(this._b) ? this._b : Buffer.from(this._b);
+    return Promise.resolve(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength));
   }
 }
 class FakeCache {
@@ -184,6 +193,7 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
       }
     },
     caches,
+    crypto: require('crypto').webcrypto,
     setTimeout: w.setTimeout.bind(w), clearTimeout: w.clearTimeout.bind(w),
     console,
     Response: FakeResponse,
@@ -214,8 +224,12 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
       if (served) {
         const p = String(u).split('?')[0];
         if (Object.prototype.hasOwnProperty.call(served, p)) {
+          const buf = Buffer.from(served[p]);
           return Promise.resolve({
-            ok: true, blob: () => Promise.resolve(Buffer.from(served[p]))
+            ok: true,
+            blob: () => Promise.resolve(buf),
+            arrayBuffer: () => Promise.resolve(
+              buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)),
           });
         }
         if (String(u).indexOf('.tar') === -1) {
@@ -238,6 +252,14 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
   vm.createContext(sandbox);
   vm.runInContext(fs.readFileSync(PAGE, 'utf8'), sandbox);
   return { dom, w, doc: w.document, sandbox, fetchCalls, fetchOpts };
+}
+
+// The build's file hash, in Node, so a test's published table can carry the
+// hash of exactly the bytes it serves. Same as build_offline_artifacts.file_hash
+// and the client's hashBytes: sha256, first eight bytes, hex.
+async function fileHash(text) {
+  const d = await require('crypto').webcrypto.subtle.digest('SHA-256', Buffer.from(text));
+  return [...new Uint8Array(d).slice(0, 8)].map(b => b.toString(16).padStart(2, '0')).join('');
 }
 
 const settle = () => new Promise(r => setTimeout(r, 60));
@@ -678,14 +700,17 @@ async function main() {
       'copter/docs/gone.html': ['h5', 'old gone']
     });
 
+    // The published hash for a changed file is the real hash of what the
+    // server will send, because the client now verifies. Unchanged entries
+    // keep arbitrary values; they are never fetched.
     const { doc, fetchCalls, fetchOpts } = load({
       manifest: MANIFEST, caches: cachesObj,
       tables: {
         'common-files.json': { '_images/shared.png': 'c1' },
         'copter-files.json': {
           'copter/index.html':     'h1',
-          'copter/docs/a.html':    'h2-moved',
-          'copter/searchindex.js': 'h4-moved',
+          'copter/docs/a.html':    await fileHash('NEW a'),
+          'copter/searchindex.js': await fileHash('NEW searchindex'),
           'copter/docs/b.html':    'h3'
         }
       },
@@ -725,8 +750,8 @@ async function main() {
 
     const stored = JSON.parse(await bodyAt(copter, TABLE_KEY));
     check('the stored table now matches the published one',
-          stored['copter/docs/a.html'] === 'h2-moved' &&
-          stored['copter/searchindex.js'] === 'h4-moved' &&
+          stored['copter/docs/a.html'] === (await fileHash('NEW a')) &&
+          stored['copter/searchindex.js'] === (await fileHash('NEW searchindex')) &&
           !('copter/docs/gone.html' in stored) &&
           Object.keys(stored).length === 4, JSON.stringify(stored));
 
@@ -767,6 +792,53 @@ async function main() {
           JSON.stringify($(doc, 'check-result').textContent));
   }
 
+  console.log('\na quiet update never starts an archive download by itself');
+  {
+    // Observed live before the fix: a background tick, no click anywhere, and
+    // 439 MB on its way. The fallback from the cheap path is the most
+    // expensive action in the product and must not run unattended.
+    const cachesObj = makeCaches();
+    // A wiki saved before tables existed: updateStored() resolves null, which
+    // is the fallback trigger.
+    const c = await cachesObj.open('ardupilot-offline-dev');
+    await c.put('/dev/index.html', new FakeResponse('<html>'));
+    await c.put('/__ap_complete__', completeMarker(OLD_BUILD, 'dev'));
+    (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'common'));
+
+    const { doc, sandbox, fetchCalls } = load({
+      manifest: MANIFEST, caches: cachesObj,
+      archives: { 'dev/index.html': '<html>new' },
+    });
+    await settle();
+    // The quiet path, exactly as the timer calls it.
+    await sandbox.window.eval ? null : null;
+    // Reach the internals the way the scheduler does: fire a tick.
+    // checkForUpdates(true) is not exported, so drive it via the checkbox
+    // handler's immediate tick after re-enabling autoupdate.
+    doc.getElementById('autoupdate').checked = false;
+    doc.getElementById('autoupdate').dispatchEvent(
+      new sandbox.window.Event('change', { bubbles: true }));
+    doc.getElementById('autoupdate').checked = true;
+    doc.getElementById('autoupdate').dispatchEvent(
+      new sandbox.window.Event('change', { bubbles: true }));
+    for (let i = 0; i < 20; i++) { await settle(); }
+
+    check('no archive is fetched by a quiet run',
+          !fetchCalls.some(u => u.indexOf('.tar') !== -1),
+          JSON.stringify(fetchCalls.filter(u => u.indexOf('.tar') !== -1)));
+    check('the reader is told a full download is waiting',
+          ($(doc, 'check-result').textContent || '').indexOf('full download') !== -1,
+          JSON.stringify($(doc, 'check-result').textContent));
+
+    // The same state via the button IS consent, and proceeds.
+    $(doc, 'check-btn').click();
+    for (let i = 0; i < 20; i++) { await settle(); }
+    check('the button press does start it',
+          fetchCalls.some(u => u.indexOf('.tar') !== -1),
+          JSON.stringify(fetchCalls.filter(u => u.indexOf('.tar') !== -1).slice(0,2)));
+  }
+
   console.log('\nthe update paces itself and backs off when told to');
   {
     // The client is the rate limiter here, so these two behaviours are load
@@ -778,9 +850,12 @@ async function main() {
     for (let i = 0; i < 8; i++) { files['dev/docs/p' + i + '.html'] = ['h' + i, 'old']; }
     await seedSaved(cachesObj, 'dev', OLD_BUILD, files);
     const published = {};
-    Object.keys(files).forEach((k) => { published[k] = files[k][0] + '-moved'; });
     const served = {};
-    Object.keys(files).forEach((k) => { served['/' + k] = 'new'; });
+    const newBody = 'new body ';
+    for (const k of Object.keys(files)) {
+      served['/' + k] = newBody + k;
+      published[k] = await fileHash(newBody + k);   // verified, so must be real
+    }
 
     const { doc, fetchOpts } = load({
       manifest: MANIFEST, caches: cachesObj,
@@ -900,7 +975,7 @@ async function main() {
     const dev = await seedSaved(cachesObj, 'dev', OLD_BUILD, files);
     const published = {};
     Object.keys(files).forEach((k) => { published[k] = files[k][0]; });
-    published['dev/docs/p7.html'] = 'h7-moved';
+    published['dev/docs/p7.html'] = await fileHash('NEW seven');
 
     const { fetchCalls, doc } = load({
       manifest: MANIFEST, caches: cachesObj,
@@ -920,6 +995,47 @@ async function main() {
           JSON.stringify(await bodyAt(dev, '/dev/docs/p7.html')));
   }
 
+  console.log('\ndifferential update: a wrong body is refused, not stored');
+  {
+    // The blocker a reviewer found: a 200 with the wrong body (captive portal,
+    // error page, mid-deploy skew) was stored verbatim and the table rewritten
+    // to claim health, so no later update could ever detect it. The client now
+    // hashes what it fetched against the table and refuses a mismatch.
+    const cachesObj = makeCaches();
+    const copter = await seedSaved(cachesObj, 'copter', OLD_BUILD, {
+      'copter/docs/a.html': ['h1', 'old a'],
+    });
+    (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'common'));
+    // No archive available either, so the differential path is observed in
+    // isolation: if it wrongly advanced the table, nothing downstream would
+    // correct it. (When an archive IS available it repairs the wiki, which is
+    // fine and desirable; that is a different assertion.)
+    const { doc, fetchCalls } = load({
+      manifest: MANIFEST, caches: cachesObj,
+      // The table promises the hash of the RIGHT bytes...
+      tables: { 'copter-files.json': { 'copter/docs/a.html': await fileHash('correct a') } },
+      // ...but the server sends the wrong ones, at 200.
+      served: { '/copter/docs/a.html': '<html>captive portal login</html>' },
+    });
+    await settle();
+    $(doc, 'check-btn').click();
+    for (let i = 0; i < 25; i++) { await settle(); }
+
+    check('the wrong body is NOT written to the cache',
+          (await bodyAt(copter, '/copter/docs/a.html')) === 'old a',
+          JSON.stringify(await bodyAt(copter, '/copter/docs/a.html')));
+    const tbl = JSON.parse(await bodyAt(copter, TABLE_KEY));
+    check('the differential path does NOT advance the table on a bad body',
+          tbl['copter/docs/a.html'] === 'h1', JSON.stringify(tbl));
+    check('and the wiki still reports the build it actually holds',
+          JSON.parse(await bodyAt(copter, '/__ap_complete__')).build === OLD_BUILD,
+          JSON.parse(await bodyAt(copter, '/__ap_complete__')).build);
+    check('the changed file was tried on the network, then the update gave up',
+          siteCalls(fetchCalls).some(u => u.indexOf('/copter/docs/a.html') !== -1),
+          JSON.stringify(siteCalls(fetchCalls)));
+  }
+
   console.log('\ndifferential update: a shared file is found under some wiki');
   {
     // Common's files are stored once under /_common/, a path this site never
@@ -929,9 +1045,10 @@ async function main() {
     const common = await seedSaved(cachesObj, 'common', OLD_BUILD, {
       '_images/shared.png': ['c1', 'old shared bytes']
     });
+    const SHARED_HASH = await fileHash('NEW shared bytes');
     const { doc, fetchCalls } = load({
       manifest: MANIFEST, caches: cachesObj,
-      tables: { 'common-files.json': { '_images/shared.png': 'c2' } },
+      tables: { 'common-files.json': { '_images/shared.png': SHARED_HASH } },
       served: { '/rover/_images/shared.png': 'NEW shared bytes' }
     });
     await settle();
@@ -965,7 +1082,7 @@ async function main() {
       manifest: MANIFEST, caches: cachesObj,
       tables: {
         'copter-files.json': {
-          'copter/index.html':  'h1-moved',
+          'copter/index.html':  await fileHash('NEW index'),
           'copter/docs/a.html': 'h2-moved'
         }
       },
@@ -1019,7 +1136,8 @@ async function main() {
     const next = load({
       manifest: newer, caches: cachesObj,
       tables: { 'copter-files.json': { 'copter/index.html': 'h1',
-                                       'copter/docs/a.html': 'h2-moved' },
+                                       'copter/docs/a.html':
+                                         await fileHash('a after the edit') },
                 'common-files.json': { '_images/shared.png': 'c1' } },
       served: { '/copter/docs/a.html': 'a after the edit' }
     });

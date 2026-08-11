@@ -19,6 +19,7 @@ Idempotent, and deliberately narrow: it only touches iframes that point at
 YouTube and do not already say how they should load.
 """
 
+import os
 import re
 from pathlib import Path
 
@@ -48,6 +49,22 @@ def run(wikis, root: Path = Path(".")) -> int:
                 continue
             after = make_embeds_lazy(before)
             if after != before:
-                page.write_text(after, encoding="utf-8")
+                _write_atomic(page, after)
                 changed += 1
     return changed
+
+
+def _write_atomic(page: Path, text: str) -> None:
+    """
+    Replace a page's contents without ever leaving it half-written.
+
+    A plain write_text truncates the file and then writes; an interruption in
+    between (a full disk, a killed build) leaves a truncated or empty page that
+    still gets packed into the archive and served. Writing a sibling temp file
+    and renaming it over the original means a reader sees either the whole old
+    page or the whole new one, never a fragment: rename is atomic within a
+    filesystem, and os.replace overwrites on every platform.
+    """
+    tmp = page.with_name(page.name + ".lazytmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, page)

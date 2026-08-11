@@ -1297,33 +1297,38 @@ class WikiUpdater:
 
         check_build(self.args.site)
 
-        # A YouTube embed costs a cross-origin connection and about a megabyte
-        # of YouTube's code, started during the initial load of every page that
-        # carries one, whether or not anybody watches. Measured on a page served
-        # entirely from cache: 511 ms for the embed against 4 ms for the page's
-        # own document. loading="lazy" defers it until it is nearly on screen
-        # and changes nothing else. Done here because the iframe comes from
-        # sphinxcontrib.youtube, which is a third-party package.
-        try:
-            from scripts.lazy_embeds import run as make_embeds_lazy
-            wikis = [self.args.site] if self.args.site else ALL_WIKIS
-            n = make_embeds_lazy(wikis, Path(self.args.destdir or "."))
-            info(f"deferred YouTube embeds on {n} pages")
-        except Exception as ex:  # never let this fail an otherwise good build
-            error(f"could not defer YouTube embeds: {ex}")
-
-        # Offline artefacts are produced as part of an ordinary build so that a
-        # maintainer has nothing extra to run or configure. They are assembled
-        # from the html output that already exists, so the cost is packing time
-        # rather than a second Sphinx pass.
+        # Everything the offline feature adds is behind --offline, so a plain
+        # build - which is what ArduPilot's own build server runs - is byte for
+        # byte what it was before this branch. The offline extras are opt-in and
+        # self-contained, invoked from here rather than woven through the build.
         if self.args.offline:
             info("=== Step 5b: Building offline artefacts ===")
             info(f"Time elapsed so far: {time.time() - tstart:.2f} seconds")
+
+            # Defer YouTube embeds. A single embed is a cross-origin connection
+            # and about a megabyte of YouTube's code, started during initial
+            # load whether or not anybody watches: measured 511 ms against 4 ms
+            # for the page's own document. loading="lazy" defers it and changes
+            # nothing else. Done as a pass over built HTML because the iframe
+            # comes from sphinxcontrib.youtube, a third-party package. NOT
+            # wrapped in a blanket except: it rewrites pages in place (atomically,
+            # see lazy_embeds), so a real failure must stop the build rather than
+            # ship half-rewritten pages. Only a missing module is survivable.
             try:
-                from scripts.build_offline_artifacts import build as build_offline
-                build_offline(ALL_WIKIS, Path(self.args.destdir or "."))
-            except Exception as ex:  # never let this fail an otherwise good build
-                error(f"offline artefact generation failed: {ex}")
+                from scripts.lazy_embeds import run as make_embeds_lazy
+            except ImportError as ex:
+                error(f"lazy-embed pass unavailable, skipping: {ex}")
+            else:
+                wikis = [self.args.site] if self.args.site else ALL_WIKIS
+                n = make_embeds_lazy(wikis, Path(self.args.destdir or "."))
+                info(f"deferred YouTube embeds on {n} pages")
+
+            # The archives, manifest and per-file hash tables. Assembled from the
+            # HTML that already exists, so the cost is packing rather than a
+            # second Sphinx pass. A failure here IS fatal now: a half-written
+            # artifact set deployed looks identical to a good one.
+            from scripts.build_offline_artifacts import build as build_offline
+            build_offline(ALL_WIKIS, Path(self.args.destdir or "."))
 
         if self.args.enablebackups:
             make_backup(building_time, self.args.site, self.args.destdir, self.args.backupdestdir)

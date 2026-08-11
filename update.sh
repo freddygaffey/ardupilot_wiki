@@ -6,24 +6,7 @@ set -x
 
 export PYTHONUNBUFFERED=1
 
-# Which branch to build, and what to build it with.
-#
-# Production tracks master with the system python. A mirror testing a change
-# tracks that change's branch, and on Ubuntu 24.04 needs a virtualenv because
-# PEP 668 refuses pip installs into the system environment. Both are settable
-# so this script is the same file in both places:
-#
-#   WIKI_BRANCH=offline-wiki PYTHON=$HOME/ardupilot_wiki/venv/bin/python \
-#     OFFLINE=1 ./update.sh
-#
-WIKI_BRANCH="${WIKI_BRANCH:-master}"
-PYTHON="${PYTHON:-python3}"
-DESTDIR="${DESTDIR:-/var/sites/wiki/web}"
-# --offline also writes the downloadable archives and their manifest.
-OFFLINE_FLAG=""
-[ -n "${OFFLINE:-}" ] && OFFLINE_FLAG="--offline"
-
-cd $HOME/ardupilot_wiki
+cd $HOME/build_wiki
 
 START=$(date +%s)
 
@@ -68,7 +51,7 @@ test -n "$FORCEBUILD" || {
 
     changed=0
     progress "Getting oldhash for ardupilot_wiki"
-    oldhash=$(cd ardupilot_wiki && git rev-parse "origin/$WIKI_BRANCH")
+    oldhash=$(cd ardupilot_wiki && git rev-parse origin/master)
     progress "Getting newhash for ardupilot_wiki"
     newhash=$(cd ardupilot_wiki && git rev-parse HEAD)
     [ "$oldhash" = "$newhash" ] || {
@@ -128,10 +111,10 @@ date
 
 progress "Updating ardupilot_wiki"
 pushd ardupilot_wiki
+git checkout -f master
 git fetch origin
-git checkout -f "$WIKI_BRANCH"
 git submodule update
-git reset --hard "origin/$WIKI_BRANCH"
+git reset --hard origin/master
 git clean -f -f -x -d -d
 popd
 
@@ -142,8 +125,7 @@ git fetch origin
 git submodule update
 git reset --hard origin/master
 git clean -f -f -x -d -d
-"$PYTHON" -m pip install -q -U . 2>/dev/null || \
-    progress "theme pip install skipped (managed environment)"
+python3 -m pip install --user -U .
 popd
 
 cd ardupilot_wiki
@@ -152,7 +134,7 @@ find -name "parameters*rst" -delete # Clean possible built and cached parameters
 END_UPDATES=$(date +%s)
 
 progress "Starting to build multiple parameters pages"
-"$PYTHON" build_parameters.py || {
+python3 build_parameters.py || {
     progress "build_parameters.py failed"
     exit 1
 }
@@ -162,8 +144,7 @@ progress "Time to run build_parameters.py: $MPARAMS_TIME seconds"
 
 progress "Starting to build the wiki"
 # python3 update.py --clean --parallel 4 # Build without versioning for parameters. It is better for editing wiki.
-"$PYTHON" update.py --destdir "$DESTDIR" --clean --paramversioning \
-    --parallel 1 --enablebackups $OFFLINE_FLAG --verbose || {
+python3 update.py --destdir /var/sites/wiki/web --clean --paramversioning --parallel 1 --enablebackups --verbose || {
     progress "update.py failed"
     exit 1
 }

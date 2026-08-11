@@ -45,14 +45,17 @@ function liftLookup(src) {
   let out = '';
   // Module-level state the matcher consults, taken with it.
   for (const re of [/const ASSET_EXT_RE\s*=\s*[\s\S]*?;/,
+                    /const CONTENT_EXPECTATIONS\s*=\s*\[[\s\S]*?\n\];/,
                     /const OFFLINE_CACHE_PREFIX\s*=\s*[^;]*;/,
                     /let knownCacheNames\s*=\s*[^;]*;/,
+                    /const markerChecked\s*=\s*[^;]*;/,
                     /const openedCaches\s*=\s*[^;]*;/]) {
     const m = src.match(re);
     if (m) { out += m[0] + '\n'; }
   }
-  for (const name of ['storedShapes', 'likelyCacheName', 'offlineCacheFor',
-                      'heldOffline', 'cacheFirst']) {
+  for (const name of ['storedShapes', 'likelyCacheName', 'isComplete',
+                      'offlineCacheFor', 'heldOffline', 'cacheFirst',
+                      'plausibleBody']) {
     const at = src.indexOf('function ' + name + '(');
     if (at === -1) { return null; }
     const from = src.lastIndexOf('async ', at) === at - 6 ? at - 6 : at;
@@ -100,8 +103,13 @@ function run(workerSrc, label) {
   const wikiArchive = path.join(REPO, 'offline', WIKI + '-offline.tar.gz');
   const commonArchive = path.join(REPO, 'offline', 'common-offline.tar.gz');
   if (!fs.existsSync(wikiArchive) || !fs.existsSync(commonArchive)) {
-    console.log('  (no archives built; run update.py --offline first)');
-    return;
+    // Exit NON-zero. Returning quietly here used to drop the twelve
+    // extensionless-URL checks this file exists to protect while still
+    // printing "all checks passed": the exact class of silent skip that lets a
+    // real regression through. If the archives are not built, say so and fail.
+    console.error('\nFAILED: this suite needs the built archives.\n' +
+                  '  python3 update.py --offline   (or --site ' + WIKI + ' --offline)\n');
+    process.exit(1);
   }
   const wikiNames = tarNames(wikiArchive);
   wikiNames.forEach((n) => store.add('/' + n));
@@ -144,6 +152,9 @@ function run(workerSrc, label) {
         match: async (r) => {
           const k = keyOf(r);
           if (typeof name === 'string' && name.startsWith('ardupilot-offline-')) {
+            // These caches model FINISHED downloads, so they carry the marker
+            // the worker now requires before consulting them.
+            if (k === '/__ap_complete__') { return asResponse(k); }
             const want = k.startsWith('/_common/')
               ? 'ardupilot-offline-common'
               : 'ardupilot-offline-' + k.split('/')[1];
@@ -251,12 +262,44 @@ function bootWorker({ networkFails = false, serve = null,
                      holdNetwork = false } = {}) {
   const seen = { fetches: [], cacheReads: [], puts: [], deleted: [] };
   let cacheNames = existingCaches.slice();
+  // An offlineCopy models a COMPLETED download, so its cache must exist by
+  // name and carry the completion marker the worker now requires before it
+  // will consult any offline cache.
+  const offlineName = offlineCopy
+    ? 'ardupilot-offline-' + offlineCopy.path.split('/')[1]
+    : null;
+  if (offlineName && cacheNames.indexOf(offlineName) === -1) {
+    cacheNames.push(offlineName);
+  }
   const listeners = {};
-  const emptyCache = {
-    match: async (r) => { seen.cacheReads.push(String(r && r.url ? r.url : r)); },
+  // Each cache name gets its own object, because the distinction under test is
+  // exactly which cache holds what: the offline copy lives ONLY in its own
+  // ardupilot-offline-* cache, and a runtime cache that answered for it would
+  // short-circuit the promotion this harness exists to observe.
+  const cacheFor = (name) => ({
+    match: async (r) => {
+      const k = String(r && r.url ? r.url : r);
+      seen.cacheReads.push(k);
+      if (offlineCopy && name === offlineName) {
+        if (k.indexOf('/__ap_complete__') !== -1) {
+          // noMarker models the aborted download: content present, marker not.
+          return offlineCopy.noMarker ? undefined : { ok: true, status: 200 };
+        }
+        if (k.endsWith(offlineCopy.path)) {
+          seen.servedCopy = seen.servedCopy || bodyAwareResponse(offlineCopy.body);
+          if (offlineCopy.ct) {
+            seen.servedCopy.headers = { get: (h) =>
+              String(h).toLowerCase() === 'content-type' ? offlineCopy.ct : null };
+          }
+          return seen.servedCopy;
+        }
+      }
+      return undefined;
+    },
     put: async (k) => { seen.puts.push(String(k && k.url ? k.url : k)); },
     keys: async () => [],
-  };
+  });
+  const emptyCache = cacheFor('');
   const ctx = {
     self: {
       addEventListener: (type, fn) => { listeners[type] = fn; },
@@ -270,11 +313,15 @@ function bootWorker({ networkFails = false, serve = null,
         seen.cacheReads.push(k);
         if (offlineCopy && k.endsWith(offlineCopy.path)) {
           seen.servedCopy = seen.servedCopy || bodyAwareResponse(offlineCopy.body);
+          if (offlineCopy.ct) {
+            seen.servedCopy.headers = { get: (h) =>
+              String(h).toLowerCase() === 'content-type' ? offlineCopy.ct : null };
+          }
           return seen.servedCopy;
         }
         return undefined;
       },
-      open: async () => emptyCache,
+      open: async (name) => cacheFor(name),
       keys: async () => cacheNames.slice(),
       delete: async (n) => {
         seen.deleted.push(n);
@@ -456,6 +503,28 @@ async function checkPoisonGuard() {
   check('an extension with no expectation is left alone',
         seen.puts.length === 1, JSON.stringify(seen.puts));
 
+  // The promotion path: heldOffline() content copied into the versioned
+  // static cache. A saved wiki is one more source of bytes, not a trusted one,
+  // and this path was used to poison the static cache while the fetch-side
+  // guard stood intact.
+  {
+    const w = bootWorker({ offlineCopy: {
+      path: '/plane/_static/css/theme.css',
+      body: '<html>captive portal login</html>', ct: 'text/html' } });
+    const a = w.ask('/plane/_static/css/theme.css');
+    if (a) { await a; }
+    check('a poisoned offline entry is served but NOT promoted',
+          w.seen.puts.length === 0, JSON.stringify(w.seen.puts));
+  }
+  {
+    const w = bootWorker({ offlineCopy: {
+      path: '/plane/_static/css/theme.css', body: 'a{}', ct: 'text/css' } });
+    const a = w.ask('/plane/_static/css/theme.css');
+    if (a) { await a; }
+    check('a legitimate offline stylesheet is still promoted',
+          w.seen.puts.length === 1, JSON.stringify(w.seen.puts));
+  }
+
   // Cross-origin assets expose no headers and are stored on purpose.
   const w = bootWorker({ serve: () => ({ type: 'opaque', ct: null }) });
   const a = w.ask('https://i.creativecommons.org/l/by-sa/3.0/88x31.png');
@@ -489,13 +558,15 @@ async function checkArchiveFallback() {
         JSON.stringify(w.seen.fetches));
 
   // Offline: the saved wiki holds it, so it must be served rather than failing.
-  w = bootWorker({ networkFails: true });
+  w = bootWorker({ networkFails: true,
+                   offlineCopy: { path: '/dev/searchindex.js',
+                                  body: 'Search.setIndex({})' } });
   a = w.ask('/dev/searchindex.js');
   let answered;
   if (a) { answered = await a.catch(() => 'REJECTED'); }
   check('offline, it falls back to the saved wiki instead of failing',
-        answered !== 'REJECTED' && w.seen.cacheReads.length > 0,
-        w.seen.cacheReads.length + ' cache reads');
+        !!answered && answered !== 'REJECTED' && answered === w.seen.servedCopy,
+        answered === w.seen.servedCopy ? 'served the saved copy' : String(answered));
 }
 
 /*
@@ -582,6 +653,44 @@ async function checkRefreshSurvivesAConsumedBody() {
         !(w.seen.errors || []).length, JSON.stringify(w.seen.errors || []));
 }
 
+/*
+ * A half-written download must not be served.
+ *
+ * The panel writes /__ap_complete__ only when every file is in place; entries
+ * without it are an abort or a quota kill. The worker used to go by cache name
+ * alone, so it served fragments of a failed download in preference to the
+ * network while the panel said nothing was saved and offered no way to remove
+ * what was being served.
+ */
+async function checkMarkerRespected() {
+  console.log('\nservice worker: a download without its marker is not a copy\n');
+
+  // The dangerous state: CONTENT present, marker absent. This is what an
+  // abort or a quota kill leaves, and what was observed being served.
+  const w2 = bootWorker({
+    serve: () => ({ ct: 'text/html', body: '<html>from the network' }),
+    offlineCopy: { path: '/dev/docs/thing.html',
+                   body: '<html>HALF-DOWNLOADED PAGE', noMarker: true },
+  });
+  const a2 = w2.ask('/dev/docs/thing.html', { mode: 'navigate' });
+  const r2 = a2 ? await a2 : null;
+  check('a half-written download is NOT served',
+        r2 !== w2.seen.servedCopy, r2 === w2.seen.servedCopy
+          ? 'SERVED THE FRAGMENT' : 'went to the network');
+  check('the network answers instead',
+        w2.seen.fetches.length >= 1, w2.seen.fetches.length + ' fetches');
+
+  // And the same cache WITH its marker is served offline, so the gate does
+  // not throw away legitimate copies.
+  const w3 = bootWorker({ networkFails: true,
+    offlineCopy: { path: '/dev/docs/thing.html', body: '<html>saved page' } });
+  const a3 = w3.ask('/dev/docs/thing.html', { mode: 'navigate' });
+  const r3 = a3 ? await a3.catch(() => null) : null;
+  check('the same cache with its marker still serves offline',
+        r3 === w3.seen.servedCopy,
+        r3 === w3.seen.servedCopy ? 'served' : String(r3));
+}
+
 async function checkVersionBump() {
   console.log('\nservice worker: what a version bump throws away\n');
 
@@ -626,6 +735,7 @@ async function main() {
     await checkArchiveFallback();
     await checkRevalidationIsAwaited();
     await checkRefreshSurvivesAConsumedBody();
+    await checkMarkerRespected();
     console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                          : '\nall checks passed\n');
     process.exit(failures ? 1 : 0);
@@ -741,6 +851,7 @@ async function main() {
   await checkArchiveFallback();
   await checkRevalidationIsAwaited();
   await checkRefreshSurvivesAConsumedBody();
+  await checkMarkerRespected();
 
   console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                        : '\nall checks passed\n');
