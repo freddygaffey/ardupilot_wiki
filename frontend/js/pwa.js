@@ -173,7 +173,8 @@
     if (!event.data) {
       return;
     }
-    if (event.data.type === 'PAGE_UPDATED' && event.data.url === window.location.href) {
+    if (event.data.type === 'PAGE_UPDATED' &&
+        event.data.url === window.location.href.split('#')[0]) {
       showUpdateToast();
     }
   });
@@ -359,7 +360,6 @@
   }
 
   function prefetch(href) {
-    var now = performance.now();
     if (busy || asked.has(href)) { return; }
 
     // Already held? Then there is nothing to guess about and nothing to spend.

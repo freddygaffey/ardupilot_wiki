@@ -79,6 +79,24 @@
 
   function el(id) { return document.getElementById(id); }
 
+  /*
+   * Tell the service worker its picture of the caches is out of date.
+   *
+   * The worker memoises which offline caches exist and which carry a completion
+   * marker (knownCacheNames, markerChecked), and it only rebuilds those when it
+   * hears CACHES_CHANGED. Nothing sent that message, so a wiki saved while the
+   * worker was already running was invisible to it until the worker restarted,
+   * and a removed wiki lingered as a live handle. Sent after every change to
+   * what is stored: a completed download, an applied update, a clear.
+   */
+  function notifyWorkerCachesChanged() {
+    try {
+      if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'CACHES_CHANGED' });
+      }
+    } catch (err) { /* no controller yet; nothing is memoised to invalidate */ }
+  }
+
   function fmt(bytes) {
     var m = bytes / 1048576;
     return m >= 1024 ? (m / 1024).toFixed(1) + ' GB' : Math.round(m) + ' MB';
@@ -416,7 +434,8 @@
         .filter(function (n) { return n.indexOf('ardupilot-') === 0; })
         .map(function (n) { return caches.delete(n); }));
     }).then(function () {
-      return Promise.all([renderStorage(), renderWikis()]);
+      notifyWorkerCachesChanged();
+      return renderWikis().then(renderStorage);
     });
   }
 
@@ -946,6 +965,7 @@
                 // that no wikis were saved and the full 696 MB was still to
                 // download. Both readings came from the same run.
                 storedIds[entry.id] = true;
+                notifyWorkerCachesChanged();
                 return renderStorage();
               });
             });
@@ -971,7 +991,7 @@
         queue.forEach(function (w) {
           if (!storedIds[w.id]) { rowProgress(w.id, null); }
         });
-        return Promise.all([renderStorage(), renderWikis()]);
+        return renderWikis().then(renderStorage);
       });
   }
 
@@ -1066,6 +1086,7 @@
           if (!full.length) {
             if (moved) {
               announce('Updated ' + moved + ' file' + (moved === 1 ? '' : 's') + '.');
+              notifyWorkerCachesChanged();
             } else {
               report('Already up to date.');
             }
@@ -1394,8 +1415,10 @@
     // arrived visibly later than the page around it. The numbers are corrected
     // a moment later when the manifest lands; the shape of the thing does not
     // have to wait for them.
-    renderStorage();
-    renderWikis();
+    // renderWikis populates storedIds, which renderStorage's footer reads, so
+    // the footer must wait for it or it briefly says "no wikis saved" on a
+    // device that has some.
+    renderWikis().then(renderStorage);
 
     // The build writes offline-manifest.json alongside the archives. Sizes and
     // page counts change every time the wiki does, so they must come from the
