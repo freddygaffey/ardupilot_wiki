@@ -558,6 +558,155 @@
     });
   }
 
+
+  // ---------------------------------------------------------------------
+  // Differential updates.
+  //
+  // The build writes one table per archive, mapping every archive path to a
+  // hash of its contents. Saving stores the table alongside the files. An
+  // update then fetches the current table and compares it with the stored one,
+  // so only what actually moved is fetched.
+  //
+  // Nothing is hashed here. The stored table is already an exact record of what
+  // was written, so the comparison is table against table, not file against
+  // file. That is what keeps this cheap: no reading several hundred megabytes
+  // back out of storage to find out what is in it.
+  //
+  // The alternative, and what this replaces, is re-fetching the whole archive
+  // because the site-wide build id moved. That is 439MB to correct a typo.
+  // ---------------------------------------------------------------------
+
+  var TABLE_KEY = '/__ap_files__';
+
+  function tableUrl(entry) {
+    return ARTIFACT_BASE + '/' + (entry.files || entry.id + '-files.json') +
+           (CURRENT_BUILD ? '?v=' + encodeURIComponent(CURRENT_BUILD) : '');
+  }
+
+  function storeTable(cache, table) {
+    return cache.put(TABLE_KEY, new Response(JSON.stringify(table), {
+      headers: { 'Content-Type': 'application/json' }
+    }));
+  }
+
+  function readTable(cache) {
+    return cache.match(TABLE_KEY).then(function (r) {
+      return r ? r.json().catch(function () { return null; }) : null;
+    });
+  }
+
+  // The unpacker writes common entries under /_common/ and wiki entries under
+  // /, so a table key becomes a cache key by the same rule.
+  function cacheKeyFor(id, name) {
+    return (id === 'common' ? '/_common/' : '/') + name;
+  }
+
+  /*
+   * Where to fetch a changed file from.
+   *
+   * A wiki entry is served at its own path. A shared image is not: it is stored
+   * once under /_common/, which is a path this site never serves, and is
+   * published under each wiki that uses it. Shared means at least two wikis
+   * have it, so trying them in turn finds it; the wiki being read is tried
+   * first because it is nearly always one of them.
+   */
+  function sourcesFor(id, name) {
+    if (id !== 'common') { return ['/' + name]; }
+    var here = location.pathname.split('/')[1];
+    var ids = [here].concat(WIKIS.map(function (w) { return w.id; }));
+    var seen = {}, out = [];
+    ids.forEach(function (w) {
+      if (w && !seen[w]) { seen[w] = 1; out.push('/' + w + '/' + name); }
+    });
+    return out;
+  }
+
+  function fetchInto(cache, id, name) {
+    var urls = sourcesFor(id, name);
+    var key = cacheKeyFor(id, name);
+    function attempt(i) {
+      if (i >= urls.length) {
+        throw new Error('could not fetch ' + name);
+      }
+      return fetch(urls[i], {
+        cache: 'no-cache',
+        signal: activeDownload ? activeDownload.signal : undefined
+      }).then(function (r) {
+        if (!r.ok) { return attempt(i + 1); }
+        return r.blob().then(function (body) {
+          return cache.put(new Request(key), new Response(body, {
+            headers: { 'Content-Type': mimeFor(name) }
+          }));
+        });
+      }, function (err) {
+        if (err && err.name === 'AbortError') { throw err; }
+        return attempt(i + 1);
+      });
+    }
+    return attempt(0);
+  }
+
+  /*
+   * Compare stored against published and apply the difference.
+   *
+   * Resolves with a summary, or null when this wiki was saved before tables
+   * existed and there is nothing to compare against, in which case the caller
+   * falls back to re-fetching the archive.
+   */
+  function updateStored(entry, onProgress) {
+    var cacheName = OFFLINE_CACHE_PREFIX + entry.id;
+    return caches.open(cacheName).then(function (cache) {
+      return Promise.all([
+        readTable(cache),
+        fetch(tableUrl(entry), { cache: 'no-cache' }).then(function (r) {
+          if (!r.ok) { throw new Error('could not fetch the file list'); }
+          return r.json();
+        })
+      ]).then(function (both) {
+        var stored = both[0], published = both[1];
+        if (!stored) { return null; }
+
+        var changed = [], removed = [];
+        Object.keys(published).forEach(function (k) {
+          if (stored[k] !== published[k]) { changed.push(k); }
+        });
+        Object.keys(stored).forEach(function (k) {
+          if (!Object.prototype.hasOwnProperty.call(published, k)) {
+            removed.push(k);
+          }
+        });
+
+        var done = 0;
+        function next(i) {
+          if (i >= changed.length) { return Promise.resolve(); }
+          return fetchInto(cache, entry.id, changed[i]).then(function () {
+            done += 1;
+            if (onProgress) { onProgress(done, changed.length); }
+            return next(i + 1);
+          });
+        }
+
+        return next(0).then(function () {
+          return Promise.all(removed.map(function (k) {
+            return cache.delete(new Request(cacheKeyFor(entry.id, k)));
+          }));
+        }).then(function () {
+          // Written only once every file is in place. An interrupted update
+          // therefore leaves the previous table and the previous build id, so
+          // the wiki still reports itself as the older build rather than as a
+          // mixture of two.
+          return storeTable(cache, published);
+        }).then(function () {
+          return cache.put(COMPLETE_MARKER, new Response(JSON.stringify({
+            build: CURRENT_BUILD, saved: Date.now(), id: entry.id
+          }), { headers: { 'Content-Type': 'application/json' } }));
+        }).then(function () {
+          return { id: entry.id, changed: changed.length, removed: removed.length };
+        });
+      });
+    });
+  }
+
   var activeDownload = null;
 
   function cancelDownload() {
@@ -639,6 +788,19 @@
                 report(entry.name + ' · ' + pct + '%');
               }).then(function () {
                 rowProgress(entry.id, 100, 'done');
+                // Store the file table beside the files it describes, so a
+                // later update can compare against exactly what was written
+                // here. A failure to fetch it is not fatal: the wiki is
+                // complete and usable, and the next update falls back to
+                // re-fetching the archive, which is what happened before
+                // tables existed.
+                return fetch(tableUrl(entry), { cache: 'no-cache' })
+                  .then(function (r) { return r.ok ? r.json() : null; })
+                  .then(function (table) {
+                    return table ? storeTable(cache, table) : null;
+                  })
+                  .catch(function () { return null; });
+              }).then(function () {
                 // The marker records the build, not just the time: an update
                 // check is only meaningful against what was actually stored.
                 return cache.put(COMPLETE_MARKER,
@@ -738,17 +900,49 @@
         }
         out.textContent = 'Updating ' + stale.length + ' item' +
                           (stale.length === 1 ? '' : 's') + '…';
-        // Re-select exactly what is out of date and reuse the download path,
-        // so there is one implementation of fetching and unpacking.
-        selectable().forEach(function (c) {
-          c.checked = stale.indexOf(c.value) !== -1;
+
+        // Try the differential path first: compare the stored file table with
+        // the published one and fetch only what moved. Anything saved before
+        // tables existed has nothing to compare against and resolves null, and
+        // those fall back to re-fetching the whole archive.
+        var byId = {};
+        [COMMON].concat(WIKIS).forEach(function (w) { byId[w.id] = w; });
+
+        var moved = 0, full = [];
+        return stale.reduce(function (chain, id) {
+          return chain.then(function () {
+            var entry = byId[id];
+            if (!entry) { full.push(id); return; }
+            return updateStored(entry, function (done, total) {
+              out.textContent = 'Updating ' + entry.name + ' · ' +
+                                done + ' of ' + total + ' files…';
+            }).then(function (result) {
+              if (!result) { full.push(id); return; }
+              moved += result.changed + result.removed;
+            }, function () {
+              full.push(id);
+            });
+          });
+        }, Promise.resolve()).then(function () {
+          if (!full.length) {
+            out.textContent = moved
+              ? 'Updated ' + moved + ' file' + (moved === 1 ? '' : 's') + '.'
+              : 'Already up to date.';
+            return renderWikis();
+          }
+          // Re-select what could not be updated differentially and reuse the
+          // download path, so there is one implementation of fetching and
+          // unpacking.
+          selectable().forEach(function (c) {
+            c.checked = full.indexOf(c.value) !== -1;
+          });
+          syncSelectAll();
+          updateTotal();
+          updateExportState();
+          updateSaveState();
+          // The one caller allowed to re-fetch what is already stored.
+          return saveSelectedReal(full);
         });
-        syncSelectAll();
-        updateTotal();
-        updateExportState();
-        updateSaveState();
-        // The one caller allowed to re-fetch what is already stored.
-        return saveSelectedReal(stale);
       })
       .catch(function (err) {
         out.textContent = (err && err.message) || 'Check failed';
