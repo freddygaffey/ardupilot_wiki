@@ -413,3 +413,71 @@
 .rst-content .apo .apo-hint { margin-top: 4px; }
 .rst-content .apo .apo-title { margin: 0; color: #fff; }
 .rst-content .apo code { color: var(--danger); background: var(--hover); }
+
+/* ---------- update toast ----------
+ *
+ * A small card that appears when the wiki is checking for or applying an
+ * update, with a bar that sweeps while it works and fills while it applies
+ * files. It is deliberately visible: a saved wiki updating itself is news the
+ * reader should see, not a text change buried in the panel footer.
+ */
+.ap-toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 3000;
+  max-width: 320px;
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: #2f3136;
+  color: #fff;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  font-size: 14px;
+  line-height: 1.4;
+  /* Slides in from below, and out again when dismissed. */
+  transform: translateY(140%);
+  opacity: 0;
+  transition: transform 0.28s ease, opacity 0.28s ease;
+}
+.ap-toast.ap-toast-show {
+  transform: translateY(0);
+  opacity: 1;
+}
+.ap-toast-title {
+  font-weight: 700;
+  margin-bottom: 6px;
+}
+.ap-toast-msg {
+  opacity: 0.9;
+}
+.ap-toast-track {
+  position: relative;
+  height: 4px;
+  margin-top: 10px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.18);
+  overflow: hidden;
+}
+.ap-toast-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  height: 100%;
+  border-radius: 2px;
+  background: #4aa3ff;
+  width: 0;
+  transition: width 0.3s ease;
+}
+/* Indeterminate: a segment sweeps left to right while we do not know how long
+   it will take (checking the manifest, comparing tables). */
+.ap-toast-track.ap-toast-sweep .ap-toast-bar {
+  width: 40%;
+  transition: none;
+  animation: ap-toast-sweep 1.1s ease-in-out infinite;
+}
+@keyframes ap-toast-sweep {
+  0%   { left: -40%; }
+  100% { left: 100%; }
+}
+/* Done: green, and the whole card fades out shortly after. */
+.ap-toast.ap-toast-done .ap-toast-bar { background: #46b46e; width: 100%; }

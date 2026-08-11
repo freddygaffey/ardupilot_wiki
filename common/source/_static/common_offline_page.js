@@ -102,6 +102,55 @@
     return m >= 1024 ? (m / 1024).toFixed(1) + ' GB' : Math.round(m) + ' MB';
   }
 
+  /* ---------- update toast ----------
+   *
+   * A visible card for the one thing worth seeing: a saved wiki checking for or
+   * applying an update. The bar sweeps while we do not know how long a step
+   * takes, fills as files are applied, and turns green when done, after which
+   * the card fades itself out. Styled in common_offline.css.
+   */
+  var toastEl = null, toastHideTimer = null;
+
+  function toast(opts) {
+    if (typeof document === 'undefined' || !document.body) { return; }
+    if (!toastEl) {
+      toastEl = document.createElement('div');
+      toastEl.className = 'ap-toast';
+      toastEl.setAttribute('role', 'status');
+      toastEl.setAttribute('aria-live', 'polite');
+      toastEl.innerHTML =
+        '<div class="ap-toast-title"></div>' +
+        '<div class="ap-toast-msg"></div>' +
+        '<div class="ap-toast-track"><div class="ap-toast-bar"></div></div>';
+      document.body.appendChild(toastEl);
+    }
+    if (opts.mode === 'hide') {
+      toastEl.classList.remove('ap-toast-show');
+      return;
+    }
+    if (toastHideTimer) { clearTimeout(toastHideTimer); toastHideTimer = null; }
+
+    toastEl.querySelector('.ap-toast-title').textContent = opts.title || '';
+    toastEl.querySelector('.ap-toast-msg').textContent = opts.msg || '';
+    var track = toastEl.querySelector('.ap-toast-track');
+    var bar = toastEl.querySelector('.ap-toast-bar');
+    toastEl.classList.remove('ap-toast-done');
+    track.classList.remove('ap-toast-sweep');
+
+    if (opts.mode === 'sweep') {
+      track.classList.add('ap-toast-sweep');
+    } else if (opts.mode === 'progress') {
+      var pct = Math.max(3, Math.min(100, opts.pct || 0));
+      bar.style.width = pct + '%';
+    } else if (opts.mode === 'done') {
+      toastEl.classList.add('ap-toast-done');
+      toastHideTimer = setTimeout(function () { toast({ mode: 'hide' }); }, 3500);
+    }
+    // Force a reflow so the slide-in transition runs even on the first show.
+    void toastEl.offsetWidth;
+    toastEl.classList.add('ap-toast-show');
+  }
+
   /* ---------- measured state ---------- */
 
   function storedWikis() {
@@ -646,6 +695,7 @@
     var report = quiet ? function () {} : announce;
 
     report('Checking…');
+    if (!quiet) { toast({ title: 'Checking for updates', msg: '', mode: 'sweep' }); }
 
     return fetch('/offline/offline-manifest.json', { cache: 'no-cache' })
       .then(function (r) {
@@ -685,12 +735,18 @@
         var stale = results.filter(Boolean);
         if (!stale.length) {
           report('Up to date.');
+          if (!quiet) {
+            toast({ title: 'Up to date', msg: 'Your saved wikis are current.',
+                    mode: 'done' });
+          }
           return;
         }
         // Real news: something moved, and pages the reader is holding are
         // about to change under them. Said out loud even on an automatic run.
         announce('Updating ' + stale.length + ' item' +
                  (stale.length === 1 ? '' : 's') + '…');
+        toast({ title: 'Updating saved wikis',
+                msg: 'Checking what changed…', mode: 'sweep' });
 
         // Try the differential path first: compare the stored file table with
         // the published one and fetch only what moved. Anything saved before
@@ -707,6 +763,9 @@
             return ApUpdate.updateStored(entry, updateCfg(), function (done, total) {
               announce('Updating ' + entry.name + ' · ' +
                        done + ' of ' + total + ' files…');
+              toast({ title: 'Updating ' + entry.name,
+                      msg: done + ' of ' + total + ' files',
+                      mode: 'progress', pct: total ? (done / total) * 100 : 0 });
             }).then(function (result) {
               if (!result) { full.push(id); return; }
               moved += result.changed + result.removed;
@@ -718,9 +777,16 @@
           if (!full.length) {
             if (moved) {
               announce('Updated ' + moved + ' file' + (moved === 1 ? '' : 's') + '.');
+              toast({ title: 'Update complete',
+                      msg: 'Updated ' + moved + ' file' + (moved === 1 ? '' : 's') + '.',
+                      mode: 'done' });
               notifyWorkerCachesChanged();
             } else {
               report('Already up to date.');
+              if (!quiet) {
+                toast({ title: 'Up to date', msg: 'Nothing had changed.',
+                        mode: 'done' });
+              }
             }
             return renderWikis();
           }
@@ -746,6 +812,9 @@
             announce('A full download is needed to update ' +
                      names.join(', ') +
                      '. Press Check for updates to start it.');
+            toast({ title: 'Update available',
+                    msg: 'A full download is needed. Open the Offline panel to update.',
+                    mode: 'done' });
             return renderWikis();
           }
 
