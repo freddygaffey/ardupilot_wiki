@@ -181,3 +181,151 @@ Reply on #3407 rather than opening a pull request. Large infrastructural PRs in
 this repo die of neglect: #2891 sat four years before being closed, #3650 has
 been open since 2021. Lead with the demo, and be straightforward that the open
 question is bandwidth and who operates the hosting.
+
+---
+
+# Handover, 11 August 2026
+
+Stop-work note. One bug is diagnosed but not fixed, and the diagnosis is the
+valuable part: it cost most of a session to find and is easy to re-lose.
+
+## The bug that is still open, and what it actually is
+
+Differential updates replace non-HTML files and silently fail to replace HTML
+files. Symptom, with a saved wiki seeded so nine files are stale:
+
+```
+objects.inv       68,182 bytes   replaced
+searchindex.js 1,152,920 bytes   replaced
+all seven .html        17 bytes   NOT replaced, and reported as updated
+```
+
+**It is not the diff, the worker routing, or Cache Storage.** It is a stale copy
+of `common_offline_page.js` in the *browser's HTTP cache*.
+
+The proof is one field. Instrumenting `window.fetch` during an update shows:
+
+```
+/dev/docs/editing-prs.html   tagged:false  ->  17 bytes
+/dev/docs/ros2.html          tagged:false  ->  17 bytes
+/dev/objects.inv             tagged:false  ->  68,182
+/dev/searchindex.js          tagged:false  ->  1,152,920
+```
+
+`tagged:false` on every one. The client never appended the `ap-update` marker,
+so the service worker treated these as ordinary reads. HTML takes the
+cache-first route and was answered from the very cache being refreshed, giving
+back the placeholder, which was then written over itself. `.js` and `.inv` go to
+the network regardless of the marker, which is the only reason they appeared to
+work and why the failure looked selective and mysterious.
+
+The browser was holding an **intermediate** build of the panel script: one that
+already had `updateStored` and did not yet have the tagging. Checking for
+`updateStored` to confirm "the new code is running" therefore passed while the
+code under test was absent. Do not use a function name as a version check.
+
+## Why this keeps happening, and the fix worth making first
+
+Three separate incidents this session, all the same root cause: **our own
+application scripts have no fingerprint and no `no-cache`.**
+
+1. The service worker served an old `common_offline_page.js` from `STATIC_CACHE`.
+2. The saved archive contained an old `common_offline_page.js`, because the
+   archive was packed before the rebuilt script was copied into
+   `build/html/_static`. Saving a wiki then unpacked the old script over the good
+   one.
+3. The browser HTTP cache served an old copy, which is the open bug above.
+
+Sphinx fingerprints its own assets (`theme.css?v=5d32c60e`) so they are immune.
+Ours are not. `APP_ASSET` in `sw.js` makes the worker network-first for them,
+which addresses (1) only.
+
+**Do this before touching the update code again:** serve
+`common_offline_*.js`, `common_offline.css` and `/js/pwa.js` with
+`Cache-Control: no-cache` in `deploy/nginx-wiki.conf`, exactly as `/sw.js`
+already is. Then re-run the test below. There is a real chance the update code
+is already correct and has simply never once been executed.
+
+## How to verify, and the test that should have existed
+
+The browser test that found this is in the transcript but should be replaced by
+an automated one. Under jsdom with a Cache Storage shim: seed a stored file
+table, run an update against a stubbed server, and **assert the bytes in the
+cache afterwards**. Never assert on the UI text.
+
+The UI text is itself wrong and needs fixing: "Updated 9 files" is computed from
+the size of the diff, not from writes that succeeded, which is precisely why a
+run that changed nothing reported success. It must count completed writes.
+
+To reproduce by hand, from a clean browser state:
+
+1. `caches.delete(...)` everything, unregister the worker, hard reload.
+2. Confirm the running script by content, not by a function name: fetch it with
+   `{cache:'reload'}` and check for `ap-update=`.
+3. Seed `ardupilot-offline-dev` with placeholders for every key in
+   `/offline/dev-files.json`, mark nine entries with a wrong hash, write
+   `/__ap_files__` and a `/__ap_complete__` with an old build id.
+4. Press Check for updates, then assert the nine files are real and every other
+   file is untouched.
+
+## What is finished and verified
+
+* **The build side.** `scripts/build_offline_artifacts.py` writes a
+  `<wiki>-files.json` per archive, path to blake2b-64 of contents. Hashing all
+  3,316 Copter files (628 MB) takes 1.1 s inside a walk that already reads those
+  bytes. Tables are 69 KB gzipped for Copter.
+* **Determinism and granularity**, both measured: two builds of unchanged
+  content produce identical tables, and editing one page moves exactly one of
+  297 entries.
+* **The real-world saving**, measured on a genuine 12-source-file commit
+  (`9dcead75d`) by building its parent and itself: **9 of 1,057 files change,
+  1,436 KB against 490 MB, a 350x reduction.** A changed page does not rewrite
+  every other page's sidebar, which was the main risk to this design.
+* **Worker routing for updates**, `UPDATE_PARAM` in `sw.js`, verified by hand: a
+  tagged HTML request returns the real 33,486-byte page. It deliberately omits
+  the cache fallback, because answering an update from storage hands back the
+  stale copy being replaced.
+* **The parameter version selector** is live on the mirror, 15 versions for
+  Copter, Plane and Rover, 10 for Sub.
+* **Both wiki pages** rewritten against `common-wiki-editing-style-guide`.
+
+## Corrections made to earlier claims
+
+* The 33,512 ms figure for `parameters.html` **does not reproduce** and has been
+  removed. Measured against the live site as a control: ardupilot.org 8,289 ms,
+  this branch 2,344 ms. Six of those eight seconds are spent building the page,
+  and that part drops from 6,208 ms to 1,968 ms, so `content-visibility` is
+  doing about 3x. The notes previously said it "did not make the page usable",
+  which was wrong.
+* Storage of 1.2 GB against a 700 MB download is **not** double-storing. 724 MB
+  is the compressed download; the same content unpacked is 1,212 MB. The panel
+  should show both numbers and currently shows one.
+
+## Still to do
+
+1. Fix the caching of app scripts, then re-test the update path (above).
+2. Write the automated update test; make the count report completed writes.
+3. Test the sidebar. Never got to it.
+4. The panel's storage figures: show download size and unpacked size.
+5. Bound the promotion in `sw.js:508`. Pages read from a saved wiki are copied
+   into the runtime cache, roughly 2% overhead, buying 1 ms against 84 ms.
+6. Guard the build order so an archive can never be packed before the static
+   files it contains are up to date. This bit us once and is invisible when it
+   does.
+
+## Known upstream issue found today, left alone at the user's request
+
+The top menu collapses to `height: 0` below 767 px, or below 1024 px on a
+Retina display, and the mobile styling expects a `#menu-button` that
+`z_top_menu.html` never renders. Proven on ardupilot.org itself: at 673 px,
+height 0, all 36 links invisible. Not ours, and not recorded in
+`KNOWN_UPSTREAM_ISSUES.md` because the user said to leave it.
+
+## Operational
+
+The user's twelve saved wikis were deleted at their request via the Remove all
+button, 1.2 GB down to 100 MB. **They need to re-save before demoing.**
+
+Earlier in the session an update test was run in the user's own browser profile
+and re-downloaded their saved wikis via the fallback path. Use a clean profile
+for storage tests.
