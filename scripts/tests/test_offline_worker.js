@@ -430,6 +430,34 @@ async function checkPoisonGuard() {
  * megabytes the reader chose to keep, and losing it because the worker changed
  * would be indefensible.
  */
+/*
+ * searchindex.js and objects.inv live at a wiki's root, so they match none of
+ * the routes: not a page, not an image, not under _static. They were never
+ * served from storage, so offline search was broken by a file that was sitting
+ * in the archive all along.
+ */
+async function checkArchiveFallback() {
+  console.log('\nservice worker: archive files no route claims\n');
+
+  // Online: straight to the network, exactly as before.
+  let w = bootWorker();
+  let a = w.ask('/dev/searchindex.js');
+  check('online, it is answered from the network', !!a);
+  if (a) { await a; }
+  check('and storage is not consulted for it',
+        w.seen.fetches.length === 1 && w.seen.cacheReads.length === 0,
+        JSON.stringify(w.seen.fetches));
+
+  // Offline: the saved wiki holds it, so it must be served rather than failing.
+  w = bootWorker({ networkFails: true });
+  a = w.ask('/dev/searchindex.js');
+  let answered;
+  if (a) { answered = await a.catch(() => 'REJECTED'); }
+  check('offline, it falls back to the saved wiki instead of failing',
+        answered !== 'REJECTED' && w.seen.cacheReads.length > 0,
+        w.seen.cacheReads.length + ' cache reads');
+}
+
 async function checkVersionBump() {
   console.log('\nservice worker: what a version bump throws away\n');
 
@@ -471,6 +499,7 @@ async function main() {
     await checkUpdateRouting();
     await checkPoisonGuard();
     await checkVersionBump();
+    await checkArchiveFallback();
     console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                          : '\nall checks passed\n');
     process.exit(failures ? 1 : 0);
@@ -583,6 +612,7 @@ async function main() {
   await checkUpdateRouting();
   await checkPoisonGuard();
   await checkVersionBump();
+  await checkArchiveFallback();
 
   console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                        : '\nall checks passed\n');
