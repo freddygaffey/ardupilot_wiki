@@ -41,6 +41,9 @@ const THIRD_PARTY_STATIC =
 // The offline page and the assets that drive it: markup, panel and exporter.
 const APP_ASSET =
   /(^\/sw\.js$|^\/js\/pwa\.js$|common_offline(\.css|_page\.js|_export\.js)$|common-offline(\.html)?$)/;
+// Marks a request as part of a differential update, which must not be served
+// from the very cache it is refreshing.
+const UPDATE_PARAM = 'ap-update';
 const THIRD_PARTY_FRESH = /^https:\/\/firmware\.ardupilot\.org\/useralerts\//;
 const CURRENT_CACHES = [PAGE_CACHE, IMAGE_CACHE, STATIC_CACHE, THIRD_PARTY_CACHE];
 // Downloaded wikis, deliberately unversioned so they outlive worker updates.
@@ -607,6 +610,23 @@ self.addEventListener('fetch', (event) => {
   // its static assets with a content hash (?v=5d32c60e), so a cached copy is
   // only ever the copy that hash asked for, and serving it from cache cannot
   // pair the wrong script with the wrong markup.
+  // A differential update has to reach the server. Its whole purpose is to
+  // replace the copy held locally, so answering it from that copy makes the
+  // update a silent no-op: it fetches, stores what it already had, and reports
+  // success while changing nothing. Found exactly that way, by an update that
+  // said "Updated 9 files" and left all nine untouched.
+  if (url.searchParams.has(UPDATE_PARAM)) {
+    // Deliberately WITHOUT the cache fallback every other route gets. safely()
+    // answers a failed network request from storage, which is right everywhere
+    // else and exactly wrong here: it hands back the stale copy the update is
+    // replacing, the caller stores it over itself, and the update reports
+    // success having changed nothing. Seen intermittently, one file in nine.
+    // Letting it fail is what allows the caller to retry or fall back to the
+    // archive.
+    event.respondWith(fetch(request));
+    return;
+  }
+
   if (APP_ASSET.test(url.pathname)) {
     event.respondWith(safely(networkOnly(request), request));
     return;
