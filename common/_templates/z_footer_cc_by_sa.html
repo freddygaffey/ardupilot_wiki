@@ -1,0 +1,17 @@
+{# Theme override: the licence badge, fetched only when it is nearly on screen.
+
+   Identical to the theme's own z_footer_cc_by_sa.html except for four
+   attributes on the image. It sits in the footer of all 3,958 pages, and
+   without loading="lazy" the browser fetches it during the initial load of
+   every one of them, for a decoration most readers never scroll to. Measured
+   on a fully cached page it was 22 ms, the second largest item on the page,
+   ahead of everything the reader actually came for.
+
+   width and height are given so reserving its space cannot shift the footer
+   when it does arrive, which is the usual cost of making an image lazy.
+
+   The theme is a separate package, so this cannot be fixed at the source; it
+   is overridden here the same way z_top_menu.html is. Keep it in step if the
+   theme's version changes.
+#}
+<a style="float:right;" rel="license" href="https://creativecommons.org/licenses/by-sa/3.0/"><img alt="Creative Commons License" style="border-width:0" src="https://i.creativecommons.org/l/by-sa/3.0/88x31.png" width="88" height="31" loading="lazy" decoding="async" /></a>
