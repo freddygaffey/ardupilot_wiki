@@ -622,7 +622,13 @@
   }
 
   function fetchInto(cache, id, name) {
-    var urls = sourcesFor(id, name);
+    // Tagged so the service worker sends it to the network. Without this the
+    // worker answers from the cache being refreshed, and the update stores what
+    // it already had while reporting that it updated.
+    var tag = 'ap-update=' + encodeURIComponent(CURRENT_BUILD || '1');
+    var urls = sourcesFor(id, name).map(function (u) {
+      return u + (u.indexOf('?') === -1 ? '?' : '&') + tag;
+    });
     var key = cacheKeyFor(id, name);
     function attempt(i) {
       if (i >= urls.length) {
