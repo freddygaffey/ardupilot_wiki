@@ -75,7 +75,7 @@ const THIRD_PARTY_STATIC =
 // changed. It gets stale-while-revalidate below, so it is served instantly and
 // is at most one navigation behind, which for this file is harmless.
 const APP_ASSET =
-  /(^\/sw\.js$|common_offline(\.css|_page\.js|_export\.js|_document\.js|_unpack\.js)$|common-offline(\.html)?$)/;
+  /(^\/sw\.js$|common_offline(\.css|_page\.js|_export\.js|_document\.js|_unpack\.js|_update\.js)$|common-offline(\.html)?$)/;
 // Marks a request as part of a differential update, which must not be served
 // from the very cache it is refreshing.
 const UPDATE_PARAM = 'ap-update';
