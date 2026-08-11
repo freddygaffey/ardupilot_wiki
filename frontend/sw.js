@@ -41,7 +41,7 @@
  * the activate handler skips it, so a bump costs a reader nothing but a few
  * re-fetched assets.
  */
-const CACHE_VERSION = 'v6';
+const CACHE_VERSION = 'v7';
 const PAGE_CACHE = `ardupilot-pages-${CACHE_VERSION}`;
 const IMAGE_CACHE = `ardupilot-images-${CACHE_VERSION}`;
 const STATIC_CACHE = `ardupilot-static-${CACHE_VERSION}`;
@@ -408,7 +408,26 @@ async function notifyClients(message) {
  * Serve the cached copy at once, refresh it in the background, and speak up
  * only if the refreshed copy actually differs from what was served.
  */
-async function staleWhileRevalidate(request, cacheName, announceChanges) {
+/*
+ * `event` is not optional in practice, and leaving it out was a real bug.
+ *
+ * The revalidation below is started and then not awaited, because the whole
+ * point is to answer from storage without waiting for it. But a service worker
+ * is killed as soon as its last respondWith settles unless something asks the
+ * browser to wait, and nothing did. So the fetch was begun and then abandoned,
+ * over and over, and the page cache never filled.
+ *
+ * Measured on the mirror before the fix: the page cache held exactly one entry
+ * after a session of browsing, and it was /sw.js. Every page came from the
+ * saved wiki, which is why content stayed seven hours stale while the server
+ * had been rebuilt repeatedly, why the video stills never gave way to the real
+ * embeds, and why PAGE_UPDATED had never once fired.
+ *
+ * event.waitUntil() is the whole fix: the response still goes back instantly
+ * from storage, and the browser now keeps the worker alive long enough to
+ * actually store what came back.
+ */
+async function staleWhileRevalidate(request, cacheName, announceChanges, event) {
   const cache = await caches.open(cacheName);
   // What this page cached while reading, and failing that, what a downloaded
   // wiki holds. Both are copies we already have, and holding a page on disk
@@ -441,6 +460,12 @@ async function staleWhileRevalidate(request, cacheName, announceChanges) {
     }
     return response;
   }).catch(() => undefined);
+
+  // Without this the browser may terminate the worker the moment the cached
+  // copy is handed back, and the fetch above is dropped on the floor.
+  if (event && typeof event.waitUntil === 'function') {
+    event.waitUntil(network);
+  }
 
   if (cached) {
     return cached;
@@ -512,7 +537,7 @@ async function networkOnly(request) {
  * copy stored has to be keyed the same way or the cache grows without bound,
  * one entry per page view.
  */
-async function freshBehind(request, cacheName) {
+async function freshBehind(request, cacheName, event) {
   const cache = await caches.open(cacheName);
   const key = new URL(request.url);
   key.search = '';
@@ -527,6 +552,12 @@ async function freshBehind(request, cacheName) {
       return response;
     })
     .catch(() => undefined);
+
+  // As in staleWhileRevalidate: answered from storage, so nothing awaits the
+  // refresh, so the worker has to be told to stay alive for it.
+  if (event && typeof event.waitUntil === 'function') {
+    event.waitUntil(network);
+  }
 
   if (stored) {
     return stored;
@@ -690,7 +721,7 @@ self.addEventListener('fetch', (event) => {
     if (THIRD_PARTY_STATIC.test(url.href)) {
       event.respondWith(safely(cacheFirst(request, THIRD_PARTY_CACHE), request));
     } else if (THIRD_PARTY_FRESH.test(url.href)) {
-      event.respondWith(safely(freshBehind(request, THIRD_PARTY_CACHE), request));
+      event.respondWith(safely(freshBehind(request, THIRD_PARTY_CACHE, event), request));
     }
     return;
   }
@@ -756,7 +787,7 @@ self.addEventListener('fetch', (event) => {
   // storage at once and refreshed behind, which took it from 28 ms to the few
   // milliseconds every other stored asset costs.
   if (url.pathname === '/js/pwa.js') {
-    event.respondWith(safely(staleWhileRevalidate(request, STATIC_CACHE), request));
+    event.respondWith(safely(staleWhileRevalidate(request, STATIC_CACHE, false, event), request));
     return;
   }
 
@@ -771,7 +802,7 @@ self.addEventListener('fetch', (event) => {
   // early is that the click afterwards finds it already here.
   if (request.mode === 'navigate' || request.destination === 'document' ||
       isPage(url)) {
-    event.respondWith(safely(staleWhileRevalidate(request, PAGE_CACHE, true), request));
+    event.respondWith(safely(staleWhileRevalidate(request, PAGE_CACHE, true, event), request));
     return;
   }
 

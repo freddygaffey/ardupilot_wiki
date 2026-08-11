@@ -278,13 +278,14 @@ function bootWorker({ networkFails = false, serve = null,
   /** Dispatch one request and return what the worker answered with, if it did. */
   const ask = (path, req = {}) => {
     let answered;
+    seen.waited = seen.waited || [];
     const request = Object.assign({
       url: /^https?:\/\//.test(path) ? path : 'https://example.test' + path,
       method: 'GET',
       mode: 'no-cors', destination: '',
     }, req);
     listeners.fetch({ request, respondWith: (p) => { answered = p; },
-                      waitUntil: () => {} });
+                      waitUntil: (p) => { seen.waited.push(p); } });
     return answered;
   };
   const activate = async () => {
@@ -458,6 +459,53 @@ async function checkArchiveFallback() {
         w.seen.cacheReads.length + ' cache reads');
 }
 
+/*
+ * A revalidation nobody waits for does not happen.
+ *
+ * The worker is killed as soon as its last respondWith settles. Both
+ * stale-while-revalidate strategies answer from storage and then refresh
+ * behind, so unless the browser is told to wait, the refresh is started and
+ * abandoned. It was, silently, for the whole life of this feature: measured on
+ * the mirror, the page cache held one entry after a browsing session and it was
+ * /sw.js. Pages therefore came from the saved wiki for ever, which is why
+ * content stayed hours stale against a server that had been rebuilt.
+ */
+async function checkRevalidationIsAwaited() {
+  console.log('\nservice worker: the refresh behind is actually waited for\n');
+
+  let w = bootWorker({ serve: () => ({ ct: 'text/html', body: '<html>fresh' }) });
+  let a = w.ask('/dev/docs/thing.html');
+  if (a) { await a; }
+  check('a page request asks the browser to wait for the refresh',
+        (w.seen.waited || []).length === 1, (w.seen.waited || []).length + ' waitUntil calls');
+  await Promise.all(w.seen.waited || []);
+  check('and the refreshed copy is then stored',
+        w.seen.puts.length === 1, JSON.stringify(w.seen.puts));
+
+  // pwa.js is the only other stale-while-revalidate route. Assets under
+  // _static are deliberately cache-first, because Sphinx fingerprints them, so
+  // they have nothing to revalidate and must NOT be asked to wait for one.
+  w = bootWorker({ serve: () => ({ ct: 'application/javascript', body: '//' }) });
+  a = w.ask('/js/pwa.js');
+  if (a) { await a; }
+  check('pwa.js does the same',
+        (w.seen.waited || []).length === 1, (w.seen.waited || []).length + ' waitUntil calls');
+
+  w = bootWorker({ serve: () => ({ ct: 'text/css', body: 'a{}' }) });
+  a = w.ask('/dev/_static/css/ardupilot.css');
+  if (a) { await a; }
+  check('a fingerprinted static asset stays cache-first, with nothing to wait for',
+        (w.seen.waited || []).length === 0, (w.seen.waited || []).length + ' waitUntil calls');
+
+  // The source itself, because a future edit could drop the argument and every
+  // assertion above would still pass against a harness that always supplies it.
+  const src = fs.readFileSync(WORKER, 'utf8');
+  check('every stale-while-revalidate call site passes the event',
+        !/staleWhileRevalidate\(request,\s*[A-Z_]+\)/.test(src) &&
+        !/freshBehind\(request,\s*[A-Z_]+\)/.test(src),
+        'no call site omits it');
+}
+
 async function checkVersionBump() {
   console.log('\nservice worker: what a version bump throws away\n');
 
@@ -500,6 +548,7 @@ async function main() {
     await checkPoisonGuard();
     await checkVersionBump();
     await checkArchiveFallback();
+    await checkRevalidationIsAwaited();
     console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                          : '\nall checks passed\n');
     process.exit(failures ? 1 : 0);
@@ -613,6 +662,7 @@ async function main() {
   await checkPoisonGuard();
   await checkVersionBump();
   await checkArchiveFallback();
+  await checkRevalidationIsAwaited();
 
   console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                        : '\nall checks passed\n');
