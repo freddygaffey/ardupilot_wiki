@@ -609,9 +609,19 @@
 
     var refresh = refreshIds || [];
     var chosen = selected().map(function (c) { return c.value; });
-    var queue = [COMMON].concat(WIKIS.filter(function (w) {
+    // The chosen wikis first, the shared-image archive (common) LAST.
+    //
+    // A wiki's own archive holds every one of its pages plus the images unique
+    // to it, so the wiki is fully navigable the moment it lands - tens of MB,
+    // downloaded in seconds. common is 440 MB of images shared across wikis;
+    // putting it first meant nothing was readable for the minutes it took. Now
+    // it backfills afterwards, and until it finishes a shared image is served
+    // from the network when online and is simply absent offline, which is a far
+    // better failure than a blank half-hour. Refreshing an already-saved wiki
+    // (the update fallback) still re-fetches common if it was asked for.
+    var queue = WIKIS.filter(function (w) {
       return chosen.indexOf(w.id) !== -1;
-    })).filter(function (w) {
+    }).concat([COMMON]).filter(function (w) {
       return !storedIds[w.id] || refresh.indexOf(w.id) !== -1;
     });
 

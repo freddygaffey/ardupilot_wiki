@@ -1269,6 +1269,29 @@ async function main() {
             '2027-01-01T00:00:00Z');
   }
 
+  console.log('\ndownload order: the chosen wiki before common');
+  {
+    // The wiki's own archive makes it readable; common is 440 MB of shared
+    // images that should backfill afterwards, not block the start.
+    const cachesObj = makeCaches();
+    const { doc, fetchCalls } = load({
+      manifest: MANIFEST, caches: cachesObj,
+      archives: { 'copter/index.html': '<html>' },
+    });
+    await settle();
+    doc.querySelector('.wiki-check[value="copter"]').click();
+    await settle();
+    $(doc, 'download-cache-btn').click();
+    for (let i = 0; i < 15; i++) { await settle(); }
+
+    const arch = fetchCalls.filter(u => u.indexOf('.tar') !== -1);
+    const copterAt = arch.findIndex(u => u.indexOf('copter-') !== -1);
+    const commonAt = arch.findIndex(u => u.indexOf('common-') !== -1);
+    check('the chosen wiki is fetched before common',
+          copterAt !== -1 && commonAt !== -1 && copterAt < commonAt,
+          JSON.stringify(arch.map(u => u.split('/').pop().split('?')[0])));
+  }
+
   console.log('\neviction: a reclaimed wiki is noticed, not silent');
   {
     // The browser can reclaim "temporary" storage without warning. A wiki we
