@@ -1269,6 +1269,37 @@ async function main() {
             '2027-01-01T00:00:00Z');
   }
 
+  console.log('\nthe update toast appears and shows progress');
+  {
+    // A saved wiki updating itself is news the reader should see, not a hidden
+    // text line. The toast card should appear on a manual check and, when files
+    // are applied, show progress then a done state.
+    const cachesObj = makeCaches();
+    const copter = await seedSaved(cachesObj, 'copter', OLD_BUILD, {
+      'copter/docs/a.html': ['h1', 'old a'],
+    });
+    (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'common'));
+    const { doc } = load({
+      manifest: MANIFEST, caches: cachesObj,
+      tables: { 'copter-files.json': { 'copter/docs/a.html': await fileHash('NEW a') } },
+      loose: { 'copter/docs/a.html': 'NEW a' },
+    });
+    await settle();
+    $(doc, 'check-btn').click();
+    for (let i = 0; i < 25; i++) { await settle(); }
+
+    const card = doc.querySelector('.ap-toast');
+    check('a toast card is created', !!card);
+    check('the toast is shown', !!card && card.classList.contains('ap-toast-show'));
+    check('it ends in the done state after applying the update',
+          !!card && card.classList.contains('ap-toast-done'),
+          card ? card.className : 'no card');
+    check('and it reports what happened',
+          !!card && /Updated 1 file/.test(card.textContent),
+          card ? JSON.stringify(card.querySelector('.ap-toast-msg').textContent) : '');
+  }
+
   console.log('\nregression: the worker is told when caches change (B3)');
   {
     // The worker memoises which caches exist and which are complete, and only
