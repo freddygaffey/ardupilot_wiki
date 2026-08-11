@@ -42,7 +42,7 @@ Makes the wiki readable with no connection, three ways.
 | `frontend/_headers` | Cloudflare Pages cache rules |
 | `scripts/build_offline_artifacts.py` | Build side: archives, manifest, video cards |
 | `scripts/demo_localise_links.py` | Demo only, see Demo-only below |
-| `scripts/tests/test_offline_page.js` | 58 assertions over the panel |
+| `scripts/tests/test_offline_page.js` | 83 assertions over the panel |
 | `scripts/tests/test_offline_export.js` | 15 checks over the exporter |
 | `scripts/tests/KNOWN_MARKUP_ISSUES.md` | Two wiki content bugs, not ours |
 
@@ -265,19 +265,53 @@ Nine files fetched and written, nothing else touched, no archive downloaded.
   is the compressed download; the same content unpacked is 1,212 MB. The panel
   should show both numbers and currently shows one.
 
+## The update path is now under test
+
+Written after the handover above, so the browser proof no longer has to be
+repeated by hand. Both halves of the bug that shipped are covered.
+
+**The client**, in `test_offline_page.js`, 25 assertions against bytes in the
+cache rather than against what the panel says it did. A seeded wiki with a
+stored table meets a published table that has moved: exactly the changed files
+are fetched, a dropped file is deleted, an unchanged page still holds its own
+bytes rather than a refetched copy, the table and marker advance, and every
+request carries the tag. An unchanged wiki costs one request, its table. A file
+that cannot be fetched anywhere leaves the stored table and the build marker
+untouched and falls back to the archive, so a half-applied update can never
+claim a build it does not hold. The shared-file walk is covered too: the wiki
+being read is tried first and the walk stops at the first hit.
+
+**The worker**, in `test_offline_worker.js`, 8 assertions. The whole worker is
+evaluated against a scope that keeps the listeners it registers, and synthetic
+events are dispatched at the real fetch handler. A tagged request reaches the
+network and reads nothing from storage; the same URL untagged does read storage,
+which is the contrast that shows the tag is what does the work; and a tagged
+request whose network fails rejects rather than being answered from the copy it
+was sent to replace.
+
+Both sets were mutation-tested rather than assumed to bite. Dropping the tag,
+skipping the deletions, computing an empty diff, and truncating the shared-file
+walk each fail the client tests; restoring the cache fallback on the update
+route, and removing the route altogether, each fail the worker tests.
+
+Two harness gaps had to be closed first, and both had been hiding real coverage:
+response bodies were stringified rather than kept as bytes, so nothing written
+by an update could be read back, and the sandbox had no global `location`, which
+made the shared-file path throw a `ReferenceError` that the update's own error
+handling turned into a silent fall back to downloading the whole archive.
+
 ## Still to do
 
-1. Write the automated update test. The browser proof above is real but slow to
-   repeat; it belongs under jsdom, asserting bytes in the cache rather than UI
-   text.
-2. Make the count report completed writes. "Updated 9 files" still comes from
+1. Make the count report completed writes. "Updated 9 files" still comes from
    the size of the diff, so it would claim success even if every write failed.
-   It happens to be truthful now, which is not the same as being correct.
-3. Test the sidebar. Never got to it.
-4. The panel's storage figures: show download size and unpacked size.
-5. Bound the promotion in `sw.js:508`. Pages read from a saved wiki are copied
+   It is truthful today only because any failed fetch rejects the whole update,
+   which is not the same as being correct. The new tests pin the number to what
+   the cache actually holds, so a change here has something to answer to.
+2. Test the sidebar. Never got to it.
+3. The panel's storage figures: show download size and unpacked size.
+4. Bound the promotion in `sw.js:508`. Pages read from a saved wiki are copied
    into the runtime cache, roughly 2% overhead, buying 1 ms against 84 ms.
-6. Guard the build order so an archive can never be packed before the static
+5. Guard the build order so an archive can never be packed before the static
    files it contains are up to date. This bit us once and is invisible when it
    does.
 
