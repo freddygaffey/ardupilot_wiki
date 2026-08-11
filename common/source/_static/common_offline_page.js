@@ -26,7 +26,7 @@
   // Bumped when this file changes in a way worth telling apart at runtime.
   // window.ArduPilotOfflineVersion answers "is the page running the code I just
   // deployed?" without inferring it from behaviour.
-  var VERSION = 'autoupdate-30s-1';
+  var VERSION = 'closest-and-reclaim-1';
   global.ArduPilotOfflineVersion = VERSION;
 
 
@@ -150,7 +150,24 @@
       if (pages) {
         parts.push(pages + ' page' + (pages === 1 ? '' : 's') + ' cached while reading');
       }
-      parts.push(fmt(used) + ' used');
+      // Chrome's quota accounting lags a deletion by seconds, so immediately
+      // after Remove all this said "no wikis saved · 542 MB used", which reads
+      // as a failure to delete anything. Measured: still pinned at 568 MB
+      // twenty-five seconds after the caches were verifiably gone, and correct
+      // on the next load. Say what is happening instead of quoting a number
+      // that contradicts the line beside it, and look again shortly.
+      var nothingHeld = !savedWikis && !pages && !storedIds.common;
+      if (nothingHeld && used > 5 * 1048576) {
+        parts.push('freeing space');
+        if (!reclaimTimer) {
+          reclaimTimer = setTimeout(function () {
+            reclaimTimer = null;
+            renderStorage();
+          }, 3000);
+        }
+      } else {
+        parts.push(fmt(used) + ' used');
+      }
       // Free space is not reported. Browsers return a fuzzed quota that is
       // theirs to revise, not a disk figure, and every wiki here fits inside
       // it comfortably, so the number invited a comparison worth nothing.
@@ -204,6 +221,8 @@
   }
 
   var storedIds = {};
+  // Set while waiting for the browser to finish reclaiming deleted space.
+  var reclaimTimer = null;
 
   function renderWikis() {
     return storedWikis().then(function (stored) {
@@ -1168,10 +1187,18 @@
   });
 
   document.addEventListener('click', function (e) {
-    if (e.target.id === 'clear-btn') { confirmClear(); }
-    if (e.target.id === 'download-cache-btn') { saveSelectedReal(); }
-    if (e.target.id === 'check-btn') { checkForUpdates(); }
-    if (e.target.id === 'dl-single') { e.preventDefault(); exportHtmlFile(); }
+    // closest(), not e.target, because these buttons have children. Once armed,
+    // Remove all contains its own countdown bar, three pixels tall across the
+    // bottom of the button. A click landing on those three pixels reported the
+    // bar as the target, matched no id, and was swallowed: the reader pressed
+    // the confirm button, in the button, and nothing happened.
+    var hit = e.target && e.target.closest &&
+              e.target.closest('#clear-btn, #download-cache-btn, #check-btn, #dl-single');
+    if (!hit) { return; }
+    if (hit.id === 'clear-btn') { confirmClear(); }
+    if (hit.id === 'download-cache-btn') { saveSelectedReal(); }
+    if (hit.id === 'check-btn') { checkForUpdates(); }
+    if (hit.id === 'dl-single') { e.preventDefault(); exportHtmlFile(); }
   });
 
   function init() {

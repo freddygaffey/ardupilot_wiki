@@ -361,3 +361,22 @@ the live build emits these too.
 Neither is fixed here, and neither is worked around. The duplicate targets are
 worth a look by whoever owns `build_parameters.py`, since 240 of them will bury
 any genuinely new warning in the same build.
+
+## The theme asks for a nav separator that does not exist
+
+`_static/css/ardupilot.css` line 60 sets
+
+```css
+background: url(../images/mainnav-sep-2.gif) repeat-y right;
+```
+
+and `_static/images/mainnav-sep-2.gif` is not shipped. There is no such file
+anywhere in this repository, and the request 404s on every page of every wiki.
+
+Not ours: `ardupilot.css` comes from the theme, which is a separate repository,
+so it cannot be fixed from here. Worth knowing about because it is a guaranteed
+failed request on every page load, and because with a saved wiki it fails
+offline too, where it shows up in the console as a 504 and looks like a fault in
+the offline feature rather than a missing decoration.
+
+Found by an acceptance pass on 11 August 2026.
