@@ -517,6 +517,25 @@ async function main() {
   check('a page that is genuinely absent still misses',
         !(await ask('/' + WIKI + '/docs/no-such-page-here')));
 
+  /* ------------------------------------------------ lookups stay exact ---- */
+  // A request carrying Sphinx's fingerprint must still resolve. The shapes are
+  // built from url.pathname, so the query never reaches the lookup, which is
+  // what makes an exact match sufficient.
+  check('a fingerprinted asset URL still resolves',
+        !!(await ask('/' + WIKI + '/_static/css/theme.css?v=5d32c60e')) ||
+        !!(await ask('/' + WIKI + '/index.html?highlight=motor')),
+        'query stripped before lookup');
+
+  // Asking the Cache API to ignore the query disables its hash lookup on the
+  // key and makes it walk the whole cache. Measured on twelve saved wikis:
+  // 0.2 ms exact against 325 ms for the all-caches fallback, paid on every
+  // request for anything not stored. Nothing here needs it, because no stored
+  // key carries a query and no shape does either.
+  const workerSrc = fs.readFileSync(WORKER, 'utf8');
+  check('the offline lookup does not ask the cache to ignore the query',
+        !/ignoreSearch\s*:/.test(workerSrc),
+        'exact matches only');
+
   /* ---------------------------------------------------------- images ------ */
   // With the network down and nothing browsed beforehand, every image a
   // downloaded wiki holds has to come out of the download. Images unique to

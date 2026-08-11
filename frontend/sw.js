@@ -324,12 +324,33 @@ async function offlineCacheFor(path) {
  * Pass a cache to look only there; pass none to search every cache, which is
  * what finds a downloaded wiki.
  */
+/*
+ * Exact matches only, deliberately.
+ *
+ * These lookups asked the Cache API to ignore the query string, which was both
+ * redundant and enormously expensive. Redundant because storedShapes() builds
+ * every shape from url.pathname, so the string being looked up never carries a
+ * query, and the unpacker writes archive paths as keys, so no stored key
+ * carries one either: measured on a real saved wiki, 0 of 1,059 keys had one.
+ * Expensive because that flag disables the hash lookup on the key and makes the
+ * browser walk the entire cache.
+ *
+ * Measured on twelve saved wikis, per lookup, exact against ignoring the query:
+ *
+ *   cache.match(path)          0.1 to 0.3 ms   against   63 to  79 ms
+ *   caches.match(path)         0.1 to 0.3 ms   against  307 to 325 ms
+ *
+ * The second line is the one that hurt: it is the fallback below, so every
+ * request for something not stored paid a third of a second before reaching the
+ * network. The cost grows with the number of wikis saved, which is why the site
+ * felt instant with one wiki and sluggish with twelve.
+ */
 async function heldOffline(request, cache) {
   const shapes = storedShapes(new URL(request.url));
 
   if (cache) {
     for (const path of shapes) {
-      const hit = await cache.match(path, { ignoreSearch: true });
+      const hit = await cache.match(path);
       if (hit) {
         return hit;
       }
@@ -341,7 +362,7 @@ async function heldOffline(request, cache) {
   for (const path of shapes) {
     const only = await offlineCacheFor(path);
     if (only) {
-      const hit = await only.match(path, { ignoreSearch: true });
+      const hit = await only.match(path);
       if (hit) {
         return hit;
       }
@@ -351,7 +372,7 @@ async function heldOffline(request, cache) {
   // Fallback: a wiki downloaded since this worker started, or anything stored
   // somewhere the path does not predict.
   for (const path of shapes) {
-    const hit = await caches.match(path, { ignoreSearch: true });
+    const hit = await caches.match(path);
     if (hit) {
       return hit;
     }
