@@ -219,7 +219,11 @@ htmlhelp_basename = 'ArduPilotdoc'
 html_context = common_conf.html_context
 
 html_js_files = [
-    ('https://plausible.ardupilot.org/js/script.outbound-links.js', {"data-domain": "ardupilot.org", "defer": "defer"}),
+    # Analytics is injected by /js/pwa.js after the load event instead of
+    # being declared here. Declared here it is fetched during the initial
+    # load of every page, and even deferred and served from cache it was
+    # 14 ms on a page whose own document took 4 ms. It counts the same
+    # pageview and binds the same outbound-link handlers a moment later.
 ]
 # -- Options for LaTeX output ---------------------------------------------
 
