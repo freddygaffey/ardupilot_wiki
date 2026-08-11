@@ -157,7 +157,7 @@ function panelMarkup() {
  */
 function load({ manifest = null, caches = makeCaches(), persisted = false,
                 usage = 0, quota = 10e9, archives = null,
-                tables = null, served = null } = {}) {
+                tables = null, served = null, rateLimit = false } = {}) {
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => { console.log('    [page error] ' + e.message);
                                if (e.stack) console.log('    ' + e.stack.split('\n')[1]); });
@@ -192,7 +192,7 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
     TransformStream, ReadableStream, Uint8Array,
     fetch: (u, o) => {
       fetchCalls.push(String(u));
-      fetchOpts.push({ url: String(u), opts: o || {} });
+      fetchOpts.push({ url: String(u), opts: o || {}, at: Date.now() });
       if (String(u).indexOf('offline-manifest.json') !== -1) {
         return Promise.resolve(manifest
           ? { ok: true, json: () => Promise.resolve(manifest) }
@@ -204,6 +204,11 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
         return Promise.resolve(Object.prototype.hasOwnProperty.call(tables, name)
           ? { ok: true, json: () => Promise.resolve(tables[name]) }
           : { ok: false, json: () => Promise.reject(new Error('no table')) });
+      }
+      // The server refusing update traffic.
+      if (rateLimit && String(u).indexOf('ap-update=') !== -1) {
+        return Promise.resolve({ ok: false, status: 429,
+                                 blob: () => Promise.reject(new Error('429')) });
       }
       // An individual file, at the path the site really serves it from.
       if (served) {
@@ -760,6 +765,159 @@ async function main() {
     check('the reported count equals the changes actually applied',
           ($(doc, 'check-result').textContent || '').indexOf('3 files') !== -1,
           JSON.stringify($(doc, 'check-result').textContent));
+  }
+
+  console.log('\nthe update paces itself and backs off when told to');
+  {
+    // The client is the rate limiter here, so these two behaviours are load
+    // bearing rather than polite. Sequential fetches with no pause ran at about
+    // 75 a second from one browser; a hundred readers doing that after a build
+    // is 7,500 a second at the origin.
+    const cachesObj = makeCaches();
+    const files = {};
+    for (let i = 0; i < 8; i++) { files['dev/docs/p' + i + '.html'] = ['h' + i, 'old']; }
+    await seedSaved(cachesObj, 'dev', OLD_BUILD, files);
+    const published = {};
+    Object.keys(files).forEach((k) => { published[k] = files[k][0] + '-moved'; });
+    const served = {};
+    Object.keys(files).forEach((k) => { served['/' + k] = 'new'; });
+
+    const { doc, fetchOpts } = load({
+      manifest: MANIFEST, caches: cachesObj,
+      tables: { 'dev-files.json': published }, served,
+    });
+    await settle();
+    $(doc, 'check-btn').click();
+    for (let i = 0; i < 40; i++) { await settle(); }
+
+    // The gaps between consecutive file requests, which is what pacing means.
+    // Wall-clock time is no use here: it is dominated by the harness's own
+    // polling, so an unpaced run looks identical to a paced one.
+    const times = fetchOpts.filter(f => f.url.indexOf('/') === 0 &&
+                                        f.url.indexOf('ap-update=') !== -1)
+                           .map(f => f.at);
+    const gaps = times.slice(1).map((t, i) => t - times[i]);
+    const floor = (1000 / 15) * 0.6;
+    check('consecutive update requests are spaced apart',
+          gaps.length > 2 && gaps.every(g => g >= floor),
+          gaps.length + ' gaps, smallest ' + (gaps.length ? Math.min(...gaps) : 'n/a') +
+          ' ms, need >= ' + Math.round(floor));
+  }
+  {
+    // A 429 is the server saying stop. Trying the next wiki for that file would
+    // be one more request at precisely the wrong moment.
+    // A shared file, deliberately: those are looked for under every wiki in
+    // turn, so ignoring a 429 means asking the struggling server four more
+    // times for the same file. A wiki-owned file has only one source and would
+    // make this look fine either way.
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'common', OLD_BUILD, {
+      '_images/shared.png': ['c1', 'old'],
+    });
+    const { doc, fetchCalls } = load({
+      manifest: MANIFEST, caches: cachesObj,
+      tables: { 'common-files.json': { '_images/shared.png': 'c2' } },
+      rateLimit: true,
+      archives: { 'x/index.html': '<html>' },
+    });
+    await settle();
+    $(doc, 'check-btn').click();
+    for (let i = 0; i < 25; i++) { await settle(); }
+    check('a 429 stops the update rather than trying every other source',
+          siteCalls(fetchCalls).length === 1,
+          siteCalls(fetchCalls).length + ' requests made after being refused');
+  }
+
+  console.log('\nautomatic updates are spread out, not synchronised');
+  {
+    // Every reader on a fixed interval discovers a new build in the same window
+    // and starts fetching together. The interval must be jittered or the update
+    // mechanism floods its own origin whenever a template changes.
+    const src = fs.readFileSync(PAGE, 'utf8');
+    check('ticks are scheduled one at a time, not on a fixed interval',
+          !/setInterval\(autoUpdateTick/.test(src) && /scheduleNextTick/.test(src),
+          'self-scheduling');
+    check('and each delay is jittered',
+          /AUTOUPDATE_MS \* \(0\.5 \+ Math\.random\(\)\)/.test(src),
+          'plus or minus 50%');
+
+    // Observed, rather than read: collect the delays the page actually asks for.
+    const delays = [];
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'dev', OLD_BUILD, { 'dev/index.html': ['h1', 'x'] });
+    const { sandbox } = load({ manifest: MANIFEST, caches: cachesObj });
+    const realSetTimeout = sandbox.window.setTimeout;
+    sandbox.window.setTimeout = function (fn, ms) {
+      if (ms > 1000) { delays.push(ms); return 0; }   // the update tick
+      return realSetTimeout(fn, ms);
+    };
+    await settle();
+    // Re-arm a few times to see a spread rather than one number.
+    for (let i = 0; i < 5; i++) { sandbox.window.dispatchEvent(new sandbox.window.Event('online')); }
+    await settle();
+    const unique = new Set(delays).size;
+    check('the delays are not all identical',
+          delays.length === 0 || unique > 1 || delays.length === 1,
+          delays.length + ' delays, ' + unique + ' distinct');
+  }
+
+  console.log('\ndifferential update: a large diff falls back to the archive');
+  {
+    // A template or stylesheet change rewrites every page, and then the
+    // "difference" is the whole wiki fetched one request at a time. Measured on
+    // a real reader with twelve wikis saved: 5,169 requests from one browser.
+    // Past a threshold this must give up and use the archive, which is one.
+    const cachesObj = makeCaches();
+    const many = {};
+    for (let i = 0; i < 400; i++) { many['dev/docs/p' + i + '.html'] = ['h' + i, 'old ' + i]; }
+    await seedSaved(cachesObj, 'dev', OLD_BUILD, many);
+
+    const published = {};
+    Object.keys(many).forEach((k) => { published[k] = many[k][0] + '-moved'; });
+
+    const { fetchCalls, doc } = load({
+      manifest: MANIFEST, caches: cachesObj,
+      tables: { 'dev-files.json': published },
+      archives: { 'dev/index.html': '<html>from the archive' },
+    });
+    await settle();
+    $(doc, 'check-btn').click();
+    for (let i = 0; i < 25; i++) { await settle(); }
+
+    check('a wiki where everything changed is not fetched file by file',
+          siteCalls(fetchCalls).length === 0,
+          siteCalls(fetchCalls).length + ' individual file requests');
+    check('it downloads the archive instead, which is one request',
+          fetchCalls.filter(u => u.indexOf('.tar') !== -1).length >= 1,
+          JSON.stringify(fetchCalls.filter(u => u.indexOf('.tar') !== -1)));
+  }
+  {
+    // The ordinary case must be untouched: a handful of changed files still
+    // takes the cheap path, or the whole feature is pointless.
+    const cachesObj = makeCaches();
+    const files = {};
+    for (let i = 0; i < 400; i++) { files['dev/docs/p' + i + '.html'] = ['h' + i, 'old ' + i]; }
+    const dev = await seedSaved(cachesObj, 'dev', OLD_BUILD, files);
+    const published = {};
+    Object.keys(files).forEach((k) => { published[k] = files[k][0]; });
+    published['dev/docs/p7.html'] = 'h7-moved';
+
+    const { fetchCalls, doc } = load({
+      manifest: MANIFEST, caches: cachesObj,
+      tables: { 'dev-files.json': published },
+      served: { '/dev/docs/p7.html': 'NEW seven' },
+    });
+    await settle();
+    $(doc, 'check-btn').click();
+    for (let i = 0; i < 25; i++) { await settle(); }
+
+    check('one changed file out of four hundred still uses the cheap path',
+          siteCalls(fetchCalls).length === 1 &&
+          !fetchCalls.some(u => u.indexOf('.tar') !== -1),
+          JSON.stringify(siteCalls(fetchCalls)));
+    check('and it is applied',
+          (await bodyAt(dev, '/dev/docs/p7.html')) === 'NEW seven',
+          JSON.stringify(await bodyAt(dev, '/dev/docs/p7.html')));
   }
 
   console.log('\ndifferential update: a shared file is found under some wiki');
