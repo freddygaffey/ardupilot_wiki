@@ -317,9 +317,22 @@ def add_bytes(tar, arcname: str, data: bytes, files=None, loose_dir=None):
     if files is not None:
         files[arcname] = content_hash(data)
     if loose_dir is not None:
-        dest = Path(loose_dir) / arcname
+        # Written gzipped, as <arcname>.gz. nginx gzip_static (already on for
+        # /offline/) serves it for a request to <arcname> with Content-Encoding:
+        # gzip, and the browser decompresses it natively before the client sees
+        # a byte - universal support, no JavaScript, no DecompressionStream. So
+        # the differential update fetches /offline/files/<arcname>, receives the
+        # ORIGINAL uncompressed bytes, and its hash matches the table, which
+        # hashes the uncompressed content (below). The loose tree drops from
+        # ~450 MB to ~90 MB this way.
+        #
+        # No new browser-support floor: the offline feature already requires
+        # gzip to download an archive (they are .tar.gz served the same way), so
+        # a browser that cannot handle Content-Encoding gzip already cannot save
+        # a wiki. Ordinary reading depends on none of this.
+        dest = Path(loose_dir) / (arcname + ".gz")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(data)
+        dest.write_bytes(gzip.compress(data, compresslevel=9, mtime=0))
 
 
 def content_hash(data: bytes) -> str:
