@@ -22,8 +22,8 @@ file download, and your browser unpacks it locally: nothing is sent anywhere,
 and no account is needed at any point.
 
 For how any of this works, what it needs to run and how to test it, see `How
-Offline Copies Work <https://ardupilot.org/dev/docs/wiki-offline-copies.html>`__
-in the developer documentation.
+Offline Copies Work <../../dev/docs/wiki-offline-copies.html>`__ in the
+developer documentation.
 
 .. raw:: html
 
