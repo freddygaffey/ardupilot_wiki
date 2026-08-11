@@ -621,6 +621,33 @@
     if (a.parentNode) { a.parentNode.replaceChild(box, a); }
   }
 
+  /*
+   * Run fn once the page has finished loading and the browser has a spare
+   * moment, never before.
+   *
+   * This matters more than it looks. An embed costs a cross-origin connection
+   * and roughly a megabyte of YouTube's own code, and the first version of this
+   * started that work as soon as a card was near the viewport, which on a page
+   * whose video is above the fold meant during the initial load. Measured on
+   * the mirror: 387 ms for the embed against 3.6 ms for the worker to serve the
+   * page itself. It was comfortably the slowest thing on the page and it was
+   * competing with the render for a video nobody had asked to watch yet.
+   *
+   * Deferring costs nothing that matters: the point is that the player is ready
+   * by the time somebody reaches it, not that it is ready in the first frame.
+   */
+  function whenIdle(fn) {
+    if (document.readyState !== 'complete') {
+      window.addEventListener('load', function () { whenIdle(fn); }, { once: true });
+      return;
+    }
+    if (typeof window.requestIdleCallback === 'function') {
+      window.requestIdleCallback(fn, { timeout: 2000 });
+    } else {
+      setTimeout(fn, 300);
+    }
+  }
+
   function start() {
     // Offline the embed cannot load, and the still with its link is exactly
     // the right thing to show. This is the whole condition for doing anything.
@@ -629,21 +656,23 @@
     var cards = [].slice.call(document.querySelectorAll('a.ap-video'));
     if (!cards.length) { return; }
 
-    if (typeof IntersectionObserver === 'function') {
+    // The pointer arriving is a deliberate act, so it is honoured immediately.
+    // Being on screen is not, so it waits for the page to be done.
+    cards.forEach(function (c) {
+      c.addEventListener('pointerenter', function () { upgrade(c); });
+    });
+
+    if (typeof IntersectionObserver !== 'function') {
+      whenIdle(function () { cards.forEach(upgrade); });
+      return;
+    }
+    whenIdle(function () {
       var seen = new IntersectionObserver(function (entries) {
         entries.forEach(function (e) {
           if (e.isIntersecting) { seen.unobserve(e.target); upgrade(e.target); }
         });
-      }, { rootMargin: '200px' });
+      }, { rootMargin: '100px' });
       cards.forEach(function (c) { seen.observe(c); });
-    } else {
-      cards.forEach(upgrade);
-    }
-
-    // The pointer arriving is a stronger signal than being on screen, and it
-    // fires on a mouse that moves without the page moving at all.
-    cards.forEach(function (c) {
-      c.addEventListener('pointerenter', function () { upgrade(c); });
     });
   }
 
