@@ -209,11 +209,146 @@ function checkWorkerEvaluates() {
   check('the worker evaluates, not just parses', err === null, err || 'clean');
 }
 
+/* ------------------------------------------------- differential updates -- */
+
+/**
+ * Boot the real worker and hand back its fetch listener.
+ *
+ * The routing under test is inside the fetch handler, so it cannot be lifted
+ * out by name the way the lookup is. Instead the whole worker is evaluated
+ * against a ServiceWorkerGlobalScope-alike that keeps the listeners it
+ * registers, and synthetic events are dispatched at the real one.
+ *
+ * `networkFails` is the case that matters most: an update whose request fails
+ * must fail, not quietly resolve to the stale copy it was sent to replace.
+ */
+function bootWorker({ networkFails = false } = {}) {
+  const seen = { fetches: [], cacheReads: [] };
+  const listeners = {};
+  const emptyCache = {
+    match: async (r) => { seen.cacheReads.push(String(r && r.url ? r.url : r)); },
+    put: async () => {},
+    keys: async () => [],
+  };
+  const ctx = {
+    self: {
+      addEventListener: (type, fn) => { listeners[type] = fn; },
+      skipWaiting() {}, clients: { claim() {}, matchAll: async () => [] },
+      location: { origin: 'https://example.test' },
+      registration: {},
+    },
+    caches: {
+      match: async (r) => { seen.cacheReads.push(String(r && r.url ? r.url : r)); },
+      open: async () => emptyCache,
+      keys: async () => [],
+      delete: async () => true,
+    },
+    console: { warn() {}, log() {}, error() {} },
+    fetch: async (req) => {
+      seen.fetches.push(String(req && req.url ? req.url : req));
+      if (networkFails) { throw new TypeError('Failed to fetch'); }
+      return { ok: true, status: 200, url: String(req && req.url ? req.url : req),
+               clone() { return this; } };
+    },
+    Response: class {
+      constructor(body, init) { this.body = body; Object.assign(this, init || {}); }
+    },
+    Request: class { constructor(u) { this.url = String(u); } },
+    URL, setTimeout, clearTimeout, Map, Set, Promise, JSON, Math, Date, RegExp,
+  };
+  vm.createContext(ctx);
+  vm.runInContext(fs.readFileSync(WORKER, 'utf8'), ctx);
+
+  /** Dispatch one request and return what the worker answered with, if it did. */
+  const ask = (path, req = {}) => {
+    let answered;
+    const request = Object.assign({
+      url: 'https://example.test' + path, method: 'GET',
+      mode: 'no-cors', destination: '',
+    }, req);
+    listeners.fetch({ request, respondWith: (p) => { answered = p; },
+                      waitUntil: () => {} });
+    return answered;
+  };
+  return { ask, seen, handled: !!listeners.fetch };
+}
+
+async function checkUpdateRouting() {
+  console.log('\nservice worker: differential update requests\n');
+
+  const UPDATE = '?ap-update=2026-08-09T00%3A00%3A00Z';
+  const PAGE = '/copter/docs/common-thing.html';
+
+  // The tag is what the worker routes on, so read it out of the worker rather
+  // than writing it here twice.
+  const src = fs.readFileSync(WORKER, 'utf8');
+  const param = (src.match(/const UPDATE_PARAM\s*=\s*'([^']+)'/) || [])[1];
+  check('the worker names the update parameter', param === 'ap-update', String(param));
+
+  {
+    const w = bootWorker();
+    const answered = w.ask(PAGE + UPDATE);
+    check('a tagged request is answered at all', !!answered);
+    if (answered) { await answered; }
+    check('a tagged request goes to the network',
+          w.seen.fetches.length === 1 && w.seen.fetches[0].indexOf('ap-update=') !== -1,
+          JSON.stringify(w.seen.fetches));
+    // The bug that shipped: an untagged request took the cache-first route and
+    // the update was answered out of the very cache it was refreshing.
+    check('and the cache is never consulted for it',
+          w.seen.cacheReads.length === 0, JSON.stringify(w.seen.cacheReads));
+  }
+
+  {
+    // Without the tag the same URL is a page, and pages are served from storage.
+    // This is the contrast that shows the tag is doing the work.
+    const w = bootWorker();
+    const answered = w.ask(PAGE);
+    if (answered) { await answered; }
+    check('the same URL untagged does consult the cache',
+          w.seen.cacheReads.length > 0, w.seen.cacheReads.length + ' reads');
+  }
+
+  {
+    // safely() answers a failed request from storage, which is right everywhere
+    // else and exactly wrong here: the caller would store the stale copy back
+    // over itself and report success. Failing is what lets it retry or fall
+    // back to the archive.
+    const w = bootWorker({ networkFails: true });
+    const answered = w.ask(PAGE + UPDATE);
+    let rejected = false;
+    if (answered) { await answered.then(() => {}, () => { rejected = true; }); }
+    check('a tagged request that fails is not answered from storage', rejected);
+    check('and nothing was read out of the cache to answer it',
+          w.seen.cacheReads.length === 0, JSON.stringify(w.seen.cacheReads));
+  }
+
+  {
+    // Whatever the update asks for takes this route: the failure was selective,
+    // hitting HTML while .js and .inv appeared to work, purely because those
+    // reach the network on other routes anyway.
+    const w = bootWorker();
+    for (const p of ['/copter/docs/a.html', '/copter/searchindex.js',
+                     '/copter/objects.inv', '/copter/_images/x.png']) {
+      const a = w.ask(p + UPDATE);
+      if (a) { await a; }
+    }
+    check('every kind of file the update fetches takes the network route',
+          w.seen.fetches.length === 4 && w.seen.cacheReads.length === 0,
+          w.seen.fetches.length + ' fetched, ' + w.seen.cacheReads.length + ' cache reads');
+  }
+}
+
 async function main() {
   console.log('\nservice worker: offline lookup\n');
   checkWorkerEvaluates();
   const cur = run(fs.readFileSync(WORKER, 'utf8'), 'sw.js');
-  if (!cur) { process.exit(failures ? 1 : 0); }
+  if (!cur) {
+    await checkUpdateRouting();
+    console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
+                         : '\nall checks passed\n');
+    process.exit(failures ? 1 : 0);
+  }
   const { store, wikiNames, ask, askImage } = cur;
 
   const pages = wikiNames.filter((n) => n.endsWith('.html')).map((n) => '/' + n);
@@ -299,6 +434,8 @@ async function main() {
     console.log('\n  (previous sw.js had no variant matching, so the canonical' +
                 ' URL of every page missed)');
   }
+
+  await checkUpdateRouting();
 
   console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                        : '\nall checks passed\n');

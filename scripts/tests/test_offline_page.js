@@ -42,15 +42,36 @@ function check(name, ok, detail) {
 
 /* ---------------------------------------------------------- cache shim ---- */
 
+/**
+ * Bodies are kept as bytes, not as strings.
+ *
+ * The differential update fetches a changed file, takes its blob, and puts that
+ * blob straight into the cache. Stringifying on the way in would make every
+ * such body the literal "{}" and the update tests would then pass while storing
+ * nothing recognisable. Keeping a Buffer lets a test read back what was
+ * actually written and compare it with what the server sent.
+ */
 class FakeResponse {
-  constructor(body) { this._b = typeof body === 'string' ? body : JSON.stringify(body); }
-  text() { return Promise.resolve(this._b); }
-  json() { return Promise.resolve(JSON.parse(this._b)); }
+  constructor(body) {
+    this._b = typeof body === 'string' ? body
+            : Buffer.isBuffer(body) ? body
+            : ArrayBuffer.isView(body)
+                ? Buffer.from(body.buffer, body.byteOffset, body.byteLength)
+                : JSON.stringify(body);
+  }
+  text() {
+    return Promise.resolve(Buffer.isBuffer(this._b) ? this._b.toString('utf8') : this._b);
+  }
+  json() { return this.text().then((t) => JSON.parse(t)); }
+  blob() {
+    return Promise.resolve(Buffer.isBuffer(this._b) ? this._b : Buffer.from(this._b));
+  }
 }
 class FakeCache {
   constructor() { this.map = new Map(); }
   put(k, v) { this.map.set(String(k && k.url ? k.url : k), v); return Promise.resolve(); }
   match(k) { return Promise.resolve(this.map.get(String(k && k.url ? k.url : k))); }
+  delete(k) { return Promise.resolve(this.map.delete(String(k && k.url ? k.url : k))); }
   keys() { return Promise.resolve([...this.map.keys()].map(u => ({ url: 'https://x' + u }))); }
 }
 function makeCaches() {
@@ -126,8 +147,17 @@ function panelMarkup() {
   return html + '<div id="ap-install-app"></div><span id="install-state"></span>';
 }
 
+/**
+ * A site that serves file tables and individual files.
+ *
+ * `tables` maps a published table's filename to its contents, and `served`
+ * maps a path this site answers - the same paths the wiki itself is served at -
+ * to the bytes at it. Anything not in `served` 404s, which is how the shared
+ * image fallback is exercised: the first wiki tried does not have the file.
+ */
 function load({ manifest = null, caches = makeCaches(), persisted = false,
-                usage = 0, quota = 10e9, archives = null } = {}) {
+                usage = 0, quota = 10e9, archives = null,
+                tables = null, served = null } = {}) {
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => { console.log('    [page error] ' + e.message);
                                if (e.stack) console.log('    ' + e.stack.split('\n')[1]); });
@@ -140,7 +170,13 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
   const fetchCalls = [];
   const fetchOpts = [];
   const sandbox = {
-    window: w, document: w.document, navigator: {
+    window: w, document: w.document,
+    // A global, as it is in a browser. Without it the shared-file path - the
+    // only code here that asks which wiki is being read - threw a ReferenceError
+    // that the update's own error handling turned into a silent fall back to
+    // downloading the whole archive.
+    location: w.location,
+    navigator: {
       storage: {
         estimate: () => Promise.resolve({ usage, quota }),
         persisted: () => Promise.resolve(persisted),
@@ -161,6 +197,27 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
         return Promise.resolve(manifest
           ? { ok: true, json: () => Promise.resolve(manifest) }
           : { ok: false, json: () => Promise.reject(new Error('no manifest')) });
+      }
+      // A published file table, named the way the manifest asks for it.
+      if (tables && String(u).indexOf('-files.json') !== -1) {
+        const name = String(u).split('?')[0].split('/').pop();
+        return Promise.resolve(Object.prototype.hasOwnProperty.call(tables, name)
+          ? { ok: true, json: () => Promise.resolve(tables[name]) }
+          : { ok: false, json: () => Promise.reject(new Error('no table')) });
+      }
+      // An individual file, at the path the site really serves it from.
+      if (served) {
+        const p = String(u).split('?')[0];
+        if (Object.prototype.hasOwnProperty.call(served, p)) {
+          return Promise.resolve({
+            ok: true, blob: () => Promise.resolve(Buffer.from(served[p]))
+          });
+        }
+        if (String(u).indexOf('.tar') === -1) {
+          // 404, not a rejection: this is a wiki that does not hold the file,
+          // which the shared-image fallback must walk past rather than abort on.
+          return Promise.resolve({ ok: false, blob: () => Promise.reject(new Error('404')) });
+        }
       }
       if (archives) {
         // A real archive, so the unpack runs and the marker gets written.
@@ -555,6 +612,276 @@ async function main() {
     const info2 = after ? JSON.parse(await after.text()) : {};
     check('and the marker is updated to the new build',
           info2.build === '2027-01-01T00:00:00Z', JSON.stringify(info2.build));
+  }
+
+  /* --------------------------------------------- differential updates ----- */
+  //
+  // The browser proof of this path took most of a session and is slow to
+  // repeat, so it is asserted here against bytes in the cache rather than
+  // against what the panel says it did. The distinction matters: the count in
+  // the panel is derived from the size of the diff, so a run that fetched
+  // nothing at all could still report that it updated nine files.
+
+  const TABLE_KEY = '/__ap_files__';
+
+  /**
+   * What a finished download leaves behind: the files, the table describing
+   * them, and the completion marker naming the build they came from.
+   *
+   * `files` maps an archive path to [hash, body]. The hash is opaque - the
+   * client never computes one, it only compares - so any distinct string will
+   * do, and using readable ones makes a failure legible.
+   */
+  async function seedSaved(cachesObj, id, build, files) {
+    const c = await cachesObj.open('ardupilot-offline-' + id);
+    const table = {};
+    for (const [name, [hash, body]] of Object.entries(files)) {
+      table[name] = hash;
+      await c.put((id === 'common' ? '/_common/' : '/') + name, new FakeResponse(body));
+    }
+    await c.put(TABLE_KEY, new FakeResponse(JSON.stringify(table)));
+    await c.put('/__ap_complete__', completeMarker(build, id));
+    return c;
+  }
+
+  const bodyAt = async (cache, key) => {
+    const r = await cache.match(key);
+    return r ? await r.text() : null;
+  };
+  const OLD_BUILD = '2020-01-01T00:00:00Z';
+  // Requests for content from this site: not the CDN the tables and archives
+  // sit on, and not the manifest, which is fetched from a relative path before
+  // the manifest itself has said where the artifacts live.
+  const siteCalls = (calls) => calls.filter(
+    u => u.indexOf('/') === 0 && u.indexOf('offline-manifest.json') === -1 &&
+         u.indexOf('-files.json') === -1);
+
+  console.log('\ndifferential update: only what moved');
+  {
+    const cachesObj = makeCaches();
+    // Both saved from an older build, so both are stale and both are checked.
+    // Common's table is unchanged, which is the ordinary case: one wiki edited,
+    // everything else identical.
+    await seedSaved(cachesObj, 'common', OLD_BUILD, {
+      '_images/shared.png': ['c1', 'shared bytes']
+    });
+    const copter = await seedSaved(cachesObj, 'copter', OLD_BUILD, {
+      'copter/index.html':     ['h1', 'old index'],
+      'copter/docs/a.html':    ['h2', 'old a'],
+      'copter/docs/b.html':    ['h3', 'old b'],
+      'copter/searchindex.js': ['h4', 'old searchindex'],
+      'copter/docs/gone.html': ['h5', 'old gone']
+    });
+
+    const { doc, fetchCalls, fetchOpts } = load({
+      manifest: MANIFEST, caches: cachesObj,
+      tables: {
+        'common-files.json': { '_images/shared.png': 'c1' },
+        'copter-files.json': {
+          'copter/index.html':     'h1',
+          'copter/docs/a.html':    'h2-moved',
+          'copter/searchindex.js': 'h4-moved',
+          'copter/docs/b.html':    'h3'
+        }
+      },
+      served: {
+        '/copter/docs/a.html':    'NEW a',
+        '/copter/searchindex.js': 'NEW searchindex'
+      }
+    });
+    await settle();
+    $(doc, 'check-btn').click();
+    for (let i = 0; i < 20; i++) { await settle(); }
+
+    check('no archive is fetched when the tables can be compared',
+          !fetchCalls.some(u => u.indexOf('.tar') !== -1),
+          JSON.stringify(fetchCalls.filter(u => u.indexOf('.tar') !== -1)));
+
+    const got = siteCalls(fetchCalls).map(u => u.split('?')[0]).sort();
+    check('exactly the changed files are fetched, and nothing else',
+          got.length === 2 && got[0] === '/copter/docs/a.html' &&
+          got[1] === '/copter/searchindex.js', JSON.stringify(got));
+
+    check('a changed page holds the new bytes',
+          (await bodyAt(copter, '/copter/docs/a.html')) === 'NEW a',
+          JSON.stringify(await bodyAt(copter, '/copter/docs/a.html')));
+    check('a changed non-page holds the new bytes',
+          (await bodyAt(copter, '/copter/searchindex.js')) === 'NEW searchindex',
+          JSON.stringify(await bodyAt(copter, '/copter/searchindex.js')));
+    // The failure this guards against is the one that was actually shipped:
+    // HTML answered from the cache being refreshed and written back over
+    // itself, which looks identical to an update that worked.
+    check('an unchanged page keeps its own bytes, not a refetched copy',
+          (await bodyAt(copter, '/copter/index.html')) === 'old index' &&
+          (await bodyAt(copter, '/copter/docs/b.html')) === 'old b',
+          JSON.stringify(await bodyAt(copter, '/copter/index.html')));
+    check('a file dropped from the build is deleted from the cache',
+          (await copter.match('/copter/docs/gone.html')) === undefined);
+
+    const stored = JSON.parse(await bodyAt(copter, TABLE_KEY));
+    check('the stored table now matches the published one',
+          stored['copter/docs/a.html'] === 'h2-moved' &&
+          stored['copter/searchindex.js'] === 'h4-moved' &&
+          !('copter/docs/gone.html' in stored) &&
+          Object.keys(stored).length === 4, JSON.stringify(stored));
+
+    const marker = JSON.parse(await bodyAt(copter, '/__ap_complete__'));
+    check('the marker moves to the build that was applied',
+          marker.build === MANIFEST.generated, JSON.stringify(marker.build));
+
+    // Untagged requests take the cache-first route in the worker, which answers
+    // an update out of the very cache it is refreshing. Every request on this
+    // path has to carry the tag; this is the assertion that was missing when
+    // that shipped.
+    check('every update request is tagged for the network',
+          siteCalls(fetchCalls).length > 0 &&
+          siteCalls(fetchCalls).every(u => u.indexOf('ap-update=') !== -1),
+          JSON.stringify(siteCalls(fetchCalls)));
+    check('and none of them may be served from the HTTP cache',
+          fetchOpts.filter(f => f.url.indexOf('/') === 0)
+                   .every(f => f.opts && f.opts.cache === 'no-cache'));
+
+    // An unchanged wiki costs one request for its table and no more. This is
+    // the whole point of the design: a typo in Copter must not cost anyone the
+    // 439 MB of common.
+    const commonCalls = fetchCalls.filter(u => u.indexOf('common') !== -1);
+    check('an unchanged wiki costs one request, its table',
+          commonCalls.length === 1 && commonCalls[0].indexOf('common-files.json') !== -1,
+          JSON.stringify(commonCalls));
+    const commonCache = await cachesObj.open('ardupilot-offline-common');
+    check('and it is still marked current afterwards',
+          JSON.parse(await bodyAt(commonCache, '/__ap_complete__')).build ===
+            MANIFEST.generated);
+
+    // Two fetched, one deleted. The count is currently derived from the size of
+    // the diff rather than from writes that completed, so it would report the
+    // same on a run that stored nothing. It is true here, and this pins it to
+    // what the cache actually holds so that it stays true.
+    check('the reported count equals the changes actually applied',
+          ($(doc, 'check-result').textContent || '').indexOf('3 files') !== -1,
+          JSON.stringify($(doc, 'check-result').textContent));
+  }
+
+  console.log('\ndifferential update: a shared file is found under some wiki');
+  {
+    // Common's files are stored once under /_common/, a path this site never
+    // serves. Each is published under every wiki that uses it, so the update
+    // tries the wikis in turn. Here only Rover has it.
+    const cachesObj = makeCaches();
+    const common = await seedSaved(cachesObj, 'common', OLD_BUILD, {
+      '_images/shared.png': ['c1', 'old shared bytes']
+    });
+    const { doc, fetchCalls } = load({
+      manifest: MANIFEST, caches: cachesObj,
+      tables: { 'common-files.json': { '_images/shared.png': 'c2' } },
+      served: { '/rover/_images/shared.png': 'NEW shared bytes' }
+    });
+    await settle();
+    $(doc, 'check-btn').click();
+    for (let i = 0; i < 20; i++) { await settle(); }
+
+    check('a shared file is stored back under /_common/, not under a wiki',
+          (await bodyAt(common, '/_common/_images/shared.png')) === 'NEW shared bytes',
+          JSON.stringify(await bodyAt(common, '/_common/_images/shared.png')));
+    const tried = siteCalls(fetchCalls).map(u => u.split('?')[0]);
+    check('the wikis are tried in turn and the walk stops at the first hit',
+          tried.length === 3 && tried[tried.length - 1] === '/rover/_images/shared.png',
+          JSON.stringify(tried));
+    check('the wiki being read is tried first',
+          tried[0] === '/x/_images/shared.png', JSON.stringify(tried[0]));
+    check('no archive is fetched for a single shared image',
+          !fetchCalls.some(u => u.indexOf('.tar') !== -1));
+  }
+
+  console.log('\ndifferential update: a failure leaves the record intact');
+  {
+    // One changed file is unavailable everywhere. The update must not record
+    // itself as complete, because a wiki that claims a build it does not have
+    // is one no later update will ever correct.
+    const cachesObj = makeCaches();
+    const copter = await seedSaved(cachesObj, 'copter', OLD_BUILD, {
+      'copter/index.html':  ['h1', 'old index'],
+      'copter/docs/a.html': ['h2', 'old a']
+    });
+    const { fetchCalls, doc } = load({
+      manifest: MANIFEST, caches: cachesObj,
+      tables: {
+        'copter-files.json': {
+          'copter/index.html':  'h1-moved',
+          'copter/docs/a.html': 'h2-moved'
+        }
+      },
+      served: { '/copter/index.html': 'NEW index' }   // a.html 404s everywhere
+    });
+    await settle();
+    $(doc, 'check-btn').click();
+    for (let i = 0; i < 20; i++) { await settle(); }
+
+    check('a file that cannot be fetched does not update the stored table',
+          JSON.parse(await bodyAt(copter, TABLE_KEY))['copter/index.html'] === 'h1',
+          await bodyAt(copter, TABLE_KEY));
+    check('and the wiki still reports the build it actually holds',
+          JSON.parse(await bodyAt(copter, '/__ap_complete__')).build === OLD_BUILD,
+          JSON.parse(await bodyAt(copter, '/__ap_complete__')).build);
+    check('and it falls back to re-fetching the whole archive',
+          fetchCalls.some(u => u.indexOf('.tar') !== -1),
+          JSON.stringify(fetchCalls.filter(u => u.indexOf('.tar') !== -1)));
+  }
+
+  console.log('\ndifferential update: download, then update');
+  {
+    // The two halves joined up: a real archive download has to leave behind a
+    // table an update can compare against, or the differential path can never
+    // engage for anyone who obtained their copy the normal way.
+    const cachesObj = makeCaches();
+    const first = load({
+      manifest: MANIFEST, caches: cachesObj,
+      archives: { 'copter/index.html': 'from the archive',
+                  'copter/docs/a.html': 'a from the archive' },
+      // Common is always part of a download, so it needs a table too, or it
+      // falls back to its own archive on the next check and the run below is
+      // measuring two different things at once.
+      tables: { 'copter-files.json': { 'copter/index.html': 'h1',
+                                       'copter/docs/a.html': 'h2' },
+                'common-files.json': { '_images/shared.png': 'c1' } }
+    });
+    await settle();
+    first.doc.querySelector('.wiki-check[value="copter"]').click();
+    await settle();
+    $(first.doc, 'download-cache-btn').click();
+    for (let i = 0; i < 20; i++) { await settle(); }
+
+    const copter = await cachesObj.open('ardupilot-offline-copter');
+    check('a download stores the file table beside the files',
+          !!(await copter.match(TABLE_KEY)),
+          JSON.stringify(await bodyAt(copter, TABLE_KEY)));
+
+    const newer = JSON.parse(JSON.stringify(MANIFEST));
+    newer.generated = '2027-01-01T00:00:00Z';
+    const next = load({
+      manifest: newer, caches: cachesObj,
+      tables: { 'copter-files.json': { 'copter/index.html': 'h1',
+                                       'copter/docs/a.html': 'h2-moved' },
+                'common-files.json': { '_images/shared.png': 'c1' } },
+      served: { '/copter/docs/a.html': 'a after the edit' }
+    });
+    await settle();
+    $(next.doc, 'check-btn').click();
+    for (let i = 0; i < 20; i++) { await settle(); }
+
+    check('the update that follows fetches one file, not the archive',
+          !next.fetchCalls.some(u => u.indexOf('.tar') !== -1) &&
+          siteCalls(next.fetchCalls).length === 1,
+          JSON.stringify(siteCalls(next.fetchCalls)));
+    check('the edited page is replaced',
+          (await bodyAt(copter, '/copter/docs/a.html')) === 'a after the edit',
+          JSON.stringify(await bodyAt(copter, '/copter/docs/a.html')));
+    check('the untouched page still comes from the archive',
+          (await bodyAt(copter, '/copter/index.html')) === 'from the archive',
+          JSON.stringify(await bodyAt(copter, '/copter/index.html')));
+    check('and the copy now reports the newer build',
+          JSON.parse(await bodyAt(copter, '/__ap_complete__')).build ===
+            '2027-01-01T00:00:00Z');
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
