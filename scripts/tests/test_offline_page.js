@@ -188,6 +188,7 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
   if (!w.matchMedia) { w.matchMedia = () => ({ matches: false, addListener(){}, removeListener(){} }); }
   const fetchCalls = [];
   const fetchOpts = [];
+  const swMessages = [];
   const sandbox = {
     window: w, document: w.document,
     // A global, as it is in a browser. Without it the shared-file path - the
@@ -200,6 +201,11 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
         estimate: () => Promise.resolve({ usage, quota }),
         persisted: () => Promise.resolve(persisted),
         persist: () => Promise.resolve(persisted)
+      },
+      // Records what the panel tells the worker, so the CACHES_CHANGED
+      // invalidations (a wiki saved/updated/removed) can be asserted.
+      serviceWorker: {
+        controller: { postMessage: (m) => { swMessages.push(m); } }
       }
     },
     caches,
@@ -278,7 +284,7 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
   sandbox.window.fetch = sandbox.fetch;
   vm.createContext(sandbox);
   vm.runInContext(fs.readFileSync(PAGE, 'utf8'), sandbox);
-  return { dom, w, doc: w.document, sandbox, fetchCalls, fetchOpts };
+  return { dom, w, doc: w.document, sandbox, fetchCalls, fetchOpts, swMessages };
 }
 
 // The build's file hash, in Node, so a test's published table can carry the
@@ -1242,6 +1248,64 @@ async function main() {
     check('and the copy now reports the newer build',
           JSON.parse(await bodyAt(copter, '/__ap_complete__')).build ===
             '2027-01-01T00:00:00Z');
+  }
+
+  console.log('\nregression: the worker is told when caches change (B3)');
+  {
+    // The worker memoises which caches exist and which are complete, and only
+    // rebuilds that on CACHES_CHANGED. Nothing sent it, so a wiki saved or
+    // removed while the worker ran stayed invisible. Assert the message is sent.
+    const cachesObj = makeCaches();
+    (await cachesObj.open('ardupilot-offline-copter')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'copter'));
+    (await cachesObj.open('ardupilot-pages-v1')).put('/copter/x.html', new FakeResponse('<html>'));
+    const { doc, swMessages, w } = load({ manifest: MANIFEST, caches: cachesObj, usage: 100e6 });
+    await settle();
+    const btn = $(doc, 'clear-btn');
+    btn.click(); await settle();               // arm
+    await new Promise(r => setTimeout(r, 850));
+    btn.click(); await settle(); await settle(); // confirm -> clearAll
+    check('Remove all tells the worker its caches changed',
+          swMessages.some(m => m && m.type === 'CACHES_CHANGED'),
+          JSON.stringify(swMessages));
+  }
+
+  console.log('\nregression: a click on a button child still acts (closest)');
+  {
+    // Once armed, Remove all contains a 3px countdown bar. A click landing on
+    // it reported the bar as e.target, matched no id, and was swallowed. The
+    // handler uses closest() now; simulate a click whose target is a child.
+    const cachesObj = makeCaches();
+    (await cachesObj.open('ardupilot-offline-copter')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'copter'));
+    const { doc, w, swMessages } = load({ manifest: MANIFEST, caches: cachesObj, usage: 100e6 });
+    await settle();
+    const btn = $(doc, 'clear-btn');
+    // Dispatch a click whose target is a child element of the button.
+    const child = doc.createElement('span');
+    btn.appendChild(child);
+    child.dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    await settle();
+    check('a click on a child of Remove all arms it, not swallowed',
+          (btn.textContent || '').toLowerCase().includes('again'),
+          JSON.stringify(btn.textContent));
+  }
+
+  console.log('\nregression: the footer waits for the wiki list (B10)');
+  {
+    // renderStorage's footer reads storedIds, which renderWikis populates. Run
+    // in parallel it briefly said "no wikis saved" on a device that had some.
+    const cachesObj = makeCaches();
+    for (const id of ['common', 'copter', 'rover']) {
+      (await cachesObj.open('ardupilot-offline-' + id)).put('/__ap_complete__',
+        completeMarker(MANIFEST.generated, id));
+    }
+    const { doc } = load({ manifest: MANIFEST, caches: cachesObj, usage: 200e6 });
+    await settle();
+    const status = ($(doc, 'storage-status').textContent || '');
+    check('the footer reflects saved wikis on first paint, not "no wikis saved"',
+          /\d+ wikis? saved/.test(status) && !/no wikis saved/.test(status),
+          JSON.stringify(status));
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');
