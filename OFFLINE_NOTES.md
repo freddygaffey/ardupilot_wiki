@@ -189,84 +189,48 @@ question is bandwidth and who operates the hosting.
 Stop-work note. One bug is diagnosed but not fixed, and the diagnosis is the
 valuable part: it cost most of a session to find and is easy to re-lose.
 
-## The bug that is still open, and what it actually is
+## The bug that was open, and is now fixed
 
-Differential updates replace non-HTML files and silently fail to replace HTML
-files. Symptom, with a saved wiki seeded so nine files are stale:
+Differential updates replaced non-HTML files and silently failed on HTML.
+
+**It was never the diff, the worker routing, or Cache Storage.** It was a stale
+copy of `common_offline_page.js` in the browser's HTTP cache: a build that had
+`updateStored` but not yet the request tagging. Untagged requests took the
+cache-first route, so HTML was answered from the very cache being refreshed and
+written back over itself. `.js` and `.inv` reach the network regardless, which
+is the only reason they appeared to work and why the failure looked selective.
+
+Instrumenting `window.fetch` showed it in one field, `tagged:false` on every
+request, while the served file plainly contained the tagging code.
+
+**Two lessons worth keeping.** Do not use a function name to check which build
+is running; check for the specific change under test. And our own scripts are
+not fingerprinted the way Sphinx's are, so a stale copy is always possible
+until the headers say otherwise.
+
+**The fix** is in `deploy/nginx-wiki.conf`: `/js/pwa.js` and
+`*/\_static/common_offline*.{js,css}` are served `Cache-Control: no-cache`, as
+`/sw.js` already was. The update code itself needed no change; it had simply
+never once run.
+
+### Verified end to end, worker controlling the page
+
+Seeded a saved dev wiki with placeholders and nine wrong hashes, then pressed
+Check for updates:
 
 ```
-objects.inv       68,182 bytes   replaced
-searchindex.js 1,152,920 bytes   replaced
-all seven .html        17 bytes   NOT replaced, and reported as updated
+every request tagged      true          requests made       9
+archive fetched           false         all nine replaced   true
+untouched files intact    true          table now matches   true
+
+editing-prs.html   18,084     intel-edison.html            47,401
+nsh.html           27,214     ros2.html                    33,501
+rover-sitl.html    32,204     sitl-with-airsim.html        74,885
+mavexplorer.html   36,122     objects.inv                  68,182
+searchindex.js  1,152,920
 ```
 
-**It is not the diff, the worker routing, or Cache Storage.** It is a stale copy
-of `common_offline_page.js` in the *browser's HTTP cache*.
-
-The proof is one field. Instrumenting `window.fetch` during an update shows:
-
-```
-/dev/docs/editing-prs.html   tagged:false  ->  17 bytes
-/dev/docs/ros2.html          tagged:false  ->  17 bytes
-/dev/objects.inv             tagged:false  ->  68,182
-/dev/searchindex.js          tagged:false  ->  1,152,920
-```
-
-`tagged:false` on every one. The client never appended the `ap-update` marker,
-so the service worker treated these as ordinary reads. HTML takes the
-cache-first route and was answered from the very cache being refreshed, giving
-back the placeholder, which was then written over itself. `.js` and `.inv` go to
-the network regardless of the marker, which is the only reason they appeared to
-work and why the failure looked selective and mysterious.
-
-The browser was holding an **intermediate** build of the panel script: one that
-already had `updateStored` and did not yet have the tagging. Checking for
-`updateStored` to confirm "the new code is running" therefore passed while the
-code under test was absent. Do not use a function name as a version check.
-
-## Why this keeps happening, and the fix worth making first
-
-Three separate incidents this session, all the same root cause: **our own
-application scripts have no fingerprint and no `no-cache`.**
-
-1. The service worker served an old `common_offline_page.js` from `STATIC_CACHE`.
-2. The saved archive contained an old `common_offline_page.js`, because the
-   archive was packed before the rebuilt script was copied into
-   `build/html/_static`. Saving a wiki then unpacked the old script over the good
-   one.
-3. The browser HTTP cache served an old copy, which is the open bug above.
-
-Sphinx fingerprints its own assets (`theme.css?v=5d32c60e`) so they are immune.
-Ours are not. `APP_ASSET` in `sw.js` makes the worker network-first for them,
-which addresses (1) only.
-
-**Do this before touching the update code again:** serve
-`common_offline_*.js`, `common_offline.css` and `/js/pwa.js` with
-`Cache-Control: no-cache` in `deploy/nginx-wiki.conf`, exactly as `/sw.js`
-already is. Then re-run the test below. There is a real chance the update code
-is already correct and has simply never once been executed.
-
-## How to verify, and the test that should have existed
-
-The browser test that found this is in the transcript but should be replaced by
-an automated one. Under jsdom with a Cache Storage shim: seed a stored file
-table, run an update against a stubbed server, and **assert the bytes in the
-cache afterwards**. Never assert on the UI text.
-
-The UI text is itself wrong and needs fixing: "Updated 9 files" is computed from
-the size of the diff, not from writes that succeeded, which is precisely why a
-run that changed nothing reported success. It must count completed writes.
-
-To reproduce by hand, from a clean browser state:
-
-1. `caches.delete(...)` everything, unregister the worker, hard reload.
-2. Confirm the running script by content, not by a function name: fetch it with
-   `{cache:'reload'}` and check for `ap-update=`.
-3. Seed `ardupilot-offline-dev` with placeholders for every key in
-   `/offline/dev-files.json`, mark nine entries with a wrong hash, write
-   `/__ap_files__` and a `/__ap_complete__` with an old build id.
-4. Press Check for updates, then assert the nine files are real and every other
-   file is untouched.
+Nine files fetched and written, nothing else touched, no archive downloaded.
 
 ## What is finished and verified
 
@@ -303,8 +267,12 @@ To reproduce by hand, from a clean browser state:
 
 ## Still to do
 
-1. Fix the caching of app scripts, then re-test the update path (above).
-2. Write the automated update test; make the count report completed writes.
+1. Write the automated update test. The browser proof above is real but slow to
+   repeat; it belongs under jsdom, asserting bytes in the cache rather than UI
+   text.
+2. Make the count report completed writes. "Updated 9 files" still comes from
+   the size of the diff, so it would claim success even if every write failed.
+   It happens to be truthful now, which is not the same as being correct.
 3. Test the sidebar. Never got to it.
 4. The panel's storage figures: show download size and unpacked size.
 5. Bound the promotion in `sw.js:508`. Pages read from a saved wiki are copied
