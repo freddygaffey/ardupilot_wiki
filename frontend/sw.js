@@ -50,7 +50,7 @@
  * the activate handler skips it, so a bump costs a reader nothing but a few
  * re-fetched assets.
  */
-const CACHE_VERSION = 'v8';
+const CACHE_VERSION = 'v9';
 const PAGE_CACHE = `ardupilot-pages-${CACHE_VERSION}`;
 const IMAGE_CACHE = `ardupilot-images-${CACHE_VERSION}`;
 const STATIC_CACHE = `ardupilot-static-${CACHE_VERSION}`;
