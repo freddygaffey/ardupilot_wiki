@@ -26,7 +26,7 @@
   // Bumped when this file changes in a way worth telling apart at runtime.
   // window.ArduPilotOfflineVersion answers "is the page running the code I just
   // deployed?" without inferring it from behaviour.
-  var VERSION = 'closest-and-reclaim-1';
+  var VERSION = 'rate-limited-1';
   global.ArduPilotOfflineVersion = VERSION;
 
 
@@ -597,6 +597,15 @@
 
   var TABLE_KEY = '/__ap_files__';
 
+  // When more than this has changed, re-download the archive instead of
+  // fetching files one by one. See the check in updateStored for the reasoning
+  // and the measurement behind these numbers.
+  var MAX_DIFF_FILES = 300;
+  var MAX_DIFF_FRACTION = 0.2;
+  // Below this, a proportion says nothing: two files out of four is half the
+  // wiki and also two requests. Only the absolute cap applies to small ones.
+  var DIFF_FRACTION_MIN_FILES = 50;
+
   function tableUrl(entry) {
     return ARTIFACT_BASE + '/' + (entry.files || entry.id + '-files.json') +
            (CURRENT_BUILD ? '?v=' + encodeURIComponent(CURRENT_BUILD) : '');
@@ -640,6 +649,21 @@
     return out;
   }
 
+  // Requests per second one reader will make while updating. The fetches are
+  // sequential, so without a pause this runs as fast as the server answers:
+  // measured at about 75 a second, sustained, from a single browser. That is
+  // fine for one reader and is a flood from a hundred of them at once.
+  var UPDATE_RATE_PER_SEC = 15;
+  var lastFetchAt = 0;
+
+  function pace() {
+    var gap = 1000 / UPDATE_RATE_PER_SEC;
+    var wait = Math.max(0, lastFetchAt + gap - Date.now());
+    lastFetchAt = Date.now() + wait;
+    return wait ? new Promise(function (r) { setTimeout(r, wait); })
+                : Promise.resolve();
+  }
+
   function fetchInto(cache, id, name) {
     // Tagged so the service worker sends it to the network. Without this the
     // worker answers from the cache being refreshed, and the update stores what
@@ -653,10 +677,20 @@
       if (i >= urls.length) {
         throw new Error('could not fetch ' + name);
       }
-      return fetch(urls[i], {
-        cache: 'no-cache',
-        signal: activeDownload ? activeDownload.signal : undefined
+      return pace().then(function () {
+        return fetch(urls[i], {
+          cache: 'no-cache',
+          signal: activeDownload ? activeDownload.signal : undefined
+        });
       }).then(function (r) {
+        // The server asking us to slow down is not a missing file, and trying
+        // the next wiki for it would be one more request at exactly the wrong
+        // moment. Stop, and let the caller fall back to the archive.
+        if (r.status === 429 || r.status === 503) {
+          var e = new Error('server is rate limiting updates');
+          e.name = 'RateLimited';
+          throw e;
+        }
         if (!r.ok) { return attempt(i + 1); }
         return r.blob().then(function (body) {
           return cache.put(new Request(key), new Response(body, {
@@ -664,7 +698,9 @@
           }));
         });
       }, function (err) {
-        if (err && err.name === 'AbortError') { throw err; }
+        if (err && (err.name === 'AbortError' || err.name === 'RateLimited')) {
+          throw err;
+        }
         return attempt(i + 1);
       });
     }
@@ -700,6 +736,35 @@
             removed.push(k);
           }
         });
+
+        /*
+         * Past a certain point, fetching the difference is worse than fetching
+         * the whole thing again.
+         *
+         * A content edit touches a handful of files, which is what this path is
+         * for: 9 of 1,057 on a real commit. But a change to the layout template
+         * or a shared stylesheet rewrites EVERY page, and then the "difference"
+         * is the entire wiki, fetched one HTTP request at a time. Measured on a
+         * reader with twelve wikis saved after exactly that kind of change:
+         * 5,169 requests and 30.9 MB from one browser, where the archives would
+         * have been twelve requests.
+         *
+         * That is not just slow for the reader. Every reader who has saved a
+         * wiki does it at once, on the same build, so the site is flooded by
+         * its own update mechanism. The archives are large static files a CDN
+         * serves happily; thousands of small conditional requests are the shape
+         * of traffic that hurts.
+         *
+         * So when too much has moved, give up and say so: returning null puts
+         * this wiki back on the ordinary download path, which is one request
+         * for one archive.
+         */
+        var total = Object.keys(published).length || 1;
+        if (changed.length > MAX_DIFF_FILES ||
+            (total >= DIFF_FRACTION_MIN_FILES &&
+             changed.length / total > MAX_DIFF_FRACTION)) {
+          return null;
+        }
 
         var done = 0;
         function next(i) {
@@ -1158,9 +1223,40 @@
                                       function () { autoBusy = false; });
   }
 
+  /*
+   * Spread readers out, so a new build is not a stampede.
+   *
+   * On a fixed interval every reader polls in lockstep, discovers the same new
+   * build inside the same window, and starts fetching at the same moment. That
+   * is the shape of a self-inflicted denial of service: the trigger is not an
+   * attacker but somebody editing a layout template, which rewrites every page
+   * and puts every saved copy into a full refresh at once.
+   *
+   * Measured from one browser with twelve wikis saved after exactly that kind
+   * of change: 5,169 requests and 30.9 MB, sequential, so about 75 requests a
+   * second sustained for a minute. A hundred readers doing that together is
+   * 7,500 requests a second at the origin.
+   *
+   * So each tick is scheduled independently with up to +/-50% jitter. The
+   * average rate is unchanged and the herd is smeared across the interval
+   * instead of arriving on the same second. The first tick is jittered too, or
+   * everyone who opens the page after a deploy lines up again.
+   */
+  function scheduleNextTick() {
+    if (autoTimer) { window.clearTimeout(autoTimer); }
+    var jittered = AUTOUPDATE_MS * (0.5 + Math.random());
+    autoTimer = window.setTimeout(function () {
+      var done = autoUpdateTick();
+      if (done && typeof done.then === 'function') {
+        done.then(scheduleNextTick, scheduleNextTick);
+      } else {
+        scheduleNextTick();
+      }
+    }, jittered);
+  }
+
   function startAutoUpdate() {
-    if (autoTimer) { window.clearInterval(autoTimer); autoTimer = null; }
-    autoTimer = window.setInterval(autoUpdateTick, AUTOUPDATE_MS);
+    scheduleNextTick();
   }
 
   function exportHtmlFile() { return buildExport('dl-single'); }
