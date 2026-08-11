@@ -34,8 +34,14 @@ try {
 }
 
 const REPO = path.resolve(__dirname, '..', '..');
-const PAGE = path.join(REPO, 'common/source/_static/common_offline_page.js');
+const STATIC = path.join(REPO, 'common/source/_static');
+const PAGE = path.join(STATIC, 'common_offline_page.js');
 const RST = path.join(REPO, 'common/source/docs/common-offline.rst');
+
+// The panel is loaded on the page after its libraries, which attach namespaces
+// to the global (ApUnpack, ...). The harness loads them in the same order so
+// the panel finds them, exactly as the browser does via the script tags.
+const PANEL_LIBS = ['common_offline_unpack.js'];
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -283,6 +289,9 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
   sandbox.window.caches = caches;
   sandbox.window.fetch = sandbox.fetch;
   vm.createContext(sandbox);
+  PANEL_LIBS.forEach((lib) => {
+    vm.runInContext(fs.readFileSync(path.join(STATIC, lib), 'utf8'), sandbox);
+  });
   vm.runInContext(fs.readFileSync(PAGE, 'utf8'), sandbox);
   return { dom, w, doc: w.document, sandbox, fetchCalls, fetchOpts, swMessages };
 }
