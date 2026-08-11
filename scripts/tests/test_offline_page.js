@@ -103,24 +103,33 @@ function makeCaches() {
  * next check - cannot be tested at all.
  */
 function tarBytes(files) {
-  const zlib = require('zlib');
   const blocks = [];
-  for (const [name, body] of Object.entries(files)) {
+  const record = (name, body, type) => {
     const data = Buffer.from(body);
     const head = Buffer.alloc(512);
-    head.write(name, 0, 100);
+    head.write(name.slice(0, 100), 0, 100);    // truncated exactly as tar does
     head.write('000644 \0', 100, 8);
     head.write('000000 \0', 108, 8);
     head.write('000000 \0', 116, 8);
     head.write(data.length.toString(8).padStart(11, '0') + '\0', 124, 12);
     head.write('00000000000\0', 136, 12);
     head.write('        ', 148, 8);            // checksum field, spaces first
-    head.write('0', 156, 1);                   // regular file
+    head.write(type || '0', 156, 1);
     let sum = 0;
     for (const b of head) { sum += b; }
     head.write(sum.toString(8).padStart(6, '0') + '\0 ', 148, 8);
-    blocks.push(head, data,
-                Buffer.alloc((512 - (data.length % 512)) % 512));
+    blocks.push(head, data, Buffer.alloc((512 - (data.length % 512)) % 512));
+  };
+  for (const [name, body] of Object.entries(files)) {
+    // A name longer than the 100-byte field is stored the way Python's tarfile
+    // does by default: a PAX extended header carrying path=, then the file
+    // entry with a truncated name field. The unpacker must honour the header.
+    if (name.length > 100) {
+      const rec = `path=${name}\n`;
+      const len = (String(rec.length + 4).length + rec.length + 1);
+      record('././@PaxHeader', `${len} ${rec}`, 'x');
+    }
+    record(name, body, '0');
   }
   blocks.push(Buffer.alloc(1024));             // end of archive
   return Buffer.concat(blocks);
@@ -592,8 +601,14 @@ async function main() {
   console.log('\nfreshness: the whole round trip');
   {
     const caches = makeCaches();
+    // A page whose name exceeds the tar 100-byte field, stored PAX-style, just
+    // like the real archives (one such page per wiki). The unpacker must key it
+    // by its full name or it is unreachable offline.
+    const longName = 'copter/docs/how-to-use-the-auth-command-to-sign-a-' +
+                     'pixhawk-board-with-your-certificate-of-authenticity.html';
     const first = load({ manifest: MANIFEST, caches,
-                         archives: { 'copter/index.html': '<html>ok' } });
+                         archives: { 'copter/index.html': '<html>ok',
+                                     [longName]: '<html>the long page' } });
     await settle();
     first.doc.querySelector('.wiki-check[value="copter"]').click();
     await settle();
@@ -608,6 +623,12 @@ async function main() {
           info.build === MANIFEST.generated, JSON.stringify(info.build));
     check('the archive contents were unpacked into the cache',
           !!(await c.match('/copter/index.html')));
+    const longHit = await c.match('/' + longName);
+    check('a PAX long-named page is stored under its FULL key',
+          !!longHit && (await longHit.text()) === '<html>the long page',
+          longName.length + '-char name');
+    check('and not under the truncated 100-char key',
+          (await c.match('/' + longName.slice(0, 100))) === undefined);
 
     // Same build again: nothing to do.
     const same = load({ manifest: MANIFEST, caches,

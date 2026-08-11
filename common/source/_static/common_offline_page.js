@@ -513,12 +513,35 @@
       return out;
     }
 
+    // A name carried over from a PAX or GNU long-name header, applied to the
+    // very next file entry. Python's tarfile defaults to PAX, which stores any
+    // name longer than the 100-byte header field in a preceding ././@PaxHeader
+    // record (type 'x') and truncates the field itself. Reading only the field
+    // stored those pages under a chopped key, unreachable offline and never
+    // repaired because the file table still held the full name. Measured: one
+    // page per wiki (the longest title) was lost this way.
+    var override = null;
+
+    // Pull "path=<value>" out of a PAX extended header body. Records are
+    // "<length> key=value\n"; only path matters here.
+    function paxPath(body) {
+      var text = '';
+      for (var i = 0; i < body.length; i++) { text += String.fromCharCode(body[i]); }
+      var m = text.match(/\d+ path=([^\n]*)\n/);
+      return m ? m[1] : null;
+    }
+
     function step() {
       return need(512).then(function (ok) {
         if (!ok) { return; }
         var header = take(512);
         var name = textField(header, 0, 100);
         if (!name) { return step(); }   // zero block: padding between members
+
+        // ustar stores an extra 155-byte prefix; a full path is prefix + '/' +
+        // name when the prefix is set. PAX/GNU overrides win over both.
+        var pfx = textField(header, 345, 155);
+        if (pfx) { name = pfx + '/' + name; }
 
         var size = parseInt(textField(header, 124, 12).trim(), 8) || 0;
         var type = String.fromCharCode(header[156] || 48);
@@ -527,13 +550,28 @@
         return need(padded).then(function (haveBody) {
           if (!haveBody) { return; }
           var body = take(padded).slice(0, size);
-          // '0' and NUL are regular files; skip directories and metadata.
-          // Escaped, not a raw byte, or the file reads as binary to grep.
-          if (type !== '0' && type !== '\0') { return step(); }
-          var path = prefix + name;
+
+          // A PAX extended header ('x'/'g') or GNU long name ('L') names the
+          // NEXT entry. Capture it and read on rather than storing anything.
+          if (type === 'x' || type === 'g') {
+            var p = paxPath(body);
+            if (p) { override = p; }
+            return step();
+          }
+          if (type === 'L') {
+            override = textField(body, 0, body.length);
+            return step();
+          }
+
+          // '0' and NUL are regular files; skip directories and other metadata.
+          if (type !== '0' && type !== '\0') { override = null; return step(); }
+
+          var entryName = override || name;
+          override = null;
+          var path = prefix + entryName;
           return cache.put(
             new Request(path),
-            new Response(body, { headers: { 'Content-Type': mimeFor(name) } })
+            new Response(body, { headers: { 'Content-Type': mimeFor(entryName) } })
           ).then(function () {
             if (onEntry) { onEntry(path); }
             return step();
