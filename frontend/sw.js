@@ -41,7 +41,7 @@
  * the activate handler skips it, so a bump costs a reader nothing but a few
  * re-fetched assets.
  */
-const CACHE_VERSION = 'v4';
+const CACHE_VERSION = 'v5';
 const PAGE_CACHE = `ardupilot-pages-${CACHE_VERSION}`;
 const IMAGE_CACHE = `ardupilot-images-${CACHE_VERSION}`;
 const STATIC_CACHE = `ardupilot-static-${CACHE_VERSION}`;
@@ -713,6 +713,34 @@ self.addEventListener('fetch', (event) => {
     // Letting it fail is what allows the caller to retry or fall back to the
     // archive.
     event.respondWith(fetch(request));
+    return;
+  }
+
+  /*
+   * An asset the theme asks for and does not ship.
+   *
+   * sphinx_rtd_theme's ardupilot.css sets
+   *   background: url(../images/mainnav-sep-2.gif) repeat-y right
+   * and the installed package has no static/images directory at all, so the
+   * file does not exist and never has. It is a decorative separator in the top
+   * menu, and its absence is invisible.
+   *
+   * What is not invisible is the cost. It is requested on every page of every
+   * wiki, and on a page otherwise served entirely from storage it was the only
+   * thing left going to the network: one round trip, measured at 28 ms, to be
+   * told 404. Offline it fails instead, which puts an error in the console that
+   * reads like a fault in the offline feature.
+   *
+   * So answer it here, instantly, with a transparent pixel. Narrow on purpose:
+   * one exact filename, and it goes the moment the theme ships the file.
+   * Recorded in scripts/tests/KNOWN_UPSTREAM_ISSUES.md.
+   */
+  if (url.pathname.endsWith('/_static/images/mainnav-sep-2.gif')) {
+    event.respondWith(new Response(
+      Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'),
+                      (c) => c.charCodeAt(0)),
+      { headers: { 'Content-Type': 'image/gif',
+                   'Cache-Control': 'public, max-age=31536000' } }));
     return;
   }
 
