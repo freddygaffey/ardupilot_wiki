@@ -26,7 +26,7 @@
   // Bumped when this file changes in a way worth telling apart at runtime.
   // window.ArduPilotOfflineVersion answers "is the page running the code I just
   // deployed?" without inferring it from behaviour.
-  var VERSION = 'save-skips-stored-1';
+  var VERSION = 'autoupdate-30s-1';
   global.ArduPilotOfflineVersion = VERSION;
 
 
@@ -859,10 +859,18 @@
    * This is a real request, not a reassuring message: a reader checking before
    * heading out needs to know whether what they are carrying is current.
    */
-  function checkForUpdates() {
+  function checkForUpdates(quiet) {
     var out = el('check-result');
-    out.hidden = false;
-    out.textContent = 'Checking…';
+
+    // An automatic run says nothing until it has something worth saying.
+    // Printing "Checking…" over the panel every half minute would be noise,
+    // and worse, it would look like the page was acting on an instruction the
+    // reader had not given. News - that an update is being applied, or that it
+    // was - is announced either way.
+    function announce(text) { out.hidden = false; out.textContent = text; }
+    var report = quiet ? function () {} : announce;
+
+    report('Checking…');
 
     return fetch('/offline/offline-manifest.json', { cache: 'no-cache' })
       .then(function (r) {
@@ -901,11 +909,13 @@
       .then(function (results) {
         var stale = results.filter(Boolean);
         if (!stale.length) {
-          out.textContent = 'Up to date.';
+          report('Up to date.');
           return;
         }
-        out.textContent = 'Updating ' + stale.length + ' item' +
-                          (stale.length === 1 ? '' : 's') + '…';
+        // Real news: something moved, and pages the reader is holding are
+        // about to change under them. Said out loud even on an automatic run.
+        announce('Updating ' + stale.length + ' item' +
+                 (stale.length === 1 ? '' : 's') + '…');
 
         // Try the differential path first: compare the stored file table with
         // the published one and fetch only what moved. Anything saved before
@@ -920,8 +930,8 @@
             var entry = byId[id];
             if (!entry) { full.push(id); return; }
             return updateStored(entry, function (done, total) {
-              out.textContent = 'Updating ' + entry.name + ' · ' +
-                                done + ' of ' + total + ' files…';
+              announce('Updating ' + entry.name + ' · ' +
+                       done + ' of ' + total + ' files…');
             }).then(function (result) {
               if (!result) { full.push(id); return; }
               moved += result.changed + result.removed;
@@ -931,9 +941,11 @@
           });
         }, Promise.resolve()).then(function () {
           if (!full.length) {
-            out.textContent = moved
-              ? 'Updated ' + moved + ' file' + (moved === 1 ? '' : 's') + '.'
-              : 'Already up to date.';
+            if (moved) {
+              announce('Updated ' + moved + ' file' + (moved === 1 ? '' : 's') + '.');
+            } else {
+              report('Already up to date.');
+            }
             return renderWikis();
           }
           // Re-select what could not be updated differentially and reuse the
@@ -951,7 +963,10 @@
         });
       })
       .catch(function (err) {
-        out.textContent = (err && err.message) || 'Check failed';
+        // A failed automatic check is ordinary: it means the reader is offline,
+        // which is the situation this whole feature exists for. Only a check
+        // somebody asked for reports that it could not be done.
+        report((err && err.message) || 'Check failed');
       });
   }
 
@@ -1073,6 +1088,62 @@
     });
   }
 
+  /* ---------------------------------------------------------------------
+   * Automatic updates.
+   *
+   * The checkbox below the table has always been there and has always been
+   * ticked, and nothing ever read it: "Update saved pages automatically" was a
+   * promise the page did not keep. A saved wiki changed only when somebody
+   * thought to press Check, which is precisely the thing a reader who saved a
+   * wiki months ago will not do.
+   *
+   * A check that finds nothing costs one request for the manifest, a few
+   * hundred bytes, and no more: file tables are fetched only for wikis whose
+   * recorded build id has actually moved. That is what makes it reasonable to
+   * do this on a timer rather than only on demand.
+   * --------------------------------------------------------------------- */
+
+  // Deliberately short while the update path is being exercised end to end.
+  // For a real deployment this belongs in the tens of minutes: every reader
+  // holding a saved wiki asks for the manifest this often, and the wiki is
+  // rebuilt a few times a day at most.
+  var AUTOUPDATE_MS = 30000;
+
+  var autoTimer = null;
+  var autoBusy = false;
+
+  function autoUpdateOn() {
+    var box = el('autoupdate');
+    return !!(box && box.checked);
+  }
+
+  function autoUpdateTick() {
+    if (!autoUpdateOn()) { return; }
+    // A check already running, or a download in progress, owns the panel and
+    // the network until it is done. Overlapping runs would fight over the same
+    // caches and report over each other.
+    if (autoBusy || activeDownload) { return; }
+    // Nothing saved means nothing to update and no reason to touch the network.
+    if (!Object.keys(storedIds).length) { return; }
+    // Deliberately NOT skipped while the tab is hidden. Browsers already
+    // throttle timers in background tabs, so a guard here buys nothing they
+    // are not doing, and it costs the common case: a wiki left open in a
+    // background tab for hours is exactly the copy most likely to be behind.
+    // Skipping it meant a reader could leave this page open all day and have
+    // "Update saved pages automatically" do nothing at all, which was measured
+    // rather than reasoned about: with the guard in place a rebuild published
+    // mid-session was never picked up, and the request log stayed empty.
+
+    autoBusy = true;
+    return checkForUpdates(true).then(function () { autoBusy = false; },
+                                      function () { autoBusy = false; });
+  }
+
+  function startAutoUpdate() {
+    if (autoTimer) { window.clearInterval(autoTimer); autoTimer = null; }
+    autoTimer = window.setInterval(autoUpdateTick, AUTOUPDATE_MS);
+  }
+
   function exportHtmlFile() { return buildExport('dl-single'); }
 
   /* ---------- wiring ---------- */
@@ -1091,6 +1162,8 @@
       try {
         window.localStorage.setItem(AUTOUPDATE_KEY, e.target.checked ? '1' : '0');
       } catch (err) { /* private browsing */ }
+      // Turning it on should mean something now rather than at the next tick.
+      if (e.target.checked) { autoUpdateTick(); }
     }
   });
 
@@ -1106,6 +1179,13 @@
       var pref = window.localStorage.getItem(AUTOUPDATE_KEY);
       if (pref === '0') { el('autoupdate').checked = false; }
     } catch (err) { /* private browsing */ }
+
+    startAutoUpdate();
+    // A tab left open for hours does nothing while it is hidden, so coming
+    // back to it is the moment its copy is most likely to be behind.
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden) { autoUpdateTick(); }
+    });
 
     var standalone = window.matchMedia('(display-mode: standalone)').matches ||
                      window.navigator.standalone === true;

@@ -4,32 +4,33 @@
 How Offline Copies Work
 =======================
 
+.. tip::
+
+   To download a wiki, go to the :ref:`common-offline` page. This page explains
+   how that works rather than providing the controls for it.
+
 The wiki can be read with no internet connection, and is noticeably faster to
 browse even when you have one. This page explains what the feature does, how to
 get the most out of it, and how it is built.
 
-The controls for downloading a wiki are on the :ref:`common-offline` page.
+A saved copy does not go stale. Once a wiki has been downloaded it is checked
+against the server periodically, and anything that has changed since is fetched
+on its own rather than by downloading the wiki again.
 
 Features
 ========
 
-Three separate things are provided here, and they are easily confused with one
-another.
+Three distinct things are provided here. They do different jobs, and which one
+you want depends on what you are trying to achieve.
 
-Faster Browsing
----------------
+**Faster browsing.** Every page you visit is stored on your device and served
+from there the next time it is requested. There is nothing to configure and no
+decision to make, and it begins working from your second visit onwards. This
+applies to ordinary browsing over a normal internet connection, and most
+readers will notice it more than they notice the offline support.
 
-Every page you visit is stored on your device and served from there the next
-time it is requested. There is nothing to configure and no decision to make,
-and it begins working from your second visit onwards. This applies to ordinary
-browsing over a normal internet connection, and most readers will notice it
-more than they notice the offline support.
-
-Saving a Wiki for Offline Use
------------------------------
-
-Saving downloads the wiki you select together with the shared image set that
-all of the wikis draw on. The shared images are needed whichever wiki you
+**Saving a wiki for offline use.** Saving downloads the wiki you select
+together with the shared image set that all of the wikis draw on. The shared images are needed whichever wiki you
 choose and are the larger part of the download: roughly 440 MB of images, plus
 about 80 MB for Copter. Once the download has finished, every page in that wiki
 opens with no connection at all.
@@ -41,14 +42,18 @@ somebody reading a single page should not have several hundred megabytes arrive
 uninvited. If you work from the documentation regularly you will probably want
 to save it, because a saved wiki is also the fastest way to read it.
 
-Exporting the Wiki as a Single File
------------------------------------
+**Exporting the wiki as a single file.** The export produces one ``.html`` file
+containing the pages, the images and a full text search index. Open it by
+double clicking it: there is nothing to install and it will run from a USB
+stick. This is intended for machines you cannot install software on, or for
+giving the documentation to somebody on a memory card.
 
-The export produces one ``.html`` file containing the pages, the images and a
-full text search index. Open it by double clicking it: there is nothing to
-install and it will run from a USB stick. This is intended for machines you
-cannot install software on, or for giving the documentation to somebody on a
-memory card.
+The file is built in your browser out of the wiki already saved on your device,
+rather than being downloaded from the server as a file in its own right. That
+has a consequence worth knowing before you start: exporting a wiki you have not
+saved will download it first, so you end up with a saved copy as well as the
+file. Nothing is wasted by this, and an export of a wiki you have already saved
+needs no connection at all.
 
 Getting the Most Out of It
 ==========================
@@ -68,9 +73,10 @@ megabytes of stored pages.
 
 .. note::
 
-   Saved pages do not update themselves. Use the update check on the
-   :ref:`common-offline` page to find out whether what you have stored still
-   matches what has been published.
+   A saved wiki checks itself against the server while a wiki page is open and
+   fetches anything that has changed, so a copy left alone stays current
+   without being asked. The check can be turned off, and can be run on demand,
+   on the :ref:`common-offline` page.
 
 .. warning::
 
@@ -360,3 +366,5 @@ Limitations
   elements. Their cost is in rendering rather than transfer, so caching does
   not help them.
 * EPUB and PDF output are not covered by this feature.
+* A saved copy is only checked for updates while a wiki page is open in the
+  browser. Nothing runs in the background once every tab is closed.
