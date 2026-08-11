@@ -222,8 +222,33 @@ function checkWorkerEvaluates() {
  * `networkFails` is the case that matters most: an update whose request fails
  * must fail, not quietly resolve to the stale copy it was sent to replace.
  */
+/**
+ * A Response that behaves like a real one about its body.
+ *
+ * The bug this models: clone() throws once the body has been read. A cached
+ * page is handed to the browser and the browser reads it, so anything that
+ * clones it afterwards fails. A stub that clones freely cannot catch that, and
+ * did not.
+ */
+function bodyAwareResponse(text) {
+  return {
+    _used: false,
+    status: 200, ok: true, type: 'basic',
+    headers: { get: () => null },
+    clone() {
+      if (this._used) {
+        throw new TypeError("Failed to execute 'clone' on 'Response': " +
+                            'Response body is already used');
+      }
+      return bodyAwareResponse(text);
+    },
+    async text() { this._used = true; return text; },
+  };
+}
+
 function bootWorker({ networkFails = false, serve = null,
-                     existingCaches = [] } = {}) {
+                     existingCaches = [], offlineCopy = null,
+                     holdNetwork = false } = {}) {
   const seen = { fetches: [], cacheReads: [], puts: [], deleted: [] };
   let cacheNames = existingCaches.slice();
   const listeners = {};
@@ -240,7 +265,15 @@ function bootWorker({ networkFails = false, serve = null,
       registration: {},
     },
     caches: {
-      match: async (r) => { seen.cacheReads.push(String(r && r.url ? r.url : r)); },
+      match: async (r) => {
+        const k = String(r && r.url ? r.url : r);
+        seen.cacheReads.push(k);
+        if (offlineCopy && k.endsWith(offlineCopy.path)) {
+          seen.servedCopy = seen.servedCopy || bodyAwareResponse(offlineCopy.body);
+          return seen.servedCopy;
+        }
+        return undefined;
+      },
       open: async () => emptyCache,
       keys: async () => cacheNames.slice(),
       delete: async (n) => {
@@ -254,6 +287,12 @@ function bootWorker({ networkFails = false, serve = null,
       const url = String(req && req.url ? req.url : req);
       seen.fetches.push(url);
       if (networkFails) { throw new TypeError('Failed to fetch'); }
+      // Held open so the test controls when the refresh runs, which is the
+      // only way to reproduce the real ordering: the browser reads the served
+      // copy while the refresh is still in flight.
+      if (holdNetwork) {
+        await new Promise((resolve) => { seen.releaseNetwork = resolve; });
+      }
       // What the server said it was sending. The point of the guard is that
       // this can contradict what was asked for.
       const spec = serve ? serve(url) : {};
@@ -506,6 +545,43 @@ async function checkRevalidationIsAwaited() {
         'no call site omits it');
 }
 
+/*
+ * The refresh must survive the browser reading the copy it was handed.
+ *
+ * staleWhileRevalidate answers from storage and compares the network copy with
+ * it afterwards. It used to clone the stored copy inside that later comparison,
+ * by which time the browser had already read it to render the page, so the
+ * clone threw, the whole revalidation rejected, and the put that follows never
+ * ran. Nothing looked wrong: the page rendered, from the copy we already had.
+ * The page cache simply never filled, and a saved wiki shadowed the live site
+ * for ever.
+ */
+async function checkRefreshSurvivesAConsumedBody() {
+  console.log('\nservice worker: refreshing a page that has been read\n');
+
+  const w = bootWorker({
+    serve: () => ({ ct: 'text/html', body: '<html>fresh' }),
+    offlineCopy: { path: '/dev/docs/thing.html', body: '<html>stale' },
+    holdNetwork: true,
+  });
+  const answered = w.ask('/dev/docs/thing.html');
+  const response = answered ? await answered : null;
+  check('the stored copy is served while the refresh is still in flight',
+        !!response && !!w.seen.releaseNetwork);
+
+  // The browser reads it to render the page, and only then does the refresh
+  // land. Reversing these two is what made the bug invisible in testing.
+  if (response && response.text) { await response.text(); }
+  if (w.seen.releaseNetwork) { w.seen.releaseNetwork(); }
+
+  await Promise.all(w.seen.waited || []);
+  await new Promise((r) => setTimeout(r, 10));
+  check('the refresh still completes after the served copy has been read',
+        w.seen.puts.length === 1, JSON.stringify(w.seen.puts));
+  check('and it did not fail on a used body',
+        !(w.seen.errors || []).length, JSON.stringify(w.seen.errors || []));
+}
+
 async function checkVersionBump() {
   console.log('\nservice worker: what a version bump throws away\n');
 
@@ -549,6 +625,7 @@ async function main() {
     await checkVersionBump();
     await checkArchiveFallback();
     await checkRevalidationIsAwaited();
+    await checkRefreshSurvivesAConsumedBody();
     console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                          : '\nall checks passed\n');
     process.exit(failures ? 1 : 0);
@@ -663,6 +740,7 @@ async function main() {
   await checkVersionBump();
   await checkArchiveFallback();
   await checkRevalidationIsAwaited();
+  await checkRefreshSurvivesAConsumedBody();
 
   console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                        : '\nall checks passed\n');
