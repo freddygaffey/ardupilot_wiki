@@ -1269,6 +1269,38 @@ async function main() {
             '2027-01-01T00:00:00Z');
   }
 
+  console.log('\neviction: a reclaimed wiki is noticed, not silent');
+  {
+    // The browser can reclaim "temporary" storage without warning. A wiki we
+    // recorded as saved but that is no longer in Cache Storage was evicted, and
+    // the panel should say so rather than showing it as never-saved.
+    const caches = makeCaches();
+    // common is present; copter was saved (recorded) but its cache is gone.
+    (await caches.open('ardupilot-offline-common')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'common'));
+    const { doc, w } = load({ manifest: MANIFEST, caches, usage: 400e6 });
+    // Pretend copter was saved earlier this device.
+    w.localStorage.setItem('ap-saved-ids', JSON.stringify(['common', 'copter']));
+    await settle();
+    // Re-render storage now that the record exists.
+    const status = ($(doc, 'storage-warning').textContent || '');
+    check('an evicted wiki produces a notice',
+          /no longer here/.test(status) && /reclaimed/.test(status),
+          JSON.stringify(status.slice(0, 80)));
+
+    // A wiki that IS still saved is not called evicted.
+    const caches2 = makeCaches();
+    for (const id of ['common', 'copter']) {
+      (await caches2.open('ardupilot-offline-' + id)).put('/__ap_complete__',
+        completeMarker(MANIFEST.generated, id));
+    }
+    const b = load({ manifest: MANIFEST, caches: caches2, usage: 400e6 });
+    b.w.localStorage.setItem('ap-saved-ids', JSON.stringify(['common', 'copter']));
+    await settle();
+    check('a wiki still present is not called evicted',
+          !/no longer here/.test(b.doc.getElementById('storage-warning').textContent || ''));
+  }
+
   console.log('\nthe update toast appears and shows progress');
   {
     // A saved wiki updating itself is news the reader should see, not a hidden
