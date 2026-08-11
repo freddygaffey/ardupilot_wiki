@@ -163,6 +163,7 @@ Install as an App
    <script src="../_static/common_offline_document.js" defer="defer"></script>
    <script src="../_static/common_offline_export.js" defer="defer"></script>
    <script src="../_static/common_offline_unpack.js" defer="defer"></script>
+   <script src="../_static/common_offline_update.js" defer="defer"></script>
    <script src="../_static/common_offline_page.js" defer="defer"></script>
 
 [copywiki destination="copter,plane,rover,sub,blimp,antennatracker,dev,planner,planner2,ardupilot,mavproxy"]

@@ -41,7 +41,7 @@ const RST = path.join(REPO, 'common/source/docs/common-offline.rst');
 // The panel is loaded on the page after its libraries, which attach namespaces
 // to the global (ApUnpack, ...). The harness loads them in the same order so
 // the panel finds them, exactly as the browser does via the script tags.
-const PANEL_LIBS = ['common_offline_unpack.js'];
+const PANEL_LIBS = ['common_offline_unpack.js', 'common_offline_update.js'];
 
 let pass = 0, fail = 0;
 const failures = [];
@@ -1010,12 +1010,22 @@ async function main() {
     for (let i = 0; i < 400; i++) { many['dev/docs/p' + i + '.html'] = ['h' + i, 'old ' + i]; }
     await seedSaved(cachesObj, 'dev', OLD_BUILD, many);
 
+    // Make every changed file genuinely fetchable, with the RIGHT hash, so the
+    // only reason not to fetch them one by one is the cap. Otherwise the test
+    // passes whether the cap fires or the files simply 404, which does not
+    // isolate the thing under test.
     const published = {};
-    Object.keys(many).forEach((k) => { published[k] = many[k][0] + '-moved'; });
+    const loose = {};
+    for (const k of Object.keys(many)) {
+      const body = 'NEW ' + k;
+      loose[k] = body;
+      published[k] = await fileHash(body);
+    }
 
     const { fetchCalls, doc } = load({
       manifest: MANIFEST, caches: cachesObj,
       tables: { 'dev-files.json': published },
+      loose,
       archives: { 'dev/index.html': '<html>from the archive' },
     });
     await settle();
@@ -1023,8 +1033,8 @@ async function main() {
     for (let i = 0; i < 25; i++) { await settle(); }
 
     check('a wiki where everything changed is not fetched file by file',
-          siteCalls(fetchCalls).length === 0,
-          siteCalls(fetchCalls).length + ' individual file requests');
+          fetchCalls.filter(u => u.indexOf('ap-update=') !== -1).length === 0,
+          fetchCalls.filter(u => u.indexOf('ap-update=') !== -1).length + ' file requests');
     check('it downloads the archive instead, which is one request',
           fetchCalls.filter(u => u.indexOf('.tar') !== -1).length >= 1,
           JSON.stringify(fetchCalls.filter(u => u.indexOf('.tar') !== -1)));

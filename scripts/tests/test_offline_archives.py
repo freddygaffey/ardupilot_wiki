@@ -72,7 +72,8 @@ def check_assets_follow_pages():
     """
     ASSETS = ["common_offline.css", "common_offline_page.js",
               "common_offline_export.js", "common_offline_document.js",
-              "common_offline_unpack.js"]
+              "common_offline_unpack.js",
+              "common_offline_update.js"]
     have_page, missing = [], []
 
     for wiki in WIKIS:
