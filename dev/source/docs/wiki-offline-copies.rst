@@ -96,19 +96,24 @@ existed, on a first visit with it, and on every visit afterwards.
 +----------------------------------+----------------+----------------+----------------+--------------+
 |                                  | Before         | After                           | Difference   |
 +                                  +                +----------------+----------------+              +
-|                                  |                | First visit    | Once cached    |              |
+|                                  |                | New page       | Read again     |              |
 +==================================+================+================+================+==============+
 | Time to get the page             | about 1,000 ms | about 1,000 ms | 13 to 19 ms    | 60x faster   |
 +----------------------------------+----------------+----------------+----------------+--------------+
-| Bytes fetched                    | about 156 KB   | about 202 KB   | about 25 KB    | 6x less      |
+| Bytes fetched                    | about 156 KB   | about 156 KB   | about 25 KB    | 6x less      |
 +----------------------------------+----------------+----------------+----------------+--------------+
-| Requests made                    | 21 to 26       | 23 to 28       | about 1        | 26x fewer    |
+| Requests made                    | 21 to 26       | 21 to 26       | about 1        | 26x fewer    |
 +----------------------------------+----------------+----------------+----------------+--------------+
 | Parameter list (6.1 MB)          | about 8,300 ms | about 8,300 ms | about 2,300 ms | 3.5x faster  |
 +----------------------------------+----------------+----------------+----------------+--------------+
 
-The first visit costs slightly more, by the 46 KB of the service worker and the
-script that registers it. That is paid once and is repaid by the second page.
+The table assumes you have opened some page of the wiki before, which is the
+situation almost every reader is in. The service worker and the script that
+registers it come to 46 KB, fetched once on the first page you ever open and
+never again; charging that to every new page would describe a first-ever visit
+rather than an ordinary one. Excluded, a page you have not read costs exactly
+what it cost before the feature existed. It is free until it starts paying,
+which it does the second time you open anything.
 
 The request row says "about one" rather than none because a stored page is
 returned immediately and the worker then asks the server whether it has
