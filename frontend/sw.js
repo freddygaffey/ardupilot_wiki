@@ -23,7 +23,25 @@
  * Bumping CACHE_VERSION discards every cache and starts clean.
  */
 
-const CACHE_VERSION = 'v3';
+/*
+ * Bump this whenever this file changes. It is the only way anything already
+ * stored gets thrown away: the activate handler deletes caches whose NAME is
+ * no longer current, so a bad entry inside a cache that is still named v3
+ * lives forever, however wrong it is.
+ *
+ * That is not hypothetical. A debugging session wrote 17-byte placeholders
+ * over the theme's stylesheets and scripts in ardupilot-static-v3. Static
+ * assets are served cache-first because Sphinx fingerprints them, so nothing
+ * ever revalidated them, and because the placeholders were written under the
+ * current fingerprints no later build could produce a URL that replaced them.
+ * Every ordinary page load rendered unstyled for weeks; a hard refresh looked
+ * like a fix and changed nothing. One character here would have cleared it.
+ *
+ * Downloaded wikis are NOT affected: ardupilot-offline-* is unversioned and
+ * the activate handler skips it, so a bump costs a reader nothing but a few
+ * re-fetched assets.
+ */
+const CACHE_VERSION = 'v4';
 const PAGE_CACHE = `ardupilot-pages-${CACHE_VERSION}`;
 const IMAGE_CACHE = `ardupilot-images-${CACHE_VERSION}`;
 const STATIC_CACHE = `ardupilot-static-${CACHE_VERSION}`;
@@ -389,7 +407,9 @@ async function staleWhileRevalidate(request, cacheName, announceChanges) {
         notifyClients({ type: 'PAGE_UPDATED', url: request.url });
       }
     }
-    await cache.put(request, response.clone());
+    if (plausibleBody(request, response)) {
+      await cache.put(request, response.clone());
+    }
     return response;
   }).catch(() => undefined);
 
@@ -443,7 +463,7 @@ async function networkOnly(request) {
     // load, and - the part that actually bites - the page ends up with no
     // controlling service worker at all. Pass the request through untouched.
     const response = await fetch(request);
-    if (response && response.ok) {
+    if (response && response.ok && plausibleBody(request, response)) {
       const cache = await caches.open(PAGE_CACHE);
       await cache.put(request, response.clone());
     }
@@ -471,7 +491,8 @@ async function freshBehind(request, cacheName) {
 
   const network = fetch(request)
     .then(async (response) => {
-      if (response && (response.ok || response.type === 'opaque')) {
+      if (response && (response.ok || response.type === 'opaque') &&
+          plausibleBody(request, response)) {
         await cache.put(key.href, response.clone());
       }
       return response;
@@ -516,7 +537,8 @@ async function cacheFirst(request, cacheName) {
     // An opaque cross-origin response reports ok === false and status 0. It is
     // still perfectly usable by an <img> or <script>, and storing it is the
     // whole point here, so accept that shape as well as a real 200.
-    if (response && (response.ok || response.type === 'opaque')) {
+    if (response && (response.ok || response.type === 'opaque') &&
+        plausibleBody(request, response)) {
       await named.put(request, response.clone());
     }
     return response;
@@ -535,6 +557,52 @@ async function cacheFirst(request, cacheName) {
  * wrapped: whatever goes wrong, we always resolve to a Response, and a mistake
  * in a caching strategy can never cost us control of the page.
  */
+/*
+ * Does this response look like the thing that was asked for?
+ *
+ * A request for a stylesheet that comes back as text/html is never legitimate,
+ * whatever produced it, and storing one is how a cache poisons itself. Because
+ * static assets are served cache-first, a single bad answer is kept and served
+ * for as long as the cache name stays the same, which is indefinitely.
+ *
+ * The case this is really aimed at is captive wifi: hotels, airports and
+ * conference networks answer every request with their own login page, at 200.
+ * A reader who opens the wiki behind one of those would otherwise have their
+ * stylesheets and scripts permanently replaced by a login page, and would see
+ * an unstyled site long after leaving the building.
+ *
+ * Deliberately narrow. It rejects only on a positive contradiction: no content
+ * type at all proves nothing, an unrecognised extension proves nothing, and an
+ * opaque cross-origin response exposes no headers and is stored on purpose.
+ */
+const CONTENT_EXPECTATIONS = [
+  [/\.css$/i, /^text\/css/],
+  [/\.m?js$/i, /^(?:application|text)\/(?:x-)?(?:java|ecma)script/],
+  [/\.(?:png|jpe?g|gif|webp|avif|svg|ico)$/i, /^image\//],
+  [/\.json$/i, /^application\/json/],
+];
+
+function plausibleBody(request, response) {
+  if (!response || response.type === 'opaque') { return true; }
+  const ct = (response.headers && response.headers.get('Content-Type') || '')
+    .toLowerCase();
+  if (!ct) { return true; }
+  let path;
+  try {
+    path = new URL(typeof request === 'string' ? request : request.url).pathname;
+  } catch (err) {
+    return true;
+  }
+  for (const [pattern, expected] of CONTENT_EXPECTATIONS) {
+    if (pattern.test(path)) {
+      if (expected.test(ct)) { return true; }
+      console.warn('[sw] refusing to cache', path, 'served as', ct);
+      return false;
+    }
+  }
+  return true;
+}
+
 function safely(handler, request) {
   return handler.catch(async (err) => {
     console.warn('[sw] handler failed, passing through', err);
