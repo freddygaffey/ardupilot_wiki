@@ -1,13 +1,8 @@
 /*
- * PWA glue for the ArduPilot wiki: registers the service worker, drives an
- * explicit install button, and surfaces page updates.
- *
- * The install prompt is never left to the browser's own banner. We capture the
- * event, suppress the banner, and only offer installation when the reader
- * clicks our button.
- *
- * Loaded from the wiki theme (common/_templates/layout.html) and from the
- * frontend pages, so it must cope with the button being absent.
+ * PWA glue: registers the service worker, drives an explicit install button
+ * (the browser's own banner is suppressed and install offered only on our
+ * button), and surfaces page updates. Loaded from the theme and the frontend
+ * pages, so it must cope with the button being absent.
  */
 (function () {
   'use strict';
@@ -222,23 +217,12 @@
 })();
 
 /*
- * TODO(mirror): delete this when served from ardupilot.org.
- *
- * The wiki links to itself by absolute URL in a few hundred places, and the
- * theme's own menu adds about ten more to every page. On ardupilot.org those
- * are same-origin and resolve without help. On a mirror they walk the reader
- * off the site, and offline they fail outright: the document is gone and what
- * replaces it is a browser error.
- *
- * A service worker CANNOT catch this. A top-level navigation to another origin
- * is never handed to one, so no fetch event fires and there is nothing to
- * intercept. Anything built there would look right in testing and fail on the
- * first real click.
- *
- * So catch it at click time, which is the only place it can be caught. Only
- * links to a wiki this site actually serves are rewritten: /discord, /donate,
- * the firmware server and the forum are separate services with no local copy,
- * and they are left to leave normally.
+ * TODO(mirror): delete this when served from ardupilot.org. The wiki links to
+ * itself by absolute ardupilot.org URLs in hundreds of places; on a mirror or
+ * offline those walk the reader off the site or fail outright. A service worker
+ * CANNOT catch it - a cross-origin top-level navigation is never handed to one -
+ * so it is caught at click time instead. Only links to a wiki this site serves
+ * are rewritten; /discord, /donate, the firmware server and forum leave normally.
  */
 (function () {
   'use strict';
@@ -268,26 +252,12 @@
 
 
 /*
- * Fetch the page the pointer is heading for, shortly before it gets there.
- *
- * Prefetching every link a page contains works, but it asks the server for
- * dozens of pages to guess at one, and a page listing every supported board
- * links to hundreds. Watching the pointer costs the server nothing until there
- * is a reason.
- *
- * Three signals, in increasing order of how much they mean:
- *
- *   position      the pointer is already close to a link.
- *   velocity      projected forward, its path lands on one. Someone crossing a
- *                 link on the way elsewhere is travelling fast and straight
- *                 through, and never triggers this.
- *   acceleration  it is SLOWING as it approaches. People decelerate into a
- *                 target they mean to hit and not into one they are passing,
- *                 so this is the signal that separates intent from traffic.
- *
- * The reward is modest and that is fine: a page is fetched a few hundred
- * milliseconds before the click rather than after it, which is most of the
- * difference between a wiki that feels quick and one that feels instant.
+ * Fetch the page the pointer is heading for, just before it arrives. Prefetching
+ * every link works but asks the server for dozens of pages to guess at one, so
+ * instead watch the pointer, which costs nothing until there is a reason. Three
+ * signals, increasing in weight: position (near a link), velocity (its path
+ * lands on one), and acceleration (SLOWING as it approaches - people decelerate
+ * into a target they mean to hit, which separates intent from traffic).
  */
 (function () {
   'use strict';
@@ -297,15 +267,12 @@
     return;
   }
 
-  // Hard limits, deliberately conservative. Guessing is only worth doing while
-  // it stays cheaper than being wrong, and a clever heuristic that follows an
-  // idle pointer around can quietly turn one reader into a load generator.
+  // Hard limits, deliberately conservative: a heuristic that follows an idle
+  // pointer around can quietly turn one reader into a load generator.
   var MAX_BYTES = 2 * 1024 * 1024;   // the generated reference pages are 5.8MB
-  // A page listing every supported board has 514 links. Tracking them means a
-  // rect read per link after every scroll and a pass over all of them on every
-  // animation frame the pointer moves, which is a lot of work to guess at one
-  // click. Past this, guess nothing: those pages are indexes, and a reader on
-  // one is scanning rather than being led anywhere in particular.
+  // An index page can have 500+ links; tracking each means a rect read per link
+  // on every scroll and frame. Past this, guess nothing - a reader there is
+  // scanning, not being led anywhere.
   var MAX_TRACKED = 250;
   var MAX_PER_PAGE = 5;              // total guesses allowed per page view
   var MIN_GAP_MS = 400;              // never two in quick succession
@@ -362,18 +329,14 @@
   function prefetch(href) {
     if (busy || asked.has(href)) { return; }
 
-    // Already held? Then there is nothing to guess about and nothing to spend.
-    // The budget and the pacing exist to protect the server, so they should
-    // only ever apply to something that would actually reach it. A reader who
-    // has downloaded a wiki has every page here already, and rationing those
-    // would be rationing nothing.
+    // Already held? Nothing to guess at, nothing to spend - the budget and
+    // pacing only apply to what would actually reach the server.
     if (window.caches && caches.match) {
       asked.add(href);
-      // Exact match, not ignoreSearch. ignoreSearch disables the key hash and
-      // walks every cache: measured at 300+ ms with a dozen saved wikis, on the
-      // main thread, for every link considered. The hrefs here have their hash
-      // stripped already and stored keys carry no query, so an exact match
-      // finds anything held and is effectively instant.
+      // Exact match, not ignoreSearch: ignoreSearch disables the key hash and
+      // walks every cache (300+ ms with a dozen saved wikis, on the main thread,
+      // per link). These hrefs have no query and stored keys have none, so exact
+      // match finds anything held and is instant.
       caches.match(href).then(function (hit) {
         if (hit) { return; }                 // free, and already done
         asked.delete(href);
@@ -478,13 +441,11 @@
     if (href) { prefetch(href); }
   }, { passive: true });
 
-  // Hovering a link is intent the trajectory predictor cannot see. It reads the
-  // path the pointer takes ACROSS the page, which catches links in the content
-  // a reader drifts over, but not the sidebar: a reader goes straight there and
-  // clicks, giving no approach to read, so those clicks were cold. Resting on a
-  // link for a moment is a clear "I mean this one", wherever it is. The short
-  // delay keeps a pointer passing over the menu from prefetching everything it
-  // crosses; it counts against the same per-page budget as every other guess.
+  // Hovering is intent the trajectory predictor cannot see: it reads the path
+  // across the page, which catches content links a reader drifts over but not
+  // the sidebar, where a reader goes straight there and clicks. Resting on a
+  // link briefly is a clear "this one", wherever it is; the 65ms delay keeps a
+  // pointer crossing the menu from prefetching everything, on the same budget.
   var hoverTimer = null;
   document.addEventListener('mouseover', function (e) {
     var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
@@ -528,16 +489,10 @@
 
 
 /*
- * Land on the anchor, rather than at the top and then jumping.
- *
- * The generated reference pages carry content-visibility so the browser can
- * skip laying out sections nobody is looking at. The cost is that an anchor
- * inside a skipped section is not somewhere it can scroll to yet: it renders
- * the top of the page, keeps laying out, finds the target a second later and
- * snaps. Correct, and horrible to watch.
- *
- * So when the URL names a target, force the sections containing it to lay out
- * before scrolling. That is a handful of sections rather than 356.
+ * Land on the anchor rather than at the top and then jumping. The reference
+ * pages carry content-visibility, so an anchor inside a skipped section cannot
+ * be scrolled to yet - the page renders the top, lays out, then snaps a second
+ * later. So force the sections containing the target to lay out before scrolling.
  */
 (function () {
   'use strict';
@@ -577,27 +532,13 @@
 })();
 
 /*
- * Bring saved video cards to life when there is a connection.
- *
- * A saved wiki stores a still and a link where the embed was, because an
- * archive cannot carry YouTube and a page full of dead iframes is worse than a
- * page of pictures. But the saved copy is served even when the reader is
- * online, so somebody with a perfectly good connection was being handed the
- * offline compromise and had to click through to watch anything.
- *
- * So: paint the still instantly, as now, and quietly replace it with the real
- * player when the reader is likely to want it. Two triggers, because scrolling
- * is not the only way a video ends up in front of somebody: the card coming
- * into view, and the pointer entering it. An anchor jump, a resize or a find-
- * in-page all move a card into view without a scroll event, and the observer
- * catches every one of them.
- *
- * Nothing autoplays. The iframe is the ordinary embed, loaded early so it is
- * ready, and the still stays underneath it so there is no flash of empty box
- * while it arrives.
- *
- * Needs no change to the build: the card already carries the video in its href
- * and the still in its <img>, so this works on archives that are already saved.
+ * Bring saved video cards to life when there is a connection. A saved wiki
+ * stores a still and a link where the embed was, but that copy is served online
+ * too, so a reader with a good connection got the offline compromise. So paint
+ * the still instantly and replace it with the real player when the reader is
+ * likely to want it, triggered by the card coming into view (via an observer,
+ * which catches anchor jumps and find-in-page too) or the pointer entering it.
+ * Nothing autoplays; the still stays underneath so there is no flash of empty box.
  */
 (function () {
   'use strict';
@@ -657,21 +598,12 @@
     if (a.parentNode) { a.parentNode.replaceChild(box, a); }
   }
 
-  /*
-   * Run fn once the page has finished loading and the browser has a spare
-   * moment, never before.
-   *
-   * This matters more than it looks. An embed costs a cross-origin connection
-   * and roughly a megabyte of YouTube's own code, and the first version of this
-   * started that work as soon as a card was near the viewport, which on a page
-   * whose video is above the fold meant during the initial load. Measured on
-   * the mirror: 387 ms for the embed against 3.6 ms for the worker to serve the
-   * page itself. It was comfortably the slowest thing on the page and it was
-   * competing with the render for a video nobody had asked to watch yet.
-   *
-   * Deferring costs nothing that matters: the point is that the player is ready
-   * by the time somebody reaches it, not that it is ready in the first frame.
-   */
+  // Run fn once the page has loaded and the browser is idle, never before. An
+  // embed costs a cross-origin connection and ~1 MB of YouTube's code; starting
+  // that during the initial load made it the slowest thing on the page (measured
+  // 387 ms for the embed vs 3.6 ms to serve the page) for a video nobody had
+  // asked to watch. The player only needs to be ready by the time someone
+  // reaches it, not in the first frame.
   function whenIdle(fn) {
     if (document.readyState !== 'complete') {
       window.addEventListener('load', function () { whenIdle(fn); }, { once: true });
