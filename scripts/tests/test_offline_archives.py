@@ -71,7 +71,7 @@ def check_assets_follow_pages():
     the assets beside it. If the page moves, this moves with it.
     """
     ASSETS = ["common_offline.css", "common_offline_page.js",
-              "common_offline_export.js", "common_offline_document.js",
+              "common_offline_export.js", "common_offline_document_builder.js",
               "common_offline_unpack.js",
               "common_offline_update.js"]
     have_page, missing = [], []

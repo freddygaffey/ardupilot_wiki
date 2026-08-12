@@ -34,7 +34,7 @@ const ALL_WIKIS = ['copter', 'plane', 'rover', 'sub', 'blimp', 'dev',
 const OUT = '/tmp/ap-export-test';
 
 const EXPORTER = path.join(REPO, 'common/source/_static/common_offline_export.js');
-const DOCUMENT = path.join(REPO, 'common/source/_static/common_offline_document.js');
+const DOCUMENT = path.join(REPO, 'common/source/_static/common_offline_document_builder.js');
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -397,7 +397,7 @@ async function main() {
   // Six releases across four major lines, so the window can be seen to bite at
   // both ends: a line beyond the newest three, and an older patch inside a
   // line that is kept. PARAM_SERIES x PARAM_PER_SERIES in
-  // common_offline_document.js decides which three survive.
+  // common_offline_document_builder.js decides which three survive.
   const PARAM_KEPT = ['V4.7.1', 'V4.6.0', 'V4.5.2'];
   const PARAM_DROPPED = ['V4.7.0', 'V4.4.0', 'V4.3.0'];
   const paramWiki = wikis.includes('rover') ? 'rover' : wikis[0];
