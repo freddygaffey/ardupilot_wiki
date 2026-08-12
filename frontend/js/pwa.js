@@ -579,7 +579,6 @@
   'use strict';
 
   var ID = /[?&]v=([\w-]{6,})/;
-
   function upgrade(a) {
     if (a.dataset.apLive) { return; }
     var m = ID.exec(a.getAttribute('href') || '');
