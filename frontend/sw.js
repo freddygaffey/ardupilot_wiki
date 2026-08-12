@@ -522,8 +522,15 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
   // That risk is real but it is answered by revalidating and speaking up, not
   // by making everyone wait: the fetch below still runs, still compares, and
   // still fires PAGE_UPDATED when the served copy turns out to be behind.
-  const cached = (await heldOffline(request, cache)) ||
-                 (await heldOffline(request));
+  // Split the two sources on purpose. A PAGE_CACHE copy came from the network,
+  // so comparing it to a fresh fetch tells you whether the page really changed.
+  // The OFFLINE copy is the archive's REWRITTEN page - the donate button is a
+  // link, video embeds are stills, cross-wiki links are rewritten - so it never
+  // matches the original the site serves, and comparing it reports "changed" on
+  // every single page a saved wiki holds. That fired the "this page updated"
+  // toast on every navigation. Only the page-cache copy is announceable.
+  const fromPageCache = await heldOffline(request, cache);
+  const cached = fromPageCache || (await heldOffline(request));
 
   // Clone NOW, while the body is certainly untouched.
   //
@@ -539,7 +546,7 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
   // gave way to real embeds, and PAGE_UPDATED never fired once. The old comment
   // here claimed the comparison happened "before either body is consumed",
   // which was the intent and not what the code did.
-  const cachedForCompare = (announceChanges && cached) ? cached.clone() : null;
+  const cachedForCompare = (announceChanges && fromPageCache) ? fromPageCache.clone() : null;
 
   /*
    * The refresh has to reach the server.
