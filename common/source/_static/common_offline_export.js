@@ -13,7 +13,7 @@
  *
  * This half reads the cache and moves bytes. What the finished file says -
  * its shell, its stylesheet, its sidebar tree and its reading order - is in
- * common_offline_document.js, which must be loaded first.
+ * common_offline_document_builder.js, which must be loaded first.
  *
  * The alternative was for the build server to produce and host a ~970MB file
  * for every combination of wikis, duplicating content the reader has already
@@ -136,7 +136,7 @@
   /**
    * Relative reference -> path from the site root, as a browser would read it.
    *
-   * The rule lives in common_offline_document.js because the sidebar applies
+   * The rule lives in common_offline_document_builder.js because the sidebar applies
    * it to every href in every toctree it reads. Images and stylesheets need
    * exactly the same rule, and a second copy is how the two would come to
    * disagree about where a file is. Looked up per call so the two scripts may
@@ -191,7 +191,7 @@
     // rather than at load time so the two scripts may arrive in either order.
     var DOC = global.ArduPilotOfflineDocument;
     if (!DOC) {
-      throw new Error('common_offline_document.js is not loaded.');
+      throw new Error('common_offline_document_builder.js is not loaded.');
     }
 
     return storedEntries(wikiIds).then(function (groups) {

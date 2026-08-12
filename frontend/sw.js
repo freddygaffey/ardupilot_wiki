@@ -24,7 +24,7 @@
  * unstyled for weeks. One bump here would have cleared it. Downloaded wikis are
  * unaffected: ardupilot-offline-* is unversioned and activate skips it.
  */
-const CACHE_VERSION = 'v9';
+const CACHE_VERSION = 'v10';
 const PAGE_CACHE = `ardupilot-pages-${CACHE_VERSION}`;
 const IMAGE_CACHE = `ardupilot-images-${CACHE_VERSION}`;
 const STATIC_CACHE = `ardupilot-static-${CACHE_VERSION}`;
@@ -42,7 +42,7 @@ const THIRD_PARTY_STATIC =
 // nothing and is on every page, and network-only cost 15ms/navigation for a
 // file that rarely changes, so it gets stale-while-revalidate below instead.
 const APP_ASSET =
-  /(^\/sw\.js$|common_offline(\.css|_page\.js|_export\.js|_document\.js|_unpack\.js|_update\.js)$|common-offline(\.html)?$)/;
+  /(^\/sw\.js$|common_offline(\.css|_page\.js|_export\.js|_document_builder\.js|_unpack\.js|_update\.js)$|common-offline(\.html)?$)/;
 // Marks a request as part of a differential update, which must not be served
 // from the very cache it is refreshing.
 const UPDATE_PARAM = 'ap-update';

@@ -1,30 +1,18 @@
 /*
  * [copywiki destination="copter,plane,rover,sub,blimp,antennatracker,dev,planner,planner2,ardupilot,mavproxy"]
  *
- * The same destinations as docs/common-offline.rst and
- * common_offline_export.js. Without a marker a .js takes DEFAULT_COPY_WIKIS,
- * which is four of the eleven, so this would be missing on seven wikis and the
- * exporter would produce a file with no shell at all.
- */
-/*
- * The exported document: everything that decides what the .html file *is*.
+ * Marker required, or this .js reaches only four of the eleven wikis and the
+ * exporter builds a file with no shell.
  *
- * common_offline_export.js reads Cache Storage and streams bytes; this decides
- * what those bytes say. The two were one 1,078-line file doing both jobs, and
- * the seam was invisible: cache plumbing and markup generation sat in the same
- * scope and reached into each other freely.
- *
- * Two things follow from being the only place the document is described:
- *
- *   - The sidebar tree and the next/previous order are built by one function,
- *     buildNav, from one merged toctree. Built separately they drift, and
- *     "next" starts skipping pages the sidebar lists.
- *   - SHELL_JS is the script that ends up inside the exported file. It is
- *     assembled from single-quoted string literals, so every backslash here
- *     must be DOUBLED or it vanishes from the built file. A regex written
- *     /\s+/ once shipped as /s+/ and stripped every letter "s" from search
- *     snippets. Build-time code in this file (everything outside SHELL_JS) is
- *     ordinary source and takes ordinary single backslashes.
+ * The exported-document builder: everything that decides what the .html file
+ * *is* (common_offline_export.js reads Cache Storage and streams the bytes).
+ * Two landmines:
+ *   - buildNav builds the sidebar tree AND the next/previous order from one
+ *     merged toctree; built separately they drift and "next" skips pages.
+ *   - SHELL_JS is the script embedded in the exported file, assembled from
+ *     single-quoted literals, so every backslash here must be DOUBLED or it
+ *     vanishes from the built file (one written singly once shipped stripped and
+ *     silently corrupted search). Code outside SHELL_JS is ordinary source.
  */
 (function (global) {
   'use strict';
@@ -904,17 +892,11 @@
   /* -------------------------------------- versioned parameter pages */
 
   /*
-   * How much of the parameter list's history an offline copy carries.
-   *
-   * update.py --paramversioning publishes one page per release, back to 3.x:
-   * about forty per vehicle. One of them is 5.8 MB and around 215,000
-   * elements, so the whole history is several hundred megabytes per vehicle,
-   * and it is history nobody reads offline. Carry the newest few instead.
-   *
-   * Two numbers rather than one, because "release" is ambiguous: 4.7 is a
-   * release and so is 4.7.3. SERIES counts major.minor lines, PER_SERIES how
-   * many releases within each line. Three lines, newest release of each, is
-   * three pages per vehicle. Raising PER_SERIES is what puts a whole line in.
+   * How much parameter-list history the export carries. --paramversioning
+   * publishes ~40 pages per vehicle back to 3.x (one is 5.8 MB), several hundred
+   * MB nobody reads offline, so carry the newest few. Two numbers because
+   * "release" is ambiguous: SERIES counts major.minor lines, PER_SERIES releases
+   * within each. 3 x 1 is three pages per vehicle; raise PER_SERIES for a whole line.
    */
   var PARAM_SERIES = 3;
   var PARAM_PER_SERIES = 1;
@@ -925,13 +907,9 @@
   var PARAM_PAGE = /^\/([^/]+)\/docs\/parameters-([^/]+)$/;
 
   /**
-   * Which versioned parameter pages the file carries, and what the switcher
-   * offers on each wiki.
-   *
-   * Labels are rebuilt from the filenames rather than read from the wiki's
-   * parameters-<Vehicle>.json, which is not in the export: that is a .json,
-   * and the export carries pages, stylesheets and images. Rebuilding them also
-   * keeps the list honest, because it can only name pages that are here.
+   * Which versioned parameter pages the file carries. Labels are rebuilt from
+   * filenames, not the wiki's parameters-<Vehicle>.json (not in the export),
+   * which also keeps the list honest - it can only name pages that are here.
    */
   function parameterVersions(paths) {
     var found = {}, byWiki = {}, drop = {};
