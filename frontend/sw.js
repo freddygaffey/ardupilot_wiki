@@ -1,54 +1,28 @@
 /*
- * Service worker for the ArduPilot wiki.
+ * Service worker for the ArduPilot wiki. Caching policy:
  *
- * Caching policy, and the reasoning behind it:
+ *   pages   stale-while-revalidate - render the cached copy at once, refresh
+ *           behind, and tell the page if the refreshed copy differs so an editor
+ *           sees the change without every reader paying a round trip first.
+ *   images  cache first - large and effectively immutable.
+ *   static  stale-while-revalidate - few, small, must track the theme.
  *
- *   pages   stale-while-revalidate. The cached copy renders immediately, and a
- *           background fetch refreshes it. If what comes back differs from what
- *           was shown, the page is told so it can offer a reload - that is what
- *           lets someone who just edited a page see the change straight away
- *           without every reader paying a network round trip first.
- *
- *   images  cache first. They are large and effectively immutable; re-fetching
- *           them on every visit is the single biggest waste we can avoid.
- *
- *   static  stale-while-revalidate. Few files, small, and they must track the
- *           theme when it changes.
- *
- * Every strategy here issues at most one request per resource per navigation,
- * which is what an ordinary browser does anyway. Nothing in this file crawls,
- * prefetches or polls. The bulk offline download is a separate, opt-in action
- * driven from the page, and it costs exactly one request for one archive.
- *
- * Bumping CACHE_VERSION discards every cache and starts clean.
+ * At most one request per resource per navigation, as an ordinary browser does;
+ * nothing here crawls or polls. The bulk download is a separate opt-in action.
  */
 
 /*
- * Bump this when the CONTENT of a cache can no longer be trusted, not on every
- * edit to this file.
+ * Bump when the CONTENT of a cache can no longer be trusted, NOT on every edit.
+ * The activate handler only deletes caches whose NAME is stale, so a bad entry
+ * in a still-current cache lives until this changes - but a bump also empties
+ * every runtime cache, making the next load slow. Change a strategy or find
+ * poisoned entries: bump. Fix how a response is stored: usually not.
  *
- * It is the only way anything already stored gets thrown away: the activate
- * handler deletes caches whose NAME is no longer current, so a bad entry inside
- * a cache that is still named v3 lives forever, however wrong it is.
- *
- * But a bump is not free. It empties every runtime cache, so the next page the
- * reader opens is slow and every shared asset is fetched again. Bumping on each
- * edit during a session of debugging makes the site look like it is regressing
- * and makes timings meaningless, which happened repeatedly on 11 August 2026.
- * Change a caching strategy or discover poisoned entries: bump. Fix a bug in
- * how a response is stored: usually do not.
- *
- * That is not hypothetical. A debugging session wrote 17-byte placeholders
- * over the theme's stylesheets and scripts in ardupilot-static-v3. Static
- * assets are served cache-first because Sphinx fingerprints them, so nothing
- * ever revalidated them, and because the placeholders were written under the
- * current fingerprints no later build could produce a URL that replaced them.
- * Every ordinary page load rendered unstyled for weeks; a hard refresh looked
- * like a fix and changed nothing. One character here would have cleared it.
- *
- * Downloaded wikis are NOT affected: ardupilot-offline-* is unversioned and
- * the activate handler skips it, so a bump costs a reader nothing but a few
- * re-fetched assets.
+ * Not hypothetical: a debugging session once wrote 17-byte placeholders over the
+ * theme's cache-first (never-revalidated) stylesheets under their current
+ * fingerprints, so no later build could replace them and every page rendered
+ * unstyled for weeks. One bump here would have cleared it. Downloaded wikis are
+ * unaffected: ardupilot-offline-* is unversioned and activate skips it.
  */
 const CACHE_VERSION = 'v9';
 const PAGE_CACHE = `ardupilot-pages-${CACHE_VERSION}`;
@@ -59,21 +33,14 @@ const STATIC_CACHE = `ardupilot-static-${CACHE_VERSION}`;
 const THIRD_PARTY_CACHE = `ardupilot-thirdparty-${CACHE_VERSION}`;
 const THIRD_PARTY_STATIC =
   /^https:\/\/(i\.creativecommons\.org\/|licensebuttons\.net\/|www\.paypalobjects\.com\/)/;
-// User alerts are fetched with a cache-busting query, so every URL is unique
-// and a cache keyed on the whole URL can never hit. They still must not go
-// stale silently - they are how the project warns about a bad release - so
-// they get the same contract as a page: serve what we have at once, refresh
-// behind, and the next navigation shows the newer copy. One navigation behind
-// is a fair price for not spending a second on every page.
-// The offline page and the assets that drive it: markup, panel and exporter.
-// Deliberately NOT including /js/pwa.js any more. This group is network-only
-// because markup and the script that drives it are one unit: a cached panel
-// script paired with fresh panel markup renders as garbage. pwa.js is paired
-// with nothing. It is on every page of the site, it only registers the worker
-// and adds progressive enhancement, and the network-only route was costing
-// 15 ms of worker time on every single navigation for a file that had not
-// changed. It gets stale-while-revalidate below, so it is served instantly and
-// is at most one navigation behind, which for this file is harmless.
+// User alerts warn about a bad release, so they must not go stale silently;
+// they get the same contract as a page - serve what we have, refresh behind,
+// next navigation shows the newer copy.
+// The offline page and the assets that drive it. Network-only because the
+// markup and its panel script are one unit - a cached script against fresh
+// markup renders as garbage. pwa.js is deliberately excluded: it pairs with
+// nothing and is on every page, and network-only cost 15ms/navigation for a
+// file that rarely changes, so it gets stale-while-revalidate below instead.
 const APP_ASSET =
   /(^\/sw\.js$|common_offline(\.css|_page\.js|_export\.js|_document\.js|_unpack\.js|_update\.js)$|common-offline(\.html)?$)/;
 // Marks a request as part of a differential update, which must not be served
@@ -121,16 +88,10 @@ self.addEventListener('install', (event) => {
 });
 
 /*
- * Warm the theme's own assets after activation.
- *
- * Every page loads the same dozen files - jQuery, the theme script and
- * stylesheet, the fonts - and they were fetched lazily, so the first page
- * anyone opened paid for all of them and only the second was quick. They are
- * small, shared by all 3,958 pages, and content-hashed, so fetching them once
- * up front is cheap and never wrong.
- *
- * Failures are ignored one by one: a wiki the reader has never opened will
- * 404 here, and that must not stop the rest.
+ * Warm the theme's shared assets after activation. Every page loads the same
+ * dozen files (jQuery, theme script and stylesheet, fonts); fetched lazily, the
+ * first page paid for all of them. They are small, shared, and content-hashed,
+ * so fetching them once up front is cheap and never wrong. 404s are ignored.
  */
 const WARM_PER_WIKI = [
   '_static/css/theme.css',
@@ -142,17 +103,11 @@ const WARM_PER_WIKI = [
 ];
 
 /*
- * Third-party furniture that is on every page and never changes.
- *
- * The donate button's image lives on paypalobjects.com and the licence badge on
- * creativecommons.org, and both appear on all 3,958 pages. Cache-first makes
- * them cost the same as one of our own images, but only from the second page
- * onwards, and the first page was paying 138 ms for the donate button alone.
- *
- * Fetched no-cors, because a cross-origin image gives an opaque response: the
- * body cannot be read, which is fine for an <img> and is exactly why cacheFirst
- * stores opaque responses on purpose. Failures are ignored one at a time; this
- * is decoration, and a reader offline at install time must not be held up by it.
+ * Third-party furniture on every page that never changes: the donate button
+ * (paypalobjects.com) and licence badge (creativecommons.org). Cache-first
+ * makes them cost the same as our own images (the donate button alone was
+ * 138 ms on the first page). Fetched no-cors - a cross-origin image is opaque,
+ * fine for an <img>. Failures ignored; this is decoration.
  */
 const WARM_THIRD_PARTY = [
   'https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif',
@@ -321,14 +276,10 @@ function storedShapes(url) {
 
 
 /*
- * The one cache that can hold a given path.
- *
- * caches.match() with no cache name walks every cache in turn, and a reader
- * with every wiki downloaded has fourteen of them. Measured on a real page:
- * 692ms across all caches against 89ms asking the single cache that can
- * possibly hold it. The path already says which that is - /sub/docs/x.html can
- * only be in the sub download - so ask it directly and keep the exhaustive
- * search as the fallback it should always have been.
+ * The one cache that can hold a given path. caches.match() with no name walks
+ * every cache (692ms across fourteen downloads vs 89ms asking the single cache
+ * that can hold it). The path says which - /sub/docs/x.html is only in the sub
+ * download - so ask it directly, exhaustive search as fallback.
  */
 function likelyCacheName(path) {
   if (path.startsWith('/_common/')) {
@@ -395,38 +346,17 @@ async function offlineCacheFor(path) {
 }
 
 /*
- * The one answer to "is this held offline", for every kind of resource.
+ * The one answer to "is this held offline", for every resource. Pages and images
+ * having separate lookups once left 123 of rover's 123 images missing offline
+ * while every page resolved. Pass a cache to look only there; pass none to search
+ * every cache, which finds a downloaded wiki.
  *
- * Pages and images having their own lookups is what let 123 of rover's 123
- * images be missing offline while every page resolved: the image path checked
- * the runtime cache and the shared-image remap, and never the cache the
- * download unpacks into. The shared images resolved through the remap, so most
- * pictures appeared and it read as scattered breakage rather than a lookup
- * that did not exist.
- *
- * Pass a cache to look only there; pass none to search every cache, which is
- * what finds a downloaded wiki.
- */
-/*
- * Exact matches only, deliberately.
- *
- * These lookups asked the Cache API to ignore the query string, which was both
- * redundant and enormously expensive. Redundant because storedShapes() builds
- * every shape from url.pathname, so the string being looked up never carries a
- * query, and the unpacker writes archive paths as keys, so no stored key
- * carries one either: measured on a real saved wiki, 0 of 1,059 keys had one.
- * Expensive because that flag disables the hash lookup on the key and makes the
- * browser walk the entire cache.
- *
- * Measured on twelve saved wikis, per lookup, exact against ignoring the query:
- *
- *   cache.match(path)          0.1 to 0.3 ms   against   63 to  79 ms
- *   caches.match(path)         0.1 to 0.3 ms   against  307 to 325 ms
- *
- * The second line is the one that hurt: it is the fallback below, so every
- * request for something not stored paid a third of a second before reaching the
- * network. The cost grows with the number of wikis saved, which is why the site
- * felt instant with one wiki and sluggish with twelve.
+ * Exact matches only: ignoring the query string was redundant (no stored key has
+ * one: 0 of 1,059) and expensive - it disables the key hash and walks the whole
+ * cache. Measured on twelve saved wikis, exact vs ignore-query:
+ *   cache.match(path)    0.1-0.3 ms  vs   63-79 ms
+ *   caches.match(path)   0.1-0.3 ms  vs  307-325 ms   (the fallback below)
+ * The cost grows with wikis saved - instant with one, sluggish with twelve.
  */
 async function heldOffline(request, cache) {
   const shapes = storedShapes(new URL(request.url));
@@ -489,46 +419,21 @@ async function notifyClients(message) {
 }
 
 /**
- * Serve the cached copy at once, refresh it in the background, and speak up
- * only if the refreshed copy actually differs from what was served.
- */
-/*
- * `event` is not optional in practice, and leaving it out was a real bug.
- *
- * The revalidation below is started and then not awaited, because the whole
- * point is to answer from storage without waiting for it. But a service worker
- * is killed as soon as its last respondWith settles unless something asks the
- * browser to wait, and nothing did. So the fetch was begun and then abandoned,
- * over and over, and the page cache never filled.
- *
- * Measured on the mirror before the fix: the page cache held exactly one entry
- * after a session of browsing, and it was /sw.js. Every page came from the
- * saved wiki, which is why content stayed seven hours stale while the server
- * had been rebuilt repeatedly, why the video stills never gave way to the real
- * embeds, and why PAGE_UPDATED had never once fired.
- *
- * event.waitUntil() is the whole fix: the response still goes back instantly
- * from storage, and the browser now keeps the worker alive long enough to
- * actually store what came back.
+ * Serve the cached copy at once, refresh in the background, and speak up only if
+ * the refreshed copy differs. `event` is required, not optional: the browser
+ * kills a worker once its last respondWith settles, so without event.waitUntil
+ * the unawaited revalidation was abandoned every time and the page cache never
+ * filled (measured: one entry, /sw.js, after a whole session - every page came
+ * from the saved wiki, so content stayed hours stale and PAGE_UPDATED never fired).
  */
 async function staleWhileRevalidate(request, cacheName, announceChanges, event) {
   const cache = await caches.open(cacheName);
-  // What this page cached while reading, and failing that, what a downloaded
-  // wiki holds. Both are copies we already have, and holding a page on disk
-  // while waiting on the network is the slowness readers actually feel.
-  //
-  // A downloaded wiki was previously consulted only after the network failed,
-  // so that a copy saved weeks ago could not silently shadow the live site.
-  // That risk is real but it is answered by revalidating and speaking up, not
-  // by making everyone wait: the fetch below still runs, still compares, and
-  // still fires PAGE_UPDATED when the served copy turns out to be behind.
-  // Split the two sources on purpose. A PAGE_CACHE copy came from the network,
-  // so comparing it to a fresh fetch tells you whether the page really changed.
-  // The OFFLINE copy is the archive's REWRITTEN page - the donate button is a
-  // link, video embeds are stills, cross-wiki links are rewritten - so it never
-  // matches the original the site serves, and comparing it reports "changed" on
-  // every single page a saved wiki holds. That fired the "this page updated"
-  // toast on every navigation. Only the page-cache copy is announceable.
+  // Serve what this page cached while reading, else what a downloaded wiki holds.
+  // The two sources are split on purpose: a PAGE_CACHE copy came from the
+  // network, so comparing it to a fresh fetch tells you if the page changed. The
+  // OFFLINE copy is the archive's REWRITTEN page (donate button a link, videos
+  // stills), so it never matches the original and would report "changed" on
+  // every page a saved wiki holds - the false toast. Only page-cache is announceable.
   const fromPageCache = await heldOffline(request, cache);
   const cached = fromPageCache || (await heldOffline(request));
 
@@ -621,15 +526,10 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
 }
 
 /*
- * Returning a redirected response for a navigation is rejected by the browser
- * ("a redirected response was used for a request whose redirect mode is not
- * follow"). It fails the same silent way as everything else here: the page
- * still loads via the browser's own fallback, but that client is left with no
- * controlling worker.
- *
- * This site redirects - Pages 308s /x.html to /x - so any navigation we
- * intercept can come back redirected. Rebuilding the response drops the flag
- * while keeping the body, status and headers.
+ * The browser rejects a redirected response for a navigation ("a redirected
+ * response was used..."), leaving the client with no controlling worker. This
+ * site redirects (308 /x.html to /x), so rebuild the response to drop the
+ * redirected flag while keeping the body, status and headers.
  */
 function unredirect(response) {
   if (!response || !response.redirected) {
