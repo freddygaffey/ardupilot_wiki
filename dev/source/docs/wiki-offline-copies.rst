@@ -109,9 +109,9 @@ existed, on a first visit with it, and on every visit afterwards.
 
 The table assumes you have opened some page of the wiki before, which is the
 situation almost every reader is in. The service worker and the script that
-registers it come to 46 KB, fetched once on the first page you ever open and
-never again; charging that to every new page would describe a first-ever visit
-rather than an ordinary one. Excluded, a page you have not read costs exactly
+registers it are about 24 KB compressed, fetched once on the first page you
+ever open and never again; charging that to every new page would describe a
+first-ever visit rather than an ordinary one. Excluded, a page you have not read costs exactly
 what it cost before the feature existed. It is free until it starts paying,
 which it does the second time you open anything.
 
@@ -255,10 +255,19 @@ Fetching the pages one at a time would be roughly 3,400 requests per reader for
 Copter alone. Each wiki is packed into an archive at build time instead, and
 unpacked by the browser.
 
-``common_offline_page.js`` streams the archive and unpacks each entry as it
-arrives rather than buffering the whole file first. Every entry is written to
-Cache Storage under the URL the site serves it at, so saved content is
-retrieved by exactly the same path as content that was stored while browsing.
+The panel is split into small files that load together: ``common_offline_page.js``
+is the panel itself; ``common_offline_unpack.js`` (``window.ApUnpack``) streams
+an archive and unpacks each entry as it arrives rather than buffering the whole
+file first; ``common_offline_update.js`` (``window.ApUpdate``) is the
+differential update below. Every entry is written to Cache Storage under the URL
+the site serves it at, so saved content is retrieved by exactly the same path as
+content that was stored while browsing.
+
+The chosen wiki is downloaded before the shared-image archive, not after. A
+wiki's own archive holds all of its pages and the images unique to it, so it is
+readable within seconds; the ~440 MB of shared images backfill afterwards, and
+until they land a shared image comes from the network when online and is absent
+offline.
 
 Two constraints apply:
 
@@ -294,8 +303,28 @@ is passed, writing into ``<destdir>/offline/``:
 ``<wiki>-offline.tar.gz``
    Content unique to a single wiki.
 
+``<wiki>-files.json``
+   A table mapping every path in the archive to a hash of its contents. A saved
+   wiki stores this alongside its files; an update compares the stored table
+   with the freshly published one and fetches only what moved, rather than
+   re-downloading the whole archive to correct a typo. Every fetched file is
+   verified against its hash before it is stored.
+
+``files/``
+   The rewritten pages and generated video stills, published individually and
+   gzipped. The archive holds a rewritten copy of each page (the donate button
+   becomes a link, video embeds become stills), so a differential update fetches
+   the changed file from here, where its bytes match the table, rather than from
+   the live site, which serves the original and would fail the hash check.
+
 Archives are reproducible: tar metadata is normalised, so unchanged content
 produces byte-identical output and a deploy can skip it.
+
+Large images in the archives can be downsized to attack the first-download size:
+setting ``ARDUPILOT_OFFLINE_MAX_IMAGE_DIM`` to a pixel size (1600 is a good
+default) resizes anything larger, in the archive copies only. It is off by
+default because a saved image is then what a reader sees online too, which is a
+quality decision rather than a silent one.
 
 Requirements
 ------------
@@ -307,9 +336,14 @@ involved. The host must meet four requirements:
   return that page rather than redirecting to ``/copter/docs/foo``.
 - The worker must not be cached. ``/sw.js`` must be served with
   ``Cache-Control: no-cache``.
-- Archives must be paired with their compressed form. Under nginx,
-  ``gzip_static on`` in the ``/offline/`` location serves ``<name>.tar.gz`` in
-  place of ``<name>.tar`` and sets the content coding.
+- The manifest and the file tables must not be cached either. They are how a
+  saved wiki learns a new build exists, so ``offline-manifest.json`` and
+  ``<wiki>-files.json`` are served ``no-cache``; the archives, whose URLs carry
+  the build id, are cached hard.
+- Compressed files must be paired with their served name. Under nginx,
+  ``gzip_static on`` in the ``/offline/`` location serves ``<name>.tar.gz`` for
+  a request to ``<name>.tar``, and ``<name>.gz`` for the loose files under
+  ``files/``, setting the content coding so the browser decompresses natively.
 - The frontend must be served from the web root. A service worker's scope is
   its own path and everything below it, so a worker placed at
   ``/frontend/sw.js`` registers successfully and then controls no wiki page at
@@ -358,14 +392,24 @@ Testing
 ``scripts/tests/test_offline_archives.py``
    Inspects the finished archives. Requires ``update.py --offline`` first.
 
+``scripts/tests/test_lazy_embeds.py``
+   Covers the post-build pass that defers YouTube embeds.
+
+``scripts/tests/test_image_resize.py``
+   Covers the optional archive image downsizing.
+
 Tests exercise the shipped code rather than a reimplementation of it, and each
-must be shown to fail when the behaviour it covers is removed.
+must be shown to fail when the behaviour it covers is removed. A suite that
+cannot run — jsdom missing, or the archives not built — exits with an error
+rather than reporting success having checked nothing.
 
 Limitations
 ===========
 
-* The shared image set is required whichever wiki is chosen, so the first save
-  is about 440 MB before anything is readable offline, whichever wiki that is.
+* The shared image set is about 440 MB and is required whichever wiki is chosen.
+  The wiki itself is readable within seconds because it downloads first, but a
+  shared image is missing offline until the shared set finishes behind it.
+  Downsizing large images (above) reduces this considerably.
 * The generated reference pages, such as the full parameter lists and the board
   feature tables, reach several megabytes and hundreds of thousands of
   elements. Their cost is in rendering rather than transfer, so caching does
