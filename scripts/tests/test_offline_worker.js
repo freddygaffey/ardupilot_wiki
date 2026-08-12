@@ -260,7 +260,7 @@ function bodyAwareResponse(text) {
 function bootWorker({ networkFails = false, serve = null,
                      existingCaches = [], offlineCopy = null,
                      holdNetwork = false } = {}) {
-  const seen = { fetches: [], cacheReads: [], puts: [], deleted: [] };
+  const seen = { fetches: [], cacheReads: [], puts: [], deleted: [], posted: [] };
   let cacheNames = existingCaches.slice();
   // An offlineCopy models a COMPLETED download, so its cache must exist by
   // name and carry the completion marker the worker now requires before it
@@ -303,7 +303,8 @@ function bootWorker({ networkFails = false, serve = null,
   const ctx = {
     self: {
       addEventListener: (type, fn) => { listeners[type] = fn; },
-      skipWaiting() {}, clients: { claim() {}, matchAll: async () => [] },
+      skipWaiting() {}, clients: { claim() {},
+        matchAll: async () => [{ postMessage: (m) => { seen.posted.push(m); } }] },
       location: { origin: 'https://example.test' },
       registration: {},
     },
@@ -691,6 +692,29 @@ async function checkMarkerRespected() {
         r3 === w3.seen.servedCopy ? 'served' : String(r3));
 }
 
+/*
+ * The offline copy is the archive's REWRITTEN page, so it never matches the
+ * original the site serves; comparing them fired the "this page updated" toast
+ * on every navigation. Only a page-cache copy (network origin) is comparable.
+ */
+async function checkNoFalseUpdateToast() {
+  console.log('\nservice worker: no false "page updated" from the offline copy\n');
+
+  // Served from the OFFLINE cache (rewritten), network returns a different
+  // (original) body. This must NOT announce a change.
+  let w = bootWorker({
+    serve: () => ({ ct: 'text/html', body: '<html>ORIGINAL from the site' }),
+    offlineCopy: { path: '/dev/docs/p.html', body: '<html>REWRITTEN offline copy' },
+  });
+  let a = w.ask('/dev/docs/p.html', { mode: 'navigate' });
+  if (a) { await a.catch(() => {}); }
+  await Promise.all(w.seen.waited || []);
+  await new Promise((r) => setTimeout(r, 10));
+  check('an offline-served page does NOT announce an update',
+        !(w.seen.posted || []).some((m) => m && m.type === 'PAGE_UPDATED'),
+        JSON.stringify(w.seen.posted));
+}
+
 async function checkVersionBump() {
   console.log('\nservice worker: what a version bump throws away\n');
 
@@ -736,6 +760,7 @@ async function main() {
     await checkRevalidationIsAwaited();
     await checkRefreshSurvivesAConsumedBody();
     await checkMarkerRespected();
+    await checkNoFalseUpdateToast();
     console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                          : '\nall checks passed\n');
     process.exit(failures ? 1 : 0);
@@ -852,6 +877,7 @@ async function main() {
   await checkRevalidationIsAwaited();
   await checkRefreshSurvivesAConsumedBody();
   await checkMarkerRespected();
+  await checkNoFalseUpdateToast();
 
   console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                        : '\nall checks passed\n');
