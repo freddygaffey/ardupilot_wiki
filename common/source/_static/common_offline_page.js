@@ -1,24 +1,12 @@
 /*
  * [copywiki destination="copter,plane,rover,sub,blimp,antennatracker,dev,planner,planner2,ardupilot,mavproxy"]
  *
- * The same destinations as docs/common-offline.rst, deliberately: an asset
- * belongs wherever its page does. Without a marker a .js takes
- * DEFAULT_COPY_WIKIS, which is four of the eleven, so the panel would have
- * been scriptless on seven wikis while looking correct on the four anyone
- * would think to check. (.css is copied to every wiki unconditionally, which
- * is why the stylesheet needs no marker and this does.)
- */
-/*
- * Logic for /offline/ - the page where offline content is managed.
+ * Marker required: without one a .js copies to only four of the eleven wikis,
+ * leaving the panel scriptless on the other seven.
  *
- * Everything reported here is measured, not remembered: cached page counts come
- * from enumerating Cache Storage and sizes come from the Storage API. If the
- * browser evicts the saved copy the page says so, rather than showing a stale
- * flag claiming it is still there.
- *
- * Bulk download fetches one pre-built archive per wiki and unpacks it into the
- * cache locally. That is deliberate: crawling the site would mean thousands of
- * requests per reader, where this is one request that a CDN can serve.
+ * Logic for /offline/. State is measured from Cache Storage and the Storage
+ * API, not remembered, so an evicted copy shows as gone. Download fetches one
+ * pre-built archive per wiki and unpacks it locally rather than crawling.
  */
 (function (global) {
   'use strict';
@@ -48,22 +36,10 @@
     { id: 'ardupilot', name: 'About', mb: 5, pages: 27 }
   ];
 
-  // Where the archives are served from. They are far too large for the site's
-  // own hosting (Cloudflare Pages caps files at 25 MiB and the common archive
-  // is 433 MB), so they live in object storage.
-  //
-  // Same origin as the pages, which is what the archives are: ordinary static
-  // files in the built tree, written to <destdir>/offline/ by update.py
-  // --offline and served by nginx like any other file. There is no endpoint
-  // and no separate host.
-  //
-  // That also means no CORS, no bucket whose policy pins a hostname, and no
-  // upload client for objects over 300 MiB. The previous default was a
-  // throwaway r2.dev bucket, rate limited and documented as development-only,
-  // which a build could ship silently.
-  //
-  // The manifest's "artifact_base" still overrides this when the archives are
-  // genuinely served from elsewhere.
+  // The archives are ordinary static files in the built tree, written to
+  // <destdir>/offline/ by update.py --offline and served by nginx like any
+  // other file: same origin as the pages, so no CORS and no separate host. The
+  // manifest's "artifact_base" overrides this when they are hosted elsewhere.
   var ARTIFACT_BASE = '/offline';
 
   var PAGE_CACHE_PREFIX = 'ardupilot-pages-';
@@ -79,16 +55,10 @@
 
   function el(id) { return document.getElementById(id); }
 
-  /*
-   * Tell the service worker its picture of the caches is out of date.
-   *
-   * The worker memoises which offline caches exist and which carry a completion
-   * marker (knownCacheNames, markerChecked), and it only rebuilds those when it
-   * hears CACHES_CHANGED. Nothing sent that message, so a wiki saved while the
-   * worker was already running was invisible to it until the worker restarted,
-   * and a removed wiki lingered as a live handle. Sent after every change to
-   * what is stored: a completed download, an applied update, a clear.
-   */
+  // The worker memoises which offline caches exist and carry a completion
+  // marker, and only refreshes that on CACHES_CHANGED. Send it after every
+  // change to what is stored, or a wiki saved mid-session stays invisible to
+  // the worker until it restarts.
   function notifyWorkerCachesChanged() {
     try {
       if (navigator.serviceWorker && navigator.serviceWorker.controller) {
@@ -102,13 +72,9 @@
     return m >= 1024 ? (m / 1024).toFixed(1) + ' GB' : Math.round(m) + ' MB';
   }
 
-  /* ---------- update toast ----------
-   *
-   * A visible card for the one thing worth seeing: a saved wiki checking for or
-   * applying an update. The bar sweeps while we do not know how long a step
-   * takes, fills as files are applied, and turns green when done, after which
-   * the card fades itself out. Styled in common_offline.css.
-   */
+  // Update toast: a card shown while a saved wiki checks for or applies an
+  // update. The bar sweeps for unknown-length steps, fills as files are
+  // applied, turns green when done, then fades out. Styled in common_offline.css.
   var toastEl = null, toastHideTimer = null;
 
   function toast(opts) {
@@ -235,11 +201,9 @@
       } else {
         parts.push(fmt(used) + ' used');
       }
-      // Free space is not reported. Browsers return a fuzzed quota that is
-      // theirs to revise, not a disk figure, and every wiki here fits inside
-      // it comfortably, so the number invited a comparison worth nothing.
-      // checkRoom still uses the quota before a download; it is just not
-      // something to put on screen.
+      // Free space is not shown: the browser's quota is a fuzzed figure it can
+      // revise, not disk space, so it invites a meaningless comparison.
+      // checkRoom still consults it before a download.
       parts.push('storage ' + (persisted ? 'permanent' : 'temporary'));
       el('storage-status').textContent = parts.join(' · ');
 
@@ -297,16 +261,10 @@
 
   var storedIds = {};
 
-  /* ---------- eviction detection ----------
-   *
-   * "Temporary" browser storage can be reclaimed without warning when a device
-   * runs low on space, and a saved wiki simply vanishes. The panel reads what
-   * is actually in Cache Storage, so an evicted wiki correctly shows as not
-   * saved - but silently, as if the reader had never saved it, which is a poor
-   * thing to discover in a hangar. So the ids we have saved are also written to
-   * localStorage; a record with no matching cache is one the browser reclaimed,
-   * and the panel can say so.
-   */
+  // Eviction detection. Temporary storage can be reclaimed without warning and
+  // a saved wiki just vanishes; reading Cache Storage alone shows it as not
+  // saved, silently. So saved ids are mirrored to localStorage - a record with
+  // no matching cache is one the browser reclaimed, and the panel says so.
   var SAVED_IDS_KEY = 'ap-saved-ids';
 
   function savedRecord() {
@@ -473,15 +431,8 @@
 
   /* ---------- actions ---------- */
 
-  /**
-   * Removing is destructive and slow to undo - it discards hundreds of
-   * megabytes somebody chose to keep, and getting them back means downloading
-   * them again, possibly without the connection that made it possible.
-   *
-   * So it asks first, in place rather than through a modal, and says how much
-   * is at stake. It reverts on its own if left alone, so a stray click cannot
-   * arm it indefinitely.
-   */
+  // Removing is destructive and slow to undo, so it asks first in place, says
+  // how much is at stake, and disarms itself if left alone.
   var CONFIRM_MS = 6000;
   // A double click should never delete anything. The second press is ignored
   // until this has passed, so confirming has to be a deliberate, separate act.
@@ -907,18 +858,6 @@
       });
   }
 
-  /*
-   * Build the file here rather than downloading one.
-   *
-   * The pages are already in Cache Storage, so generating it locally saves the
-   * build server hosting a near-duplicate of every archive, and the export
-   * contains exactly the wikis this reader chose to keep.
-   */
-  /**
-   * Export buttons act on the selection directly: anything selected but not yet
-   * saved is downloaded first, then the file is built. Requiring two separate
-   * presses to get one file was needless ceremony.
-   */
   /** Save is offered only when it has something to fetch. */
   function updateSaveState() {
     var button = el('download-cache-btn');
@@ -942,14 +881,9 @@
     b.title = chosen ? '' : 'Select at least one wiki first';
   }
 
-  /**
-   * What an export should contain: what you selected, limited to what is
-   * actually saved - you cannot export pages you do not have.
-   *
-   * Reading the stored set alone (the previous behaviour) silently ignored the
-   * selection, so ticking every wiki and getting one of them back looked like
-   * corruption rather than a missing download.
-   */
+  // What an export contains: the selection, limited to what is actually saved.
+  // Reading the stored set alone ignored the selection, so ticking every wiki
+  // and getting one back looked like corruption rather than a missing download.
   function exportSelection() {
     var chosen = selected().map(function (c) { return c.value; });
     var have = chosen.filter(function (id) { return storedIds[id]; });
@@ -958,14 +892,11 @@
   }
 
   /**
-   * Name an export after what it actually contains, plus the build date.
-   *
-   *   one wiki     copter-2026-08-08.html
-   *   several      blimp-copter-rover-2026-08-08.html
-   *   everything   ardupilot-all-2026-08-08.html
-   *
-   * The filename is the only thing telling someone months later which vehicles
-   * are in the file sitting in their downloads folder.
+   * Name an export after its contents plus the build date - the only thing
+   * telling someone months later which vehicles the file holds.
+   *   one wiki    copter-2026-08-08.html
+   *   several     blimp-copter-rover-2026-08-08.html
+   *   everything  ardupilot-all-2026-08-08.html
    */
   function exportName(ids, extension) {
     var stamp = (CURRENT_BUILD || new Date().toISOString()).slice(0, 10);
@@ -980,13 +911,8 @@
     return base + '-' + stamp + extension;
   }
 
-  /**
-   * Build a file from the selection.
-   *
-   * Anything selected but not yet saved is downloaded first, then the file is
-   * built from the cache. One press, not two: needing to save and then export
-   * as separate steps was ceremony with no purpose.
-   */
+  // Build a file from the selection: anything selected but not yet saved is
+  // downloaded first, then the file is built from the cache - one press, not two.
   function buildExport(buttonId) {
     var link = el(buttonId);
     if (!link || !global.ArduPilotExport || !selected().length) { return; }
@@ -1025,28 +951,17 @@
     });
   }
 
-  /* ---------------------------------------------------------------------
-   * Automatic updates.
-   *
-   * The checkbox below the table has always been there and has always been
-   * ticked, and nothing ever read it: "Update saved pages automatically" was a
-   * promise the page did not keep. A saved wiki changed only when somebody
-   * thought to press Check, which is precisely the thing a reader who saved a
-   * wiki months ago will not do.
-   *
-   * A check that finds nothing costs one request for the manifest, a few
-   * hundred bytes, and no more: file tables are fetched only for wikis whose
-   * recorded build id has actually moved. That is what makes it reasonable to
-   * do this on a timer rather than only on demand.
-   * --------------------------------------------------------------------- */
+  /*
+   * Automatic updates. A check that finds nothing costs one manifest request, a
+   * few hundred bytes: file tables are fetched only for wikis whose recorded
+   * build id actually moved, which is what makes a timer reasonable rather than
+   * only-on-demand.
+   */
 
-  // Thirty minutes, jittered +/-50% by the scheduler, so a reader's cost is a
-  // few hundred bytes an hour and a rebuild reaches saved copies within the
-  // hour. The wiki is rebuilt a few times a day at most, so anything tighter
-  // buys nothing and multiplies manifest traffic by every open tab. During
-  // development this was 30 seconds; that value must not ship, because with
-  // eleven wikis' worth of panels able to run their own timers it is a
-  // manifest request every few seconds per reader.
+  // Thirty minutes, jittered +/-50% by the scheduler. The wiki rebuilds a few
+  // times a day, so anything tighter buys nothing and multiplies manifest
+  // traffic by every open tab. NB the 30s value used in development must not
+  // ship: across eleven panels that is a manifest request every few seconds.
   var AUTOUPDATE_MS = 30 * 60 * 1000;
 
   var autoTimer = null;
@@ -1066,13 +981,10 @@
     // Nothing saved means nothing to update and no reason to touch the network.
     if (!Object.keys(storedIds).length) { return; }
     // Deliberately NOT skipped while the tab is hidden. Browsers already
-    // throttle timers in background tabs, so a guard here buys nothing they
-    // are not doing, and it costs the common case: a wiki left open in a
-    // background tab for hours is exactly the copy most likely to be behind.
-    // Skipping it meant a reader could leave this page open all day and have
-    // "Update saved pages automatically" do nothing at all, which was measured
-    // rather than reasoned about: with the guard in place a rebuild published
-    // mid-session was never picked up, and the request log stayed empty.
+    // throttle background timers, so a guard buys nothing and costs the common
+    // case: a wiki left open for hours in a background tab is the copy most
+    // likely to be behind. (Measured: with the guard, a mid-session rebuild was
+    // never picked up.)
 
     autoBusy = true;
     return checkForUpdates(true).then(function () { autoBusy = false; },
@@ -1080,23 +992,12 @@
   }
 
   /*
-   * Spread readers out, so a new build is not a stampede.
-   *
-   * On a fixed interval every reader polls in lockstep, discovers the same new
-   * build inside the same window, and starts fetching at the same moment. That
-   * is the shape of a self-inflicted denial of service: the trigger is not an
-   * attacker but somebody editing a layout template, which rewrites every page
-   * and puts every saved copy into a full refresh at once.
-   *
-   * Measured from one browser with twelve wikis saved after exactly that kind
-   * of change: 5,169 requests and 30.9 MB, sequential, so about 75 requests a
-   * second sustained for a minute. A hundred readers doing that together is
-   * 7,500 requests a second at the origin.
-   *
-   * So each tick is scheduled independently with up to +/-50% jitter. The
-   * average rate is unchanged and the herd is smeared across the interval
-   * instead of arriving on the same second. The first tick is jittered too, or
-   * everyone who opens the page after a deploy lines up again.
+   * Spread readers out so a new build is not a stampede. On a fixed interval
+   * every reader polls in lockstep, finds the same new build, and starts
+   * fetching at the same moment - a self-inflicted DoS whenever a layout edit
+   * rewrites every page. So each tick is scheduled independently with +/-50%
+   * jitter, the first one included, smearing the herd across the interval
+   * without changing the average rate.
    */
   function scheduleNextTick() {
     if (autoTimer) { window.clearTimeout(autoTimer); }
@@ -1178,20 +1079,15 @@
       return;
     }
 
-    // Draw straight away from the built-in list. Waiting for the manifest left
-    // an empty table on screen for as long as the request took, so the panel
-    // arrived visibly later than the page around it. The numbers are corrected
-    // a moment later when the manifest lands; the shape of the thing does not
-    // have to wait for them.
-    // renderWikis populates storedIds, which renderStorage's footer reads, so
-    // the footer must wait for it or it briefly says "no wikis saved" on a
-    // device that has some.
+    // Draw from the built-in list at once; waiting for the manifest left the
+    // table empty for the length of the request. The numbers are corrected when
+    // it lands. renderStorage's footer reads storedIds, which renderWikis fills,
+    // so it must follow or it briefly says "no wikis saved" on a device with some.
     renderWikis().then(renderStorage);
 
-    // The build writes offline-manifest.json alongside the archives. Sizes and
-    // page counts change every time the wiki does, so they must come from the
-    // build rather than from constants in this file; the table above is only a
-    // fallback for deployments that have not published one yet.
+    // Sizes and page counts change with every build, so they come from
+    // offline-manifest.json; the constants above are only a fallback for a
+    // deployment that has not published one yet.
     fetch('/offline/offline-manifest.json', { cache: 'no-cache' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .catch(function () { return null; })
