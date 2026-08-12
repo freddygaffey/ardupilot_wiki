@@ -605,8 +605,21 @@
     frame.allowFullscreen = true;
     frame.setAttribute('allow',
       'accelerometer; encrypted-media; gyroscope; picture-in-picture');
+    // Load HIDDEN, over the still. YouTube's embed takes a few hundred
+    // milliseconds to fetch and render, and an iframe is a blank white
+    // rectangle until it does - so showing it at once covered the thumbnail
+    // with white while it loaded, which is the "slow" flash. Instead the still
+    // stays visible and the real player fades in only once it has loaded, so
+    // the swap is barely noticeable: thumbnail now, video a moment later.
     frame.style.cssText =
-      'position:absolute;top:0;left:0;width:100%;height:100%;border:0';
+      'position:absolute;top:0;left:0;width:100%;height:100%;border:0;' +
+      'opacity:0;transition:opacity 0.5s ease';
+
+    frame.addEventListener('load', function () {
+      // A hair after the document loads YouTube has painted its poster, so
+      // fading in now lands on its thumbnail rather than a blank frame.
+      frame.style.opacity = '1';
+    });
 
     // If the embed cannot be reached after all - the connection went away
     // between the check and the load - put the card back rather than leaving a
@@ -667,11 +680,15 @@
       return;
     }
     whenIdle(function () {
+      // Start a good screenful early. Loading hidden underneath the still, the
+      // player is ready by the time the reader scrolls to it and the fade-in
+      // has already happened, so it is just there - no waiting on a blank
+      // frame. 600px is roughly one viewport of lead.
       var seen = new IntersectionObserver(function (entries) {
         entries.forEach(function (e) {
           if (e.isIntersecting) { seen.unobserve(e.target); upgrade(e.target); }
         });
-      }, { rootMargin: '100px' });
+      }, { rootMargin: '600px' });
       cards.forEach(function (c) { seen.observe(c); });
     });
   }
