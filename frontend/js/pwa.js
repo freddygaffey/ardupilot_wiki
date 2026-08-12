@@ -369,7 +369,12 @@
     // would be rationing nothing.
     if (window.caches && caches.match) {
       asked.add(href);
-      caches.match(href, { ignoreSearch: true }).then(function (hit) {
+      // Exact match, not ignoreSearch. ignoreSearch disables the key hash and
+      // walks every cache: measured at 300+ ms with a dozen saved wikis, on the
+      // main thread, for every link considered. The hrefs here have their hash
+      // stripped already and stored keys carry no query, so an exact match
+      // finds anything held and is effectively instant.
+      caches.match(href).then(function (hit) {
         if (hit) { return; }                 // free, and already done
         asked.delete(href);
         spend(href);
@@ -471,6 +476,25 @@
     var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
     var href = fetchable(a);
     if (href) { prefetch(href); }
+  }, { passive: true });
+
+  // Hovering a link is intent the trajectory predictor cannot see. It reads the
+  // path the pointer takes ACROSS the page, which catches links in the content
+  // a reader drifts over, but not the sidebar: a reader goes straight there and
+  // clicks, giving no approach to read, so those clicks were cold. Resting on a
+  // link for a moment is a clear "I mean this one", wherever it is. The short
+  // delay keeps a pointer passing over the menu from prefetching everything it
+  // crosses; it counts against the same per-page budget as every other guess.
+  var hoverTimer = null;
+  document.addEventListener('mouseover', function (e) {
+    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
+    var href = fetchable(a);
+    if (!href) { return; }
+    if (hoverTimer) { clearTimeout(hoverTimer); }
+    hoverTimer = setTimeout(function () { prefetch(href); }, 65);
+  }, { passive: true });
+  document.addEventListener('mouseout', function () {
+    if (hoverTimer) { clearTimeout(hoverTimer); hoverTimer = null; }
   }, { passive: true });
 
   // Next and previous are the two likeliest clicks on any documentation page,
