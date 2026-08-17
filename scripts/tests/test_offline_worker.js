@@ -259,7 +259,7 @@ function bodyAwareResponse(text) {
 
 function bootWorker({ networkFails = false, serve = null,
                      existingCaches = [], offlineCopy = null,
-                     holdNetwork = false } = {}) {
+                     holdNetwork = false, putFails = false } = {}) {
   const seen = { fetches: [], cacheReads: [], puts: [], deleted: [], posted: [] };
   let cacheNames = existingCaches.slice();
   // An offlineCopy models a COMPLETED download, so its cache must exist by
@@ -296,7 +296,16 @@ function bootWorker({ networkFails = false, serve = null,
       }
       return undefined;
     },
-    put: async (k) => { seen.puts.push(String(k && k.url ? k.url : k)); },
+    put: async (k) => {
+      seen.puts.push(String(k && k.url ? k.url : k));
+      // Storage full. Cache.put rejects with QuotaExceededError, and the
+      // question is whether that reaches the reader.
+      if (putFails) {
+        const err = new Error('The quota has been exceeded.');
+        err.name = 'QuotaExceededError';
+        throw err;
+      }
+    },
     keys: async () => [],
   });
   const emptyCache = cacheFor('');
@@ -715,6 +724,68 @@ async function checkNoFalseUpdateToast() {
         JSON.stringify(w.seen.posted));
 }
 
+/*
+ * Storage being full must not make a working request look like a broken one.
+ *
+ * Every route fetches, stores, then returns, and the store used to sit inside
+ * the try written for a network failure. cache.put() rejects with
+ * QuotaExceededError when there is no room, the rejection landed in that catch,
+ * and a request that had SUCCEEDED on the network was answered from the offline
+ * path instead - 504, or the offline page - while the reader was online with
+ * the response in hand.
+ *
+ * WebKit reports a 1.0 GB quota against the 697 MB of archives this feature
+ * invites people to save, so it is Safari readers who would have met it, on the
+ * browser least able to spare the room. Chromium and Firefox report 6.5 GB and
+ * 10.7 GB here, which is why local testing would never have shown it.
+ */
+async function checkFullStorageFailsOpen() {
+  console.log('\nservice worker: no room to cache, still online\n');
+
+  const INDEX = '/dev/searchindex.js';
+  const PAGE = '/dev/docs/building-setup-linux.html';
+
+  {
+    const w = bootWorker({ putFails: true, serve: () => ({ body: 'INDEX' }) });
+    const res = await w.ask(INDEX);
+    check('a full cache still returns the network copy of the search index',
+          !!res && res.status === 200 && res.url && res.url.endsWith(INDEX),
+          res ? 'status ' + res.status : 'nothing answered');
+    check('and it did try to store it', w.seen.puts.length === 1,
+          JSON.stringify(w.seen.puts));
+  }
+
+  {
+    const w = bootWorker({ putFails: true, serve: () => ({ ct: 'text/html' }) });
+    const res = await w.ask(PAGE, { mode: 'navigate', destination: 'document' });
+    check('a full cache still returns the network copy of a page',
+          !!res && res.status === 200, res ? 'status ' + res.status : 'nothing');
+  }
+
+  // The other half of the contract: a real network failure must still be
+  // answered from storage, which is the behaviour the catch was written for.
+  {
+    const w = bootWorker({ networkFails: true,
+                           offlineCopy: { path: INDEX, body: 'SAVED' } });
+    const res = await w.ask(INDEX);
+    // The harness serves archive hits as Response-shaped objects, so identity
+    // against the copy it handed out is what says "this came from storage"
+    // rather than from a constructed 504.
+    check('a genuine network failure is still answered from the archive',
+          !!res && res === w.seen.servedCopy,
+          res ? 'status ' + res.status + (res === w.seen.servedCopy
+                                            ? ' from the archive' : ' constructed')
+              : 'nothing');
+  }
+
+  {
+    const w = bootWorker({ networkFails: true });
+    const res = await w.ask(INDEX);
+    check('with nothing stored, a network failure is still a 504',
+          !!res && res.status === 504, res ? 'status ' + res.status : 'nothing');
+  }
+}
+
 async function checkVersionBump() {
   console.log('\nservice worker: what a version bump throws away\n');
 
@@ -761,6 +832,7 @@ async function main() {
     await checkRefreshSurvivesAConsumedBody();
     await checkMarkerRespected();
     await checkNoFalseUpdateToast();
+  await checkFullStorageFailsOpen();
     console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                          : '\nall checks passed\n');
     process.exit(failures ? 1 : 0);
@@ -878,6 +950,7 @@ async function main() {
   await checkRefreshSurvivesAConsumedBody();
   await checkMarkerRespected();
   await checkNoFalseUpdateToast();
+  await checkFullStorageFailsOpen();
 
   console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                        : '\nall checks passed\n');
