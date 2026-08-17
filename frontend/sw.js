@@ -489,7 +489,7 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
       }
     }
     if (plausibleBody(request, response)) {
-      await cache.put(request, response.clone());
+      await keep(cacheName, request, response);
     }
     return response;
   }).catch((err) => {
@@ -550,8 +550,7 @@ async function networkOnly(request) {
     // controlling service worker at all. Pass the request through untouched.
     const response = await fetch(request);
     if (response && response.ok && plausibleBody(request, response)) {
-      const cache = await caches.open(PAGE_CACHE);
-      await cache.put(request, response.clone());
+      await keep(PAGE_CACHE, request, response);
     }
     return unredirect(response);
   } catch (err) {
@@ -579,7 +578,7 @@ async function freshBehind(request, cacheName, event) {
     .then(async (response) => {
       if (response && (response.ok || response.type === 'opaque') &&
           plausibleBody(request, response)) {
-        await cache.put(key.href, response.clone());
+        await keep(cacheName, key.href, response);
       }
       return response;
     })
@@ -727,6 +726,35 @@ function keepAlive(event, promise, url) {
     event.waitUntil(promise);
   } catch (err) {
     console.warn('[sw] waitUntil refused for', url, err && err.name);
+  }
+}
+
+/*
+ * Store a copy, and never let failing to store change what the reader gets.
+ *
+ * Every route here fetches, stores, and returns, with the store inside the same
+ * try as the fetch. That reads harmlessly and is not: cache.put() throws
+ * QuotaExceededError when storage is full, and the throw lands in the catch
+ * written for a *network* failure. A request that succeeded on the network is
+ * then answered from the offline path - 504, or the offline page - while the
+ * reader is online and the response is sitting right there.
+ *
+ * Whose problem this is, concretely: WebKit reports a 1.0 GB quota against the
+ * 697 MB of archives this feature invites people to save. A reader near that
+ * line would find search breaking online, and the site telling them they were
+ * offline when they were not, on exactly the browser least able to spare the
+ * space. Chromium and Firefox report 6.5 GB and 10.7 GB on the same machine,
+ * which is why it would never have shown up here.
+ *
+ * Caching is an optimisation. It fails open.
+ */
+async function keep(cacheName, key, response) {
+  try {
+    const cache = await caches.open(cacheName);
+    await cache.put(key, response.clone());
+  } catch (err) {
+    console.warn('[sw] could not store', String(key && key.url ? key.url : key),
+                 err && err.name);
   }
 }
 
@@ -943,8 +971,7 @@ self.addEventListener('fetch', (event) => {
        */
       if (response && response.ok && storable(url, response) &&
           plausibleBody(request, response)) {
-        const cache = await caches.open(STATIC_CACHE);
-        await cache.put(request, response.clone());
+        await keep(STATIC_CACHE, request, response);
       }
       return response;
     } catch (err) {
