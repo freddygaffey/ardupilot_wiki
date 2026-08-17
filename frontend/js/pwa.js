@@ -204,7 +204,17 @@
       // explicit so a fixed worker - or the kill switch in sw-kill.js - reaches
       // installed clients on their next visit rather than eventually. It is one
       // conditional request, normally answered with a 304.
-      registration.update();
+      //
+      // It CANNOT succeed offline, which is a state this site is built to be
+      // read in, and an uncaught rejection here was one per offline page load:
+      // "encountered an error during installation" in Firefox, "Script /sw.js
+      // load failed" in WebKit, and intermittently InvalidStateError when the
+      // registration changed underneath it. Nothing was broken - the installed
+      // worker serves the page either way - but it filled the console of the
+      // exact situation a reader would be debugging.
+      registration.update().catch(function (err) {
+        console.debug('[pwa] worker update check skipped', err && err.name);
+      });
     }).catch(function (err) {
       console.warn('[pwa] service worker registration failed', err);
     });
