@@ -62,6 +62,24 @@ const SEARCH_PAGE = '/dev/search.html';
 const results = [];
 let failures = 0;
 
+/*
+ * Where the time goes.
+ *
+ * This suite drives three real browsers through a full service worker
+ * lifecycle, and "it takes a while" is not a useful answer when someone asks
+ * why. Every phase is timed and printed, so the cost is attributable rather
+ * than mysterious - and so that a change which doubles it is visible.
+ */
+const timings = [];
+async function phase(engine, label, fn) {
+  const at = Date.now();
+  try {
+    return await fn();
+  } finally {
+    timings.push({ engine, label, ms: Date.now() - at });
+  }
+}
+
 function check(engine, name, ok, detail) {
   results.push({ engine, name, ok: !!ok, detail: detail || '' });
   if (!ok) { failures++; }
@@ -133,6 +151,25 @@ async function imageCount(page) {
         .map((i) => i.currentSrc || i.src),
     };
   });
+}
+
+/**
+ * Median wall time for a navigation the worker answers, over several goes.
+ *
+ * The median, not the mean: the first navigation after the worker starts pays
+ * for starting it, and one 400 ms outlier in five would drag a mean past a
+ * budget that the reader never actually experiences.
+ */
+async function navigationMs(page, url, runs = 5) {
+  const times = [];
+  for (let i = 0; i < runs; i++) {
+    const at = Date.now();
+    await page.goto(url, { waitUntil: 'load' });
+    times.push(Date.now() - at);
+  }
+  times.sort((a, b) => a - b);
+  return { median: times[Math.floor(times.length / 2)],
+           worst: times[times.length - 1], all: times };
 }
 
 /** True when the document looks like a rendered wiki page, not an error. */
@@ -237,7 +274,8 @@ async function checkUpdateWindow(name, browser, base) {
 
 async function runEngine(name, launcher, base) {
   console.log('\n' + name);
-  const browser = await launcher.launch({ headless: !HEADED });
+  const browser = await phase(name, 'launch browser',
+    () => launcher.launch({ headless: !HEADED }));
   const context = await browser.newContext({ serviceWorkers: 'allow' });
   const page = await context.newPage();
 
@@ -254,7 +292,7 @@ async function runEngine(name, launcher, base) {
     if (m.type() !== 'error') { return; }
     const from = (m.location() && m.location().url) || '';
     if (from && !from.startsWith(base)) { return; }
-    consoleErrors.push(m.text().slice(0, 160));
+    consoleErrors.push(m.text().slice(0, 300));
   });
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e.message).slice(0, 200)));
@@ -263,8 +301,10 @@ async function runEngine(name, launcher, base) {
   try {
     /* ---- online: register the worker and read a few pages -------------- */
 
-    await page.goto(base + VISITED, { waitUntil: 'load' });
-    const control = await waitForControl(page);
+    const control = await phase(name, 'register + take control', async () => {
+      await page.goto(base + VISITED, { waitUntil: 'load' });
+      return waitForControl(page);
+    });
     check(name, 'service worker takes control',
           control.controlled,
           control.supported === false ? 'no serviceWorker in navigator'
@@ -294,15 +334,20 @@ async function runEngine(name, launcher, base) {
 
     // Read two pages online so they are in the runtime page cache. Reload the
     // first: its initial load happened before the worker controlled anything.
-    await page.goto(base + VISITED, { waitUntil: 'load' });
-    const onlineImages = await imageCount(page);
-    await page.goto(base + ALSO_VISITED, { waitUntil: 'load' });
+    const onlineImages = await phase(name, 'read pages online', async () => {
+      await page.goto(base + VISITED, { waitUntil: 'load' });
+      const imgs = await imageCount(page);
+      await page.goto(base + ALSO_VISITED, { waitUntil: 'load' });
+      return imgs;
+    });
     // The search page, so that searchindex.js is fetched at least once. Sphinx
     // loads it from search.html and from nowhere else, so browsing the wiki
     // never brings it into the runtime cache on its own.
-    await page.goto(base + SEARCH_PAGE, { waitUntil: 'load' });
-    // Give the stale-while-revalidate writes a moment to land.
-    await page.waitForTimeout(2500);
+    await phase(name, 'load search index', async () => {
+      await page.goto(base + SEARCH_PAGE, { waitUntil: 'load' });
+      // Give the stale-while-revalidate writes a moment to land.
+      await page.waitForTimeout(2500);
+    });
 
     const cached = await page.evaluate(async (p) => {
       const hit = await caches.match(location.origin + p);
@@ -330,6 +375,21 @@ async function runEngine(name, launcher, base) {
           !!(quota.estimate && quota.estimate.quota > 750e6),
           'quota ' + quotaGB + ', persist API ' +
           (quota.canPersist ? 'present' : 'MISSING'));
+
+    /*
+     * The same page online, with the worker in front of it.
+     *
+     * stale-while-revalidate answers from storage and refreshes behind, so an
+     * online navigation to a page already read should cost about what the
+     * offline one costs. If it does not, the worker has started waiting on the
+     * network for something it already holds - which is the regression that
+     * took one measured page to 1,501 ms with no third-party requests on it.
+     */
+    const onlineSpeed = await navigationMs(page, base + VISITED);
+    check(name, 'an already-read page is not slowed down by being online',
+          onlineSpeed.median < 1500,
+          'median ' + onlineSpeed.median + ' ms, worst ' + onlineSpeed.worst +
+          ' ms of [' + onlineSpeed.all.join(', ') + ']');
 
     /* ---- go offline for real ------------------------------------------- */
 
@@ -365,6 +425,29 @@ async function runEngine(name, launcher, base) {
           onlineImages.loaded + '/' + onlineImages.total + ' online' +
           (offlineImages.missing.length
             ? '; missing ' + offlineImages.missing.slice(0, 2).join(', ') : ''));
+
+    /*
+     * How fast, not just whether.
+     *
+     * The whole argument for a service worker here is that a stored page is
+     * quicker than a fetched one, and every strategy in sw.js was chosen on a
+     * measurement: cache-first for _static because revalidating cost twenty
+     * background requests a navigation, an exact cache.match because ignoring
+     * the query string measured 63-79 ms against 0.1-0.3 ms. None of that was
+     * ever guarded, so the next change that quietly reintroduces a per-asset
+     * round trip would show up as "still passes, feels slower".
+     *
+     * Offline there is no network to blame, so the number is the worker plus
+     * the render, and a budget can be honest. 1200 ms is deliberately loose -
+     * it is the wall time of a full navigation including layout in a headless
+     * browser on a busy machine, not a microbenchmark, and it is set to catch a
+     * strategy regression rather than to police tens of milliseconds.
+     */
+    const offlineSpeed = await navigationMs(page, base + VISITED);
+    check(name, 'a stored page is served offline well inside the budget',
+          offlineSpeed.median < 1200,
+          'median ' + offlineSpeed.median + ' ms, worst ' + offlineSpeed.worst +
+          ' ms of [' + offlineSpeed.all.join(', ') + ']');
 
     /*
      * Offline search.
@@ -439,14 +522,30 @@ async function runEngine(name, launcher, base) {
     check(name, 'the same page loads normally once the network returns',
           !!back.h1, 'h1=' + JSON.stringify(back.h1));
 
+    /*
+     * WebKit logs the browser's own service worker update check when it fails.
+     *
+     * Every engine re-fetches sw.js on navigation, and with the origin down
+     * that fetch cannot succeed. pwa.js catches the rejection from its explicit
+     * registration.update(), but the failed request is still logged by the
+     * browser itself - WebKit as "...sw.js due to access control checks" - and
+     * no page code can suppress a resource load the browser reports. It is a
+     * report about the network, not about this feature, and every offline check
+     * above passes with it in the log.
+     *
+     * Matched on the subject rather than the wording: the wording is the part
+     * that differs between engines and changes between releases.
+     */
     const fatal = consoleErrors
       .concat(pageErrors)
-      .filter((t) => !/favicon|Failed to load resource/i.test(t));
+      .filter((t) => !/favicon|Failed to load resource/i.test(t))
+      .filter((t) => !/\/sw\.js/.test(t));
     check(name, 'no unexplained console errors', fatal.length === 0,
           fatal.slice(0, 3).join(' | '));
 
     // Last, and in a context of its own: see checkUpdateWindow.
-    await checkUpdateWindow(name, browser, base);
+    await phase(name, 'deploy check (seeds 8,811 entries)',
+                () => checkUpdateWindow(name, browser, base));
   } catch (err) {
     check(name, 'engine run completed', false, String(err.message));
   } finally {
@@ -521,6 +620,36 @@ async function main() {
     });
     console.log(n.padEnd(width) + '  ' + cells.join(''));
   });
+
+  /*
+   * And where the time went. Three browsers, each taken through a full worker
+   * lifecycle, is not fast and should not pretend to be; what matters is that
+   * the cost is attributable.
+   */
+  const labels = [];
+  timings.forEach((t) => {
+    if (!labels.includes(t.label)) { labels.push(t.label); }
+  });
+  if (labels.length) {
+    const lw = Math.max.apply(null, labels.map((l) => l.length).concat([20]));
+    console.log('\ntime spent, seconds\n');
+    console.log(' '.repeat(lw) + '  ' +
+                engineList.map((e) => e.padEnd(9)).join('') + 'total');
+    labels.forEach((l) => {
+      let row = 0;
+      const cells = engineList.map((e) => {
+        const t = timings.find((x) => x.engine === e && x.label === l);
+        if (!t) { return '-'.padEnd(9); }
+        row += t.ms;
+        return (t.ms / 1000).toFixed(1).padEnd(9);
+      });
+      console.log(l.padEnd(lw) + '  ' + cells.join('') + (row / 1000).toFixed(1));
+    });
+    const grand = timings.reduce((a, t) => a + t.ms, 0);
+    console.log('\n' + 'measured total'.padEnd(lw) + '  ' +
+                ' '.repeat(9 * engineList.length) + (grand / 1000).toFixed(1) +
+                '  (the rest is per-check evaluation)');
+  }
 
   console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                        : '\nall checks passed\n');
