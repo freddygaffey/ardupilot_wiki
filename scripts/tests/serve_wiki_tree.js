@@ -91,10 +91,38 @@ function extraHeaders(urlPath) {
   return {};
 }
 
+/*
+ * Deploying a new service worker is the one routine event that takes control
+ * away from every tab already on the site, so a test has to be able to cause
+ * one. Bumping this appends a changed comment to sw.js, which is all the
+ * browser compares - the worker then installs, skipWaiting()s and activates,
+ * exactly as a real deploy does.
+ */
+let workerBuild = 0;
+function bumpWorker() {
+  workerBuild += 1;
+  return workerBuild;
+}
+
 function createServer() {
   return http.createServer((req, res) => {
     const urlPath = (req.url || '/').split('?')[0];
     const file = resolveFile(req.url || '/');
+
+    if (urlPath === '/sw.js' && workerBuild) {
+      fs.readFile(file, 'utf8', (err, body) => {
+        if (err) {
+          res.writeHead(404); res.end(); return;
+        }
+        const stamped = body + '\n// test build ' + workerBuild + '\n';
+        res.writeHead(200, Object.assign({
+          'Content-Type': TYPES['.js'],
+          'Content-Length': Buffer.byteLength(stamped),
+        }, extraHeaders(urlPath)));
+        res.end(stamped);
+      });
+      return;
+    }
 
     fs.stat(file, (err, stat) => {
       if (err || !stat.isFile()) {
@@ -148,7 +176,7 @@ function start(port) {
   });
 }
 
-module.exports = { start, createServer, resolveFile, WIKIS };
+module.exports = { start, createServer, resolveFile, bumpWorker, WIKIS };
 
 if (require.main === module) {
   const port = Number(process.argv[2] || 8000);

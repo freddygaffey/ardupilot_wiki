@@ -32,7 +32,7 @@
 'use strict';
 
 const path = require('path');
-const { start } = require('./serve_wiki_tree');
+const { start, bumpWorker } = require('./serve_wiki_tree');
 
 const REPO = path.resolve(__dirname, '..', '..');
 
@@ -150,6 +150,87 @@ async function looksLikeWikiPage(page) {
       bodyText: (document.body.innerText || '').length,
     };
   });
+}
+
+
+/*
+ * A deploy, with a page already open.
+ *
+ * Shipping a new sw.js is the one routine event that takes control away from
+ * every tab already on the site, and control is the whole feature: an
+ * uncontrolled page goes to the network for its next navigation, so a reader
+ * who goes offline while uncontrolled gets the browser's own error page with a
+ * full cache sitting untouched. That state was seen once on the live mirror
+ * immediately after a deploy - two navigations with no controller, recovering
+ * on its own some time later. The cause was never established. This exists so
+ * that if it becomes reproducible it is caught here rather than by a reader.
+ *
+ * The seeded caches matter. Several things the worker does on activation are
+ * skipped entirely when nothing is saved - warmTheme() returns at once with no
+ * ardupilot-offline-* cache present - so a fresh profile exercises a shorter
+ * path than any real reader with wikis saved. These have the right names, the
+ * completion marker the worker checks, and about the entry count of a reader
+ * holding the full set.
+ *
+ * It runs in a context of its own, at the end. Seeding 8,800 entries into the
+ * context the other checks use made Firefox flake on timing when three engines
+ * ran back to back - a test that perturbs the run it is part of is worse than
+ * no test.
+ *
+ * It passes today, and passed both before and after an attempted fix to the
+ * activate handler, which is how that fix was shown to be addressing the wrong
+ * thing and was dropped.
+ */
+async function checkUpdateWindow(name, browser, base) {
+  const context = await browser.newContext({ serviceWorkers: 'allow' });
+  const page = await context.newPage();
+  try {
+    await page.goto(base + VISITED, { waitUntil: 'load' });
+    const control = await waitForControl(page);
+    if (!control.controlled) {
+      check(name, 'a tab open across a worker update is controlled again',
+            false, 'never took control to begin with');
+      return;
+    }
+
+    const seeded = await page.evaluate(async (wikis) => {
+      let total = 0;
+      for (const w of wikis) {
+        const cache = await caches.open('ardupilot-offline-' + w);
+        await cache.put('/__ap_complete__', new Response('1'));
+        const puts = [];
+        for (let i = 0; i < 800; i++) {
+          puts.push(cache.put('/' + w + '/docs/seed-' + i + '.html',
+                              new Response('<html><body>seed</body></html>',
+                                { headers: { 'Content-Type': 'text/html' } })));
+        }
+        await Promise.all(puts);
+        total += 801;
+      }
+      return total;
+    }, ['copter', 'plane', 'rover', 'sub', 'blimp', 'dev', 'antennatracker',
+        'planner', 'planner2', 'ardupilot', 'mavproxy']);
+
+    bumpWorker();
+    await page.evaluate(async () => {
+      const reg = await navigator.serviceWorker.getRegistration();
+      await reg.update();
+    });
+    const reclaimed = await page.evaluate(async () => {
+      const started = Date.now();
+      while (Date.now() - started < 10000) {
+        if (navigator.serviceWorker.controller) { return Date.now() - started; }
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      return -1;
+    });
+    check(name, 'a tab open across a worker update is controlled again',
+          reclaimed >= 0,
+          (reclaimed >= 0 ? reclaimed + ' ms' : 'still none after 10s') +
+          ', with ' + seeded + ' entries saved');
+  } finally {
+    await context.close().catch(() => {});
+  }
 }
 
 /* ------------------------------------------------------------- one engine -- */
@@ -363,6 +444,9 @@ async function runEngine(name, launcher, base) {
       .filter((t) => !/favicon|Failed to load resource/i.test(t));
     check(name, 'no unexplained console errors', fatal.length === 0,
           fatal.slice(0, 3).join(' | '));
+
+    // Last, and in a context of its own: see checkUpdateWindow.
+    await checkUpdateWindow(name, browser, base);
   } catch (err) {
     check(name, 'engine run completed', false, String(err.message));
   } finally {
