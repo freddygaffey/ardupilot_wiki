@@ -24,7 +24,7 @@
  * unstyled for weeks. One bump here would have cleared it. Downloaded wikis are
  * unaffected: ardupilot-offline-* is unversioned and activate skips it.
  */
-const CACHE_VERSION = 'v10';
+const CACHE_VERSION = 'v11';
 const PAGE_CACHE = `ardupilot-pages-${CACHE_VERSION}`;
 const IMAGE_CACHE = `ardupilot-images-${CACHE_VERSION}`;
 const STATIC_CACHE = `ardupilot-static-${CACHE_VERSION}`;
@@ -502,9 +502,7 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
 
   // Without this the browser may terminate the worker the moment the cached
   // copy is handed back, and the fetch above is dropped on the floor.
-  if (event && typeof event.waitUntil === 'function') {
-    event.waitUntil(network);
-  }
+  keepAlive(event, network, request.url);
 
   if (cached) {
     return cached;
@@ -589,9 +587,7 @@ async function freshBehind(request, cacheName, event) {
 
   // As in staleWhileRevalidate: answered from storage, so nothing awaits the
   // refresh, so the worker has to be told to stay alive for it.
-  if (event && typeof event.waitUntil === 'function') {
-    event.waitUntil(network);
-  }
+  keepAlive(event, network, request.url);
 
   if (stored) {
     return stored;
@@ -705,6 +701,59 @@ function plausibleBody(request, response) {
     }
   }
   return true;
+}
+
+/*
+ * Ask the browser to keep this worker alive for a background refresh, and treat
+ * a refusal as the non-event it is.
+ *
+ * Both callers reach this from inside an async function, so the fetch handler
+ * has already returned by the time it runs. The spec permits that while
+ * respondWith is still pending, and all three engines accept it today. The
+ * guard is here because the cost of being wrong is out of proportion to the
+ * benefit: waitUntil is an optimisation, and if one ever threw, the exception
+ * would reject the handler, safely() would catch it and go to the network, and
+ * stale-while-revalidate would quietly become fetch-twice. Caught, the worst
+ * case is the behaviour without waitUntil at all - the refresh may be cut short
+ * if the browser stops the worker.
+ *
+ * Not swallowed silently, so that if it ever does fire it is findable.
+ */
+function keepAlive(event, promise, url) {
+  if (!event || typeof event.waitUntil !== 'function') {
+    return;
+  }
+  try {
+    event.waitUntil(promise);
+  } catch (err) {
+    console.warn('[sw] waitUntil refused for', url, err && err.name);
+  }
+}
+
+/*
+ * Whether the catch-all route may keep a copy.
+ *
+ * Two things must never be stored here. The archives under /offline/ are the
+ * downloads themselves - 439 MB for common alone - and keeping a second copy
+ * beside the cache it was unpacked into would double what a reader pays for
+ * every wiki they save. And offline-manifest.json is how staleness is
+ * detected, which is why it is fetched no-cache; the download code compares
+ * the build it names against what is stored, so a copy of it stored here is a
+ * copy that can disagree.
+ *
+ * The size cap is for everything unforeseen. searchindex.js, the file this
+ * route exists to keep, is about 1.1 MB per wiki; anything an order of
+ * magnitude past that is not a document and should not land here by accident.
+ */
+const NEVER_STORE = /^\/offline\//;
+const STORE_LIMIT_BYTES = 12 * 1024 * 1024;
+
+function storable(url, response) {
+  if (NEVER_STORE.test(url.pathname)) {
+    return false;
+  }
+  const len = Number(response.headers.get('Content-Length'));
+  return !(len > STORE_LIMIT_BYTES);
 }
 
 function safely(handler, request) {
@@ -880,7 +929,24 @@ self.addEventListener('fetch', (event) => {
    */
   event.respondWith((async () => {
     try {
-      return await fetch(request);
+      const response = await fetch(request);
+      /*
+       * Store what came back, or this route can only ever answer from a
+       * downloaded archive.
+       *
+       * search.html calls Search.loadIndex("searchindex.js") and nothing else
+       * on the site requests that file, so it reached this route, went to the
+       * network, and was put nowhere. A reader who searched while online and
+       * then lost the connection lost search with it - the pages were all in
+       * the page cache, and the index that makes them findable was not.
+       * Caching as you read is supposed to mean everything you read.
+       */
+      if (response && response.ok && storable(url, response) &&
+          plausibleBody(request, response)) {
+        const cache = await caches.open(STATIC_CACHE);
+        await cache.put(request, response.clone());
+      }
+      return response;
     } catch (err) {
       return (await heldOffline(request)) || new Response('', { status: 504 });
     }
