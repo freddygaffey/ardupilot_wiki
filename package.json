@@ -9,9 +9,12 @@
     "test:export": "node scripts/tests/test_offline_export.js",
     "test:export:multi": "node scripts/tests/test_offline_export.js ardupilot planner2 antennatracker",
     "test:export:full": "node --max-old-space-size=8192 scripts/tests/test_offline_export.js --full",
-    "test:archives": "python3 scripts/tests/test_offline_archives.py"
+    "test:archives": "python3 scripts/tests/test_offline_archives.py",
+    "test:browsers": "node scripts/tests/test_offline_browsers.js",
+    "serve": "node scripts/tests/serve_wiki_tree.js 8000"
   },
   "devDependencies": {
-    "jsdom": "^29.0.0"
+    "jsdom": "^29.0.0",
+    "playwright": "^1.62.1"
   }
 }
