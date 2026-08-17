@@ -12,14 +12,19 @@ Offline Copies
 Keep the documentation readable with no connection: in a hangar, in a field, or
 anywhere the signal runs out.
 
-Two separate things live on this page, and they are easily confused. *Saving
-pages* makes the wiki readable offline and works in an ordinary browser tab.
-*Installing* the app downloads nothing at all. It only gives the wiki its own
-window, and makes your browser less likely to delete what you have saved.
+This page offers three different things:
 
-Everything here is served from this site. A saved wiki arrives as one ordinary
-file download, and your browser unpacks it locally: nothing is sent anywhere,
-and no account is needed at any point.
+- **Save a wiki** downloads its documentation into this browser so that you
+  can read it offline.
+- **Save as .html** creates a portable file that you can open from a USB stick
+  or copy to another computer.
+- **Install app** adds a launcher icon and its own window. It does not download
+  documentation.
+
+No account is needed. The browser downloads the selected documentation from
+this site and stores it on this device; it does not upload your documentation
+or create a file in your Downloads folder. To create a file, use **Save as
+.html** below.
 
 For how any of this works, what it needs to run and how to test it, see `How
 Offline Copies Work <../../dev/docs/wiki-offline-copies.html>`__ in the
@@ -58,9 +63,9 @@ developer documentation.
    <div class="apo">
 
      <div class="apo-head">
-       <p class="apo-title">Offline storage</p>
+       <p class="apo-title">Save Documentation for Offline Use</p>
        <span class="apo-spacer"></span>
-       <button id="download-cache-btn" class="apo-btn apo-btn-primary">Save selected</button>
+       <button id="download-cache-btn" class="apo-btn apo-btn-primary">Save selected wikis</button>
        <button id="check-btn" class="apo-btn apo-btn-ghost">Check for updates</button>
        <button id="clear-btn" class="apo-btn apo-btn-danger">Remove all</button>
      </div>
@@ -114,9 +119,9 @@ developer documentation.
 What to Expect
 ==============
 
-**Saving a wiki makes every page in it open instantly, whether or not you have
-a connection.** Pages come from your own device rather than the network, so
-browsing stays fast in a hangar, on a plane, or on a site with no signal.
+**Saving a wiki lets you read every page in it without a connection.** Pages
+come from your own device rather than the network, so they open quickly in a
+hangar, on a plane, or anywhere with no signal.
 
 It costs storage. Roughly:
 
@@ -138,10 +143,10 @@ afterwards costs only its own pages.
 How It Works
 ============
 
-The wiki is stored by your browser and served from your own device, using a
-mechanism browsers provide for exactly this. Nothing is sent anywhere, no
-account is involved, and the pages you read offline are the same files the site
-serves normally.
+The wiki is stored by your browser and served from your own device. No account
+is involved, and the pages you read offline are the same files the site serves
+normally. While automatic updates are enabled, the wiki may check this site for
+changed pages while it is open.
 
 Install as an App
 =================
@@ -150,8 +155,8 @@ Install as an App
 
    Installing downloads nothing, and is not needed to read offline. Saving pages
    works in an ordinary browser tab. It gives the wiki its own window and a
-   launcher icon, and makes your browser less likely to delete your saved
-   pages when the device runs low on space.
+   launcher icon. Depending on your browser, installing may also help it retain
+   saved pages when the device runs low on space.
 
 .. raw:: html
 

@@ -10,12 +10,19 @@ How Offline Copies Work
    how that works rather than providing the controls for it.
 
 The wiki can be read with no internet connection, and is noticeably faster to
-browse even when you have one. This page explains what the feature does, how to
-get the most out of it, and how it is built.
+browse even when you have one. This page explains the feature for readers and,
+later, how it is built.
 
-A saved copy does not go stale. Once a wiki has been downloaded it is checked
-against the server periodically, and anything that has changed since is fetched
-on its own rather than by downloading the wiki again.
+While automatic updates are enabled and a wiki page is open, a saved copy can
+check for updates and download only the files that have changed. You can turn
+automatic updates off or check for updates manually on the
+:ref:`common-offline` page.
+
+.. note::
+
+   **For readers:** use the :ref:`common-offline` page to save or export
+   documentation. **For developers:** implementation details begin at
+   :ref:`wiki-offline-copies-implementation`.
 
 Features
 ========
@@ -23,37 +30,32 @@ Features
 Three distinct things are provided here. They do different jobs, and which one
 you want depends on what you are trying to achieve.
 
-**Faster browsing.** Every page you visit is stored on your device and served
-from there the next time it is requested. There is nothing to configure and no
-decision to make, and it begins working from your second visit onwards. This
-applies to ordinary browsing over a normal internet connection, and most
-readers will notice it more than they notice the offline support.
+**Browse faster.** Every page you visit is stored on your device and served
+from there the next time it is requested. There is nothing to configure, and it
+begins working from your second visit onwards. This applies to ordinary
+browsing over a normal internet connection.
 
-**Saving a wiki for offline use.** Saving downloads the wiki you select
-together with the shared image set that all of the wikis draw on. The shared images are needed whichever wiki you
-choose and are the larger part of the download: roughly 440 MB of images, plus
-about 80 MB for Copter. Once the download has finished, every page in that wiki
-opens with no connection at all.
+**Save a wiki for offline use.** Saving downloads the wiki you select into your
+browser, together with the shared image set used by all wikis. The shared images
+are needed whichever wiki you choose and make up most of the first download:
+roughly 440 MB of images, plus about 80 MB for Copter. Once saving finishes,
+every page in that wiki opens without a connection.
 
 Saving is a deliberate choice rather than something that happens automatically.
-The reason is not the size of the download, which is unremarkable for anyone
-who has cloned the firmware repository or installed a toolchain. It is that
-somebody reading a single page should not have several hundred megabytes arrive
-uninvited. If you work from the documentation regularly you will probably want
-to save it, because a saved wiki is also the fastest way to read it.
+Someone reading a single page should not receive several hundred megabytes of
+documentation uninvited. If you use the documentation regularly, saving the
+wiki you work on is also the fastest way to read it.
 
-**Exporting the wiki as a single file.** The export produces one ``.html`` file
-containing the pages, the images and a full text search index. Open it by
-double clicking it: there is nothing to install and it will run from a USB
-stick. This is intended for machines you cannot install software on, or for
-giving the documentation to somebody on a memory card.
+**Export a portable HTML file.** Export produces one ``.html`` file containing
+the pages, images, and a full-text search index. Open it by double-clicking it:
+there is nothing to install, and it runs from a USB stick. Use this for a
+machine where you cannot install software, or to give documentation to someone
+else.
 
-The file is built in your browser out of the wiki already saved on your device,
-rather than being downloaded from the server as a file in its own right. That
-has a consequence worth knowing before you start: exporting a wiki you have not
-saved will download it first, so you end up with a saved copy as well as the
-file. Nothing is wasted by this, and an export of a wiki you have already saved
-needs no connection at all.
+The browser builds the file from the wiki already saved on your device. If you
+export a wiki that is not yet saved, the browser downloads it first; you then
+have both an offline copy in the browser and the portable file. Exporting a
+wiki that is already saved needs no connection.
 
 Getting the Most Out of It
 ==========================
@@ -66,16 +68,14 @@ megabytes rather than hundreds.
 Saving needs an internet connection, so save the wiki before you need it rather
 than when you arrive.
 
-Installing the site as an app downloads nothing by itself. What it does is make
-the browser much less likely to reclaim your saved data when the device runs
-short of space, which is worth doing if you are relying on several hundred
-megabytes of stored pages.
+Installing the site as an app downloads nothing by itself. It gives the wiki a
+separate window and launcher icon. Depending on your browser, it may also help
+retain saved data when the device runs short of space.
 
 .. note::
 
-   A saved wiki checks itself against the server while a wiki page is open and
-   fetches anything that has changed, so a copy left alone stays current
-   without being asked. The check can be turned off, and can be run on demand,
+   A saved wiki checks for changes only while a wiki page is open. It fetches
+   only files that have changed. You can turn the check off or run it on demand
    on the :ref:`common-offline` page.
 
 .. warning::
@@ -135,6 +135,8 @@ read rather than staying the same.
 
 With no connection at all, pages you have already visited still open, and a
 saved wiki opens completely.
+
+.. _wiki-offline-copies-implementation:
 
 Implementation
 ==============
