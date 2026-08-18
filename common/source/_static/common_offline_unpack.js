@@ -12,6 +12,10 @@
  * Exposes window.ApUnpack:
  *   mimeFor(name)                     -> a Content-Type for a filename
  *   untarToCache(stream, cache, prefix, onEntry)  -> unpack a tar stream
+ *                                     prefix may be a string, or a
+ *                                     function of the entry name for an
+ *                                     archive whose entries do not all
+ *                                     belong in the same place
  *   fetchArchive(entry, cache, onBytes, opts)     -> download + unpack one wiki
  *
  * The archive is served as a gzip content coding (nginx gzip_static pairs
@@ -131,7 +135,8 @@
 
           var entryName = override || name;
           override = null;
-          var path = prefix + entryName;
+          var path = (typeof prefix === 'function' ? prefix(entryName) : prefix) +
+                     entryName;
           return storeEntry(cache, path, entryName, body).then(function () {
             if (onEntry) { onEntry(path); }
             return step();
@@ -227,6 +232,38 @@
     );
   }
 
+  /*
+   * Where an archive entry is stored, given the archive it came from.
+   *
+   * The one rule, used by the unpacker below and by the differential update in
+   * common_offline_update.js. Both carried their own copy of it and both would
+   * have been wrong about the same thing, so it lives here and is exported.
+   *
+   * A wiki archive's entries already carry the wiki's name, so they go at the
+   * root and are stored at exactly the URL the site serves them at.
+   *
+   * The common archive holds two different kinds of thing:
+   *
+   *   _images/...   shared images, stored once under /_common/, a path the site
+   *                 never serves. The service worker redirects every wiki's
+   *                 image requests there.
+   *   <wiki>/...    a whole wiki too small to be worth an archive and a row of
+   *                 its own (FOLD_INTO_COMMON in build_offline_artifacts.py).
+   *                 It is already qualified by its own name and belongs at the
+   *                 root like any other wiki: a reader's URL must not change
+   *                 because of which archive the bytes travelled in.
+   *
+   * Treating the whole common archive as shared images put all 28 About pages
+   * under /_common/ardupilot/..., which nothing ever asks for. Every step
+   * reported success and the wiki read as unsaved.
+   */
+  function cachePathFor(id, name) {
+    if (id === 'common' && name.indexOf('_images/') === 0) {
+      return '/_common/' + name;
+    }
+    return '/' + name;
+  }
+
   /** cache.match, but readable. */
   function readFrom(cache, path) {
     return cache.match(path).then(inflate);
@@ -279,14 +316,18 @@
       // text-heavy wikis.
       var stream = response.body.pipeThrough(counter);
 
-      // The common archive holds bare _images/... paths; wiki archives are
-      // already prefixed with their own name.
-      var prefix = entry.id === 'common' ? '/_common/' : '/';
-      return untarToCache(stream, cache, prefix);
+      // One rule for where an entry belongs, shared with the differential
+      // update; untarToCache wants the prefix, so hand back everything
+      // cachePathFor put in front of the name.
+      return untarToCache(stream, cache, function (entryName) {
+        var full = cachePathFor(entry.id, entryName);
+        return full.slice(0, full.length - entryName.length);
+      });
     });
   }
 
   global.ApUnpack = {
+    cachePathFor: cachePathFor,
     mimeFor: mimeFor,
     untarToCache: untarToCache,
     fetchArchive: fetchArchive,

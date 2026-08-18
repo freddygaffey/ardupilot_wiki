@@ -43,6 +43,19 @@ const RST = path.join(REPO, 'common/source/docs/common-offline.rst');
 // the panel finds them, exactly as the browser does via the script tags.
 const PANEL_LIBS = ['common_offline_unpack.js', 'common_offline_update.js'];
 
+// One module-level copy of the unpacker, for helpers that run outside any
+// panel sandbox. Its cachePathFor is the single definition of where an archive
+// entry is stored, and the harness has to seed caches by that same rule or it
+// tests a layout no reader has.
+const ApUnpack = (() => {
+  const box = { window: null, console, TextDecoder, TextEncoder, URL };
+  box.window = box;
+  vm.createContext(box);
+  vm.runInContext(
+    fs.readFileSync(path.join(STATIC, 'common_offline_unpack.js'), 'utf8'), box);
+  return box.ApUnpack;
+})();
+
 let pass = 0, fail = 0;
 const failures = [];
 function check(name, ok, detail) {
@@ -718,7 +731,11 @@ async function main() {
     const table = {};
     for (const [name, [hash, body]] of Object.entries(files)) {
       table[name] = hash;
-      await c.put((id === 'common' ? '/_common/' : '/') + name, new FakeResponse(body));
+      // Seeded where the unpacker really puts it, via the shipped rule rather
+      // than a restatement of it: a harness that stores folded pages somewhere
+      // production does not would test the update against a cache no reader
+      // has.
+      await c.put(ApUnpack.cachePathFor(id, name), new FakeResponse(body));
     }
     await c.put(TABLE_KEY, new FakeResponse(JSON.stringify(table)));
     await c.put('/__ap_complete__', completeMarker(build, id));
@@ -1411,6 +1428,91 @@ async function main() {
     check('the footer reflects saved wikis on first paint, not "no wikis saved"',
           /\d+ wikis? saved/.test(status) && !/no wikis saved/.test(status),
           JSON.stringify(status));
+  }
+
+  console.log('\nregression: a folded wiki updates in place, from its own URL');
+  {
+    // The other half of the fold. An About page that changes has to be fetched
+    // from /ardupilot/... - the URL the site actually serves it at - and
+    // written over the copy being read. Because it arrives in the common
+    // archive, the update once treated it like a shared image: looked for it
+    // under every other wiki's prefix, found nothing, and would have written it
+    // to /_common/ardupilot/... if it had.
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'common', OLD_BUILD, {
+      '_images/shared.png':        ['c1', 'shared bytes'],
+      'ardupilot/docs/about.html': ['a1', 'old about']
+    });
+    const common = await cachesObj.open('ardupilot-offline-common');
+
+    const { doc, fetchCalls } = load({
+      manifest: MANIFEST, caches: cachesObj,
+      tables: {
+        'common-files.json': {
+          '_images/shared.png':        'c1',
+          'ardupilot/docs/about.html': await fileHash('NEW about')
+        }
+      },
+      served: { '/ardupilot/docs/about.html': 'NEW about' }
+    });
+    await settle();
+    $(doc, 'check-btn').click();
+    for (let i = 0; i < 20; i++) { await settle(); }
+
+    const asked = siteCalls(fetchCalls).map((u) => u.split('?')[0]);
+    check('a changed folded page is fetched from its own URL',
+          asked.includes('/ardupilot/docs/about.html'), JSON.stringify(asked));
+    check('it is not hunted for under the other wikis',
+          !asked.some((u) => /^\/(copter|plane|rover|dev)\/ardupilot\//.test(u)),
+          JSON.stringify(asked));
+    check('the new body replaces the copy that is actually read',
+          (await bodyAt(common, '/ardupilot/docs/about.html')) === 'NEW about',
+          JSON.stringify(await bodyAt(common, '/ardupilot/docs/about.html')));
+    check('and nothing is written under /_common/ardupilot/',
+          (await bodyAt(common, '/_common/ardupilot/docs/about.html')) === null);
+  }
+
+  console.log('\nregression: a wiki folded into common keeps its own URLs');
+  {
+    // The common archive carries two kinds of entry. Shared images are bare
+    // _images/... and belong under /_common/, stored once for every wiki. A
+    // folded wiki (FOLD_INTO_COMMON in build_offline_artifacts.py) is a whole
+    // wiki tree that happens to travel in the same archive, already carrying
+    // its own name, and belongs at /ardupilot/... exactly where it would be if
+    // it still had an archive of its own.
+    //
+    // Applying one prefix to both put all 28 About pages under
+    // /_common/ardupilot/..., a path nothing ever requests. Everything
+    // reported success - the download finished, the entries were in storage,
+    // the manifest was right - and the wiki read as unsaved. Only asking for a
+    // page by its real URL catches it, which is what this does.
+    const { sandbox } = load({ manifest: MANIFEST });
+    await settle();
+    const cache = await sandbox.caches.open('fold-test');
+    const tar = tarBytes({
+      '_images/shared.png': 'png',
+      'ardupilot/index.html': '<html><body>About</body></html>',
+      'ardupilot/_static/theme.css': 'body{}',
+      'ardupilot/_images/own.png': 'png',
+    });
+    sandbox.fetch = () => Promise.resolve({ ok: true, body: streamOf(tar) });
+    await sandbox.ApUnpack.fetchArchive(
+      { id: 'common', name: 'Common', archive: 'common-offline.tar' },
+      cache, () => {}, { base: '/offline' });
+    // The shim spells keys as absolute URLs, as Cache Storage does.
+    const keys = (await cache.keys())
+      .map((r) => new URL(String(r.url), 'https://x').pathname);
+
+    check('a folded wiki unpacks at its own path, not under /_common/',
+          keys.includes('/ardupilot/index.html'),
+          JSON.stringify(keys.filter((k) => k.indexOf('ardupilot') !== -1)));
+    check('its assets and own images come with it',
+          keys.includes('/ardupilot/_static/theme.css') &&
+          keys.includes('/ardupilot/_images/own.png'));
+    check('shared images still go under /_common/',
+          keys.includes('/_common/_images/shared.png'));
+    check('nothing lands under /_common/ardupilot/',
+          !keys.some((k) => k.indexOf('/_common/ardupilot/') === 0));
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');

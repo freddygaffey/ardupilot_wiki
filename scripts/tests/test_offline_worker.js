@@ -47,14 +47,21 @@ function liftLookup(src) {
   for (const re of [/const ASSET_EXT_RE\s*=\s*[\s\S]*?;/,
                     /const CONTENT_EXPECTATIONS\s*=\s*\[[\s\S]*?\n\];/,
                     /const OFFLINE_CACHE_PREFIX\s*=\s*[^;]*;/,
+                    /const FOLDED_INTO_COMMON\s*=\s*[^;]*;/,
+                    /const AP_ENCODED\s*=\s*[^;]*;/,
                     /let knownCacheNames\s*=\s*[^;]*;/,
                     /const markerChecked\s*=\s*[^;]*;/,
                     /const openedCaches\s*=\s*[^;]*;/]) {
     const m = src.match(re);
     if (m) { out += m[0] + '\n'; }
   }
+  // Every function heldOffline reaches, including the ones it only calls on
+  // the way out. Missing one is not a quiet degradation: the lifted code throws
+  // ReferenceError mid-run and the suite dies without reporting a single
+  // result, which is exactly what 'inflate' did once it started wrapping every
+  // return value.
   for (const name of ['storedShapes', 'likelyCacheName', 'isComplete',
-                      'offlineCacheFor', 'heldOffline', 'cacheFirst',
+                      'offlineCacheFor', 'inflate', 'heldOffline', 'cacheFirst',
                       'plausibleBody']) {
     const at = src.indexOf('function ' + name + '(');
     if (at === -1) { return null; }
@@ -137,6 +144,18 @@ function run(workerSrc, label) {
     text: async () => '',
   });
 
+  // Where the unpacker really puts a given path. Shared images and the wikis
+  // folded into common (see FOLD_INTO_COMMON in build_offline_artifacts.py) go
+  // to the common cache; everything else to the cache named after its wiki.
+  // The worker's likelyCacheName has to agree with this, and the check below
+  // fails if it stops agreeing - without it a fold would simply demote every
+  // request for that wiki to the exhaustive search, silently.
+  const holderOf = (k) => {
+    if (k.startsWith('/_common/')) { return 'ardupilot-offline-common'; }
+    const first = k.split('/')[1];
+    return 'ardupilot-offline-' + (first === 'ardupilot' ? 'common' : first);
+  };
+
   const ctx = {
     URL,
     console,
@@ -145,9 +164,7 @@ function run(workerSrc, label) {
       // Every offline cache a reader would hold, so the named-cache path is
       // exercised rather than silently falling through to the exhaustive one.
       keys: async () => [...new Set([...store].filter((k) => k.startsWith('/'))
-        .map((k) => k.startsWith('/_common/')
-          ? 'ardupilot-offline-common'
-          : 'ardupilot-offline-' + k.split('/')[1]))],
+        .map(holderOf))],
       open: async (name) => ({
         match: async (r) => {
           const k = keyOf(r);
@@ -155,10 +172,7 @@ function run(workerSrc, label) {
             // These caches model FINISHED downloads, so they carry the marker
             // the worker now requires before consulting them.
             if (k === '/__ap_complete__') { return asResponse(k); }
-            const want = k.startsWith('/_common/')
-              ? 'ardupilot-offline-common'
-              : 'ardupilot-offline-' + k.split('/')[1];
-            if (want !== name) { return undefined; }
+            if (holderOf(k) !== name) { return undefined; }
             return store.has(k) ? asResponse(k) : undefined;
           }
           return runtimeCache.get(k);
@@ -174,7 +188,7 @@ function run(workerSrc, label) {
   vm.createContext(ctx);
   vm.runInContext(lifted +
     'this.storedShapes=storedShapes;this.heldOffline=heldOffline;' +
-    'this.cacheFirst=cacheFirst;', ctx);
+    'this.cacheFirst=cacheFirst;this.likelyCacheName=likelyCacheName;', ctx);
 
   const ask = (u) => ctx.heldOffline({ url: 'https://example.test' + u });
   const askImage = async (u) => {
@@ -837,7 +851,7 @@ async function main() {
                          : '\nall checks passed\n');
     process.exit(failures ? 1 : 0);
   }
-  const { store, wikiNames, ask, askImage } = cur;
+  const { ctx, store, wikiNames, ask, askImage } = cur;
 
   const pages = wikiNames.filter((n) => n.endsWith('.html')).map((n) => '/' + n);
   console.log('  cache holds ' + store.size + ' keys, ' + pages.length +
@@ -897,6 +911,19 @@ async function main() {
   check('the offline lookup does not ask the cache to ignore the query',
         !/ignoreSearch\s*:/.test(workerSrc),
         'exact matches only');
+
+  /* ------------------------------------------- wikis folded into common --- */
+  // About has no archive of its own; its pages ride inside common and keep
+  // their /ardupilot/... URLs. They resolve either way - the exhaustive search
+  // finds anything - so the thing worth asserting is that they resolve by NAME,
+  // because the difference between the two paths is 0.2 ms and 325 ms on every
+  // request, and nothing else would ever report it.
+  check('a folded wiki is looked up in the common cache, not its own',
+        ctx.likelyCacheName('/ardupilot/docs/about.html') ===
+          'ardupilot-offline-common',
+        ctx.likelyCacheName('/ardupilot/docs/about.html'));
+  check('an unfolded wiki still has its own cache',
+        ctx.likelyCacheName('/copter/docs/x.html') === 'ardupilot-offline-copter');
 
   /* ---------------------------------------------------------- images ------ */
   // With the network down and nothing browsed beforehand, every image a

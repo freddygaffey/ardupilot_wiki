@@ -451,9 +451,28 @@ def build_id() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
+# Wikis that travel inside the common archive instead of having one of their
+# own.
+#
+# "About" is 3 MB and 28 pages, an order of magnitude smaller than the next
+# entry and two orders below Copter. As its own row it asked the reader a
+# question not worth asking - nobody sets out to save the About wiki, and
+# nobody deliberately leaves it behind - while costing a line of the table, a
+# checkbox, an archive, a file table and a cache. Folded into common it is
+# simply always there, for a rounding error on a download that is already
+# hundreds of megabytes.
+#
+# The pages keep their /ardupilot/... URLs. Only the container changes: the
+# archive they arrive in and the cache they land in. Everything downstream
+# addresses them by path, so the service worker needs one line (likelyCacheName)
+# and nothing else does.
+FOLD_INTO_COMMON = {"ardupilot"}
+
+
 def write_common_archive(wikis, common_names, out_dir: Path, thumbs,
-                         files=None) -> int:
-    """One archive of the shared images, taken from whichever wiki has them.
+                         files=None, folded=(), per_wiki=None) -> int:
+    """The shared images, taken from whichever wiki has them, plus any wiki
+    small enough that a row of its own was not worth the reader's attention.
 
     This is where the payload lives: 483 MB, effectively all images, against
     around 25 MB of images in a per-wiki archive.
@@ -477,6 +496,13 @@ def write_common_archive(wikis, common_names, out_dir: Path, thumbs,
         for vid, path in sorted(thumbs.items()):
             add_bytes(tar, f"_images/yt-{vid}.jpg", path.read_bytes(), files,
                       loose_dir=out_dir / "files")
+        # Folded wikis, written exactly as write_wiki_archive would write them,
+        # arcnames included. Their images that no other wiki uses come too:
+        # classify_images has already put those in per_wiki, and with no archive
+        # of their own to travel in this is where they belong.
+        for wiki in folded:
+            add_wiki_tree(tar, wiki, (per_wiki or {}).get(wiki, set()),
+                          out_dir, thumbs, set(wikis), files)
     return archive.stat().st_size
 
 
@@ -552,45 +578,58 @@ def param_versions_for(html_root: Path) -> list:
     return out
 
 
+def add_wiki_tree(tar, wiki: str, exclusive: set, out_dir: Path, thumbs,
+                  wikis, files=None) -> None:
+    """One wiki's pages, static assets and unique images, into an open tar.
+
+    Separate from write_wiki_archive because a folded wiki's files go into the
+    common archive instead of one of their own (see FOLD_INTO_COMMON), and they
+    have to be written identically when they get there: the same arcnames, the
+    same rewrites, the same entries in the file table. Two copies of this walk
+    would be two chances for a folded wiki to drift into being subtly different
+    from every other one.
+    """
+    html_root = Path(wiki) / "build" / "html"
+    for path in sorted(html_root.rglob("*")):
+        if not path.is_file():
+            continue
+        rel = path.relative_to(html_root)
+        parts = rel.parts
+        # Shared images travel in the common archive instead.
+        if parts and parts[0] == "_images" and rel.name not in exclusive:
+            continue
+        # Never fold the offline artefacts back into themselves.
+        if parts and parts[0] == "offline":
+            continue
+        # Historical parameter pages are offered separately; see
+        # param_versions_for. parameters.html is not one of these and stays.
+        if param_version_of(rel):
+            continue
+        arcname = f"{wiki}/{rel.as_posix()}"
+        if path.suffix == ".html":
+            html = path.read_text(encoding="utf-8", errors="replace")
+            rewritten = rewrite_site_links(
+                rewrite_donate(rewrite_embeds(html, wiki, thumbs)), wikis)
+            if rewritten != html:
+                add_bytes(tar, arcname, rewritten.encode("utf-8"), files,
+                          loose_dir=out_dir / "files")
+                continue
+        # Wiki-unique images can be downsized too; everything else (css, js,
+        # fonts) is added as-is.
+        if parts and parts[0] == "_images":
+            add_image(tar, path, arcname, files, out_dir / "files")
+            continue
+        tar.add(path, arcname=arcname, filter=_normalise)
+        if files is not None:
+            files[arcname] = content_hash(path.read_bytes())
+
+
 def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path, thumbs,
                        wikis, files=None) -> int:
     """Pages, static assets and images unique to this wiki."""
-    html_root = Path(wiki) / "build" / "html"
     archive = out_dir / f"{wiki}-offline.tar.gz"
-
     with reproducible_tar(archive) as tar:
-        for path in sorted(html_root.rglob("*")):
-            if not path.is_file():
-                continue
-            rel = path.relative_to(html_root)
-            parts = rel.parts
-            # Shared images travel in the common archive instead.
-            if parts and parts[0] == "_images" and rel.name not in exclusive:
-                continue
-            # Never fold the offline artefacts back into themselves.
-            if parts and parts[0] == "offline":
-                continue
-            # Historical parameter pages are offered separately; see
-            # param_versions_for. parameters.html is not one of these and stays.
-            if param_version_of(rel):
-                continue
-            arcname = f"{wiki}/{rel.as_posix()}"
-            if path.suffix == ".html":
-                html = path.read_text(encoding="utf-8", errors="replace")
-                rewritten = rewrite_site_links(
-                    rewrite_donate(rewrite_embeds(html, wiki, thumbs)), wikis)
-                if rewritten != html:
-                    add_bytes(tar, arcname, rewritten.encode("utf-8"), files,
-                              loose_dir=out_dir / "files")
-                    continue
-            # Wiki-unique images can be downsized too; everything else (css, js,
-            # fonts) is added as-is.
-            if parts and parts[0] == "_images":
-                add_image(tar, path, arcname, files, out_dir / "files")
-                continue
-            tar.add(path, arcname=arcname, filter=_normalise)
-            if files is not None:
-                files[arcname] = content_hash(path.read_bytes())
+        add_wiki_tree(tar, wiki, exclusive, out_dir, thumbs, wikis, files)
     return archive.stat().st_size
 
 
@@ -631,15 +670,37 @@ def build(wikis, destdir: Path) -> Path:
     log(f"fetching stills for {len(ids)} embedded videos")
     thumbs = fetch_thumbnails(ids, out_dir / ".thumbs")
 
+    folded = [w for w in built if w in FOLD_INTO_COMMON]
     log(f"writing common archive ({len(common_names)} shared images, "
-        f"{len(thumbs)} video stills)")
+        f"{len(thumbs)} video stills" +
+        (f", and {', '.join(folded)} folded in" if folded else "") + ")")
     common_files = {}
     common_bytes = write_common_archive(built, common_names, out_dir, thumbs,
-                                        common_files)
+                                        common_files, folded=folded,
+                                        per_wiki=per_wiki)
     write_file_table(out_dir, "common", common_files)
+    # Folded pages are read from the common cache, so they are common's pages
+    # as far as the panel is concerned. Counted here rather than left at zero
+    # so the table's page column stays truthful about what a reader receives.
+    common_pages = sum(
+        sum(1 for _ in (Path(w) / "build" / "html").rglob("*.html"))
+        for w in folded)
+    # A wiki that used to have its own archive leaves one behind in an existing
+    # output tree, and deploy rsyncs the directory rather than the manifest's
+    # contents. Nothing would reference the leftovers, but a stale file table
+    # published next to a live one is exactly the sort of thing a differential
+    # update finds and believes.
+    for wiki in folded:
+        for stale in (out_dir / f"{wiki}-offline.tar.gz",
+                      out_dir / f"{wiki}-files.json"):
+            if stale.exists():
+                stale.unlink()
+                log(f"  removed {stale.name}, now folded into common")
 
     entries = []
     for wiki in built:
+        if wiki in FOLD_INTO_COMMON:
+            continue
         html_root = Path(wiki) / "build" / "html"
         wiki_files = {}
         size = write_wiki_archive(wiki, per_wiki.get(wiki, set()), out_dir,
@@ -687,7 +748,7 @@ def build(wikis, destdir: Path) -> Path:
             "id": "common",
             "name": "Common (required)",
             "mb": round(common_bytes / 1048576),
-            "pages": 0,
+            "pages": common_pages,
             "required": True,
             "bytes": common_bytes,
             "raw_bytes": raw_size(out_dir / "common-offline.tar.gz"),

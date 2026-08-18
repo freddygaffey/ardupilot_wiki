@@ -35,6 +35,7 @@ const OUT = '/tmp/ap-export-test';
 
 const EXPORTER = path.join(REPO, 'common/source/_static/common_offline_export.js');
 const DOCUMENT = path.join(REPO, 'common/source/_static/common_offline_document_builder.js');
+const UNPACK = path.join(REPO, 'common/source/_static/common_offline_unpack.js');
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -167,9 +168,15 @@ function loadParameterVersions(wiki, vehicle, versions) {
 /* --------------------------------------------------------- module load ---- */
 
 function loadExporter() {
-  // Two files, in the order common-offline.rst loads them: the exporter reads
-  // the document module out of the global, so running it alone would throw.
-  const src = [DOCUMENT, EXPORTER].map((f) => fs.readFileSync(f, 'utf8')).join('\n');
+  // The modules common-offline.rst loads, in an order that satisfies them: the
+  // exporter reads the document builder and ApUnpack out of the global, so
+  // running it alone throws ReferenceError the moment it touches the cache.
+  // It reads through ApUnpack.readFrom rather than cache.match because entries
+  // are stored gzipped, and reading one raw yields mojibake rather than an
+  // error - so the real module is loaded here, not a stub that cannot make
+  // that mistake.
+  const src = [DOCUMENT, UNPACK, EXPORTER]
+    .map((f) => fs.readFileSync(f, 'utf8')).join('\n');
   const sandbox = {
     caches,
     TextEncoder, TextDecoder, URL, btoa, console,

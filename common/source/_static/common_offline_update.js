@@ -94,11 +94,11 @@
     });
   }
 
-  // The unpacker writes common entries under /_common/ and wiki entries under
-  // /, so a table key becomes a cache key by the same rule.
-  function cacheKeyFor(id, name) {
-    return (id === 'common' ? '/_common/' : '/') + name;
-  }
+  // A table key becomes a cache key by exactly the rule the unpacker used to
+  // store it, so the rule is imported rather than restated. Restating it meant
+  // a wiki folded into common (About) got its updates written to
+  // /_common/ardupilot/..., beside the copy actually being read.
+  var cacheKeyFor = ApUnpack.cachePathFor;
 
   /*
    * Where to fetch a changed file from, best source first.
@@ -115,7 +115,10 @@
    */
   function sourcesFor(id, name, cfg) {
     var out = [cfg.base + '/files/' + name];
-    if (id !== 'common') {
+    // A shared image is the only entry with no URL of its own. Everything else
+    // - a wiki archive's pages, and the pages of a wiki folded into common -
+    // is served at its own path, so ask for it there.
+    if (id !== 'common' || name.indexOf('_images/') !== 0) {
       out.push('/' + name);
       return out;
     }
