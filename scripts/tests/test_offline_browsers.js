@@ -416,6 +416,34 @@ async function runEngine(name, launcher, base) {
       return { raw: html.length, packed: packed.byteLength };
     }, COMPRESSED_PROBE);
 
+    /*
+     * The parameter picker, with the manifest's default applied.
+     *
+     * The panel draws once from its built-in wiki list before the manifest
+     * arrives, so anything that reads per-wiki data has to survive being asked
+     * too early. It did not: an empty selection was memoised on that first
+     * render and the default was never ticked afterwards. Nothing looked
+     * broken - the versions listed correctly, every box just came up clear -
+     * which is why it took a screenshot to catch rather than a test.
+     */
+    const picker = await (async () => {
+      const p = await context.newPage();
+      try {
+        await p.goto(base + '/ardupilot/docs/common-offline.html', { waitUntil: 'load' });
+        await p.waitForTimeout(3500);
+        return await p.evaluate(() => ({
+          vehicles: document.querySelectorAll('.apo-param-toggle').length,
+          versions: document.querySelectorAll('.param-check').length,
+          ticked: document.querySelectorAll('.param-check:checked').length,
+        }));
+      } finally { await p.close().catch(() => {}); }
+    })();
+    check(name, 'each vehicle offers its parameter versions with one ticked',
+          picker.vehicles > 0 && picker.versions > picker.ticked &&
+          picker.ticked === picker.vehicles,
+          picker.vehicles + ' vehicles, ' + picker.versions + ' versions, ' +
+          picker.ticked + ' ticked');
+
     /* ---- go offline for real ------------------------------------------- */
 
     serverHandle = global.__server;

@@ -336,10 +336,22 @@
     return (w && w.param_versions) || [];
   }
 
+  /*
+   * Seeded from the manifest's default, and NOT before the manifest is here.
+   *
+   * The panel renders immediately from the built-in wiki list so it is not
+   * blank while the manifest loads, and at that point no wiki has any versions
+   * at all. Memoising then cached an empty selection for every wiki, so when
+   * the real list arrived and the rows were drawn again this returned that
+   * empty object and the default was never ticked. Nothing looked broken: the
+   * versions were listed correctly, just all unchecked.
+   */
   function picksFor(w) {
+    var versions = paramsOf(w);
+    if (!versions.length) { return paramPicks[w.id] || {}; }
     if (!paramPicks[w.id]) {
       var seed = {};
-      paramsOf(w).forEach(function (v) {
+      versions.forEach(function (v) {
         if (v['default']) { seed[v.file] = true; }
       });
       paramPicks[w.id] = seed;
