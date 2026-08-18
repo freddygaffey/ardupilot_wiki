@@ -59,6 +59,7 @@ developer documentation.
 
 
    <div id="storage-warning"></div>
+   <p id="quota-warning" class="apo-note apo-note-warn" hidden></p>
 
    <div class="apo">
 

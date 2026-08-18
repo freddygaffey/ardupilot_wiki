@@ -556,6 +556,46 @@
                           ' &middot; ' + fmt(b.total - b.toDownload) + ' of ' +
                           fmt(b.total) + ' already saved');
     }
+    warnIfOverQuota(b);
+  }
+
+  /*
+   * Say so BEFORE the download, not after it has failed.
+   *
+   * checkRoom() already refuses a download that cannot fit, but it runs when
+   * Save is pressed, by which point the reader has made every choice and is
+   * told no. This warns while they are still choosing.
+   *
+   * Quota, not a browser check. WebKit is the one that reports about 1.0 GB
+   * against Chromium's 6.5 and Firefox's 10.7 on the same machine, so it is
+   * where this will fire - but a Chrome profile that is already full hits the
+   * identical wall, and asking the browser what it will give us is both more
+   * honest and one less thing to keep up to date than a list of user agents.
+   *
+   * Why it matters here rather than being a nicety: WebKit does not refuse a
+   * write that would exceed the quota, it discards the origin. Measured on a
+   * full uncompressed download - storage climbed to 953 MB, Sub finished, and
+   * it dropped to 52 MB, with every archive still reporting success. A reader
+   * who ignores this warning does not get an error, they get nothing, having
+   * waited for the whole download.
+   */
+  var QUOTA_MARGIN = 1.15;
+
+  function warnIfOverQuota(b) {
+    var line = el('quota-warning');
+    if (!line) { return; }
+    if (!b.toDownload) { line.hidden = true; return; }
+    storage().then(function (r) {
+      var est = (r && r.estimate) || {};
+      if (est.quota === undefined) { line.hidden = true; return; }
+      var free = (est.quota || 0) - (est.usage || 0);
+      if (free >= b.toDownload * QUOTA_MARGIN) { line.hidden = true; return; }
+      line.hidden = false;
+      line.textContent = '\u26A0 This needs about ' + fmt(b.toDownload) +
+        ' and your browser is offering ' + fmt(free) + '. Downloading anyway ' +
+        'can lose everything already saved for this site, without an error. ' +
+        'Deselect a wiki, or free up space first.';
+    }).catch(function () { line.hidden = true; });
   }
 
   /* ---------- actions ---------- */
