@@ -35,6 +35,12 @@
   // and then the "difference" is the whole wiki, one HTTP request at a time -
   // measured at 5,169 requests from one browser after such a change. Above the
   // cap, updateStored returns null and the caller re-fetches one archive.
+  // How closely together an update may ask the server for files. 250 ms is
+  // four a second: brisk enough that a large update finishes while the reader
+  // is still on the page, slow enough that it reads as a browser rather than a
+  // crawler. See the pacing note in updateStored.
+  var MIN_REQUEST_GAP_MS = 250;
+
   var MAX_DIFF_FILES = 300;
   var MAX_DIFF_FRACTION = 0.2;
   // Below this, a proportion says nothing: two files out of four is half the
@@ -215,14 +221,35 @@
           return null;
         }
 
+        /*
+         * Paced, not just sequential.
+         *
+         * This already fetched one file at a time, but with no gap: on a fast
+         * connection a 300-file update is 300 requests as quickly as the
+         * server will answer them, from every reader whose browser decides to
+         * check at the same time. ardupilot.org is a documentation site behind
+         * one nginx, and an update that is indistinguishable from a scraper is
+         * a good way to have the feature blocked rather than adopted.
+         *
+         * The gap is measured from the START of each request, so a slow
+         * network costs nothing extra - only a fast one is held back to this
+         * rate. Nothing here is urgent: an update is a background refresh of
+         * pages the reader already has, and taking a minute over it is
+         * invisible.
+         */
         var done = 0;
         function next(i) {
           if (i >= changed.length) { return Promise.resolve(); }
+          var startedAt = Date.now();
           return fetchInto(cache, entry.id, changed[i],
                            published[changed[i]], cfg).then(function () {
             done += 1;
             if (onProgress) { onProgress(done, changed.length); }
-            return next(i + 1);
+            if (i + 1 >= changed.length) { return next(i + 1); }
+            var wait = MIN_REQUEST_GAP_MS - (Date.now() - startedAt);
+            if (wait <= 0) { return next(i + 1); }
+            return new Promise(function (go) { setTimeout(go, wait); })
+              .then(function () { return next(i + 1); });
           });
         }
 
