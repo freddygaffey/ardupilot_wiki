@@ -20,6 +20,7 @@ stops matching and the reader gets the grey box back. This turns that into a
 failed build instead.
 """
 
+import re
 import sys
 import tarfile
 from pathlib import Path
@@ -91,6 +92,87 @@ def check_assets_follow_pages():
           else f"{len(have_page)} wikis, {len(ASSETS)} assets each")
 
 
+def check_archives_carry_current_static():
+    """
+    Every archive must hold the CURRENT panel scripts, not last build's.
+
+    This is B7, and it has bitten twice. The panel's JavaScript lives in
+    common/source/_static and reaches an archive by a three-step journey:
+    copy_common_source_files() puts it in <wiki>/source/_static, Sphinx copies
+    that to <wiki>/build/html/_static, and only then does the archive writer
+    pack it. Break the chain anywhere and the archives ship a stale panel while
+    the live site serves the current one.
+
+    Nothing reported it either time. The site worked, because the live site
+    reads from disk. Only a reader who had SAVED a wiki got the old panel, and
+    only offline, which is the one place nobody was looking. The first
+    occurrence had the compressing unpacker not running at all: 0 of 119
+    entries compressed, found by accident.
+
+    Two distinct failures, so two checks:
+
+      1. archive vs built tree - the archive was packed before the build
+         finished, or was not repacked at all. Exact byte comparison.
+      2. built tree vs source - the source was edited and no build was run, so
+         BOTH the site and the archives are stale. The marker has to be
+         normalised here because copy_common_source_files strips the
+         [copywiki ...] shortcode on the way through (update.py:731).
+    """
+    sys.path.insert(0, str(REPO / "scripts"))
+    from build_offline_artifacts import content_hash
+    import json
+
+    source_dir = REPO / "common" / "source" / "_static"
+    shared = sorted(source_dir.glob("common_offline*.js")) + \
+             sorted(source_dir.glob("common_offline*.css"))
+    if not shared:
+        check("archives carry the current panel scripts", False,
+              "no common_offline* assets in common/source/_static")
+        return
+
+    # 1. archive vs built tree
+    stale_archive, checked = [], 0
+    for wiki in WIKIS:
+        table = OFFLINE / f"{wiki}-files.json"
+        built_dir = REPO / wiki / "build" / "html" / "_static"
+        if not table.is_file():
+            continue          # folded into common, or not built
+        entries = json.loads(table.read_text())
+        for f in shared:
+            key = f"{wiki}/_static/{f.name}"
+            built = built_dir / f.name
+            if key not in entries or not built.is_file():
+                continue
+            checked += 1
+            if entries[key] != content_hash(built.read_bytes()):
+                stale_archive.append(key)
+
+    check("archives hold the same bytes as the built tree",
+          not stale_archive,
+          f"{len(stale_archive)} stale, e.g. {stale_archive[0]}"
+          if stale_archive else f"{checked} asset copies match")
+
+    # 2. built tree vs source, with the copywiki marker normalised out
+    marker = re.compile(rb"\[copywiki.*?\]", re.MULTILINE)
+    stale_build = []
+    for wiki in WIKIS:
+        built_dir = REPO / wiki / "build" / "html" / "_static"
+        if not built_dir.is_dir():
+            continue
+        for f in shared:
+            built = built_dir / f.name
+            if not built.is_file():
+                continue
+            if marker.sub(b"", f.read_bytes()).strip() != \
+               marker.sub(b"", built.read_bytes()).strip():
+                stale_build.append(f"{wiki}/_static/{f.name}")
+
+    check("the built tree holds the current source, so a build was not skipped",
+          not stale_build,
+          f"{len(stale_build)} stale, e.g. {stale_build[0]}"
+          if stale_build else f"{len(shared)} assets across the built wikis")
+
+
 def main():
     wikis = [w for w in (sys.argv[1:] or WIKIS)]
     print("\noffline archives: what the reader receives\n")
@@ -127,6 +209,7 @@ def main():
               f"{local_donate} of {pages} pages")
 
     check_assets_follow_pages()
+    check_archives_carry_current_static()
 
     check("archives were present to test", checked > 0,
           f"{checked} wikis" if checked else "run update.py --offline first")

@@ -1472,6 +1472,63 @@ async function main() {
           (await bodyAt(common, '/_common/ardupilot/docs/about.html')) === null);
   }
 
+  console.log('\nregression: parameter ticks follow the cache, not the manifest (B2)');
+  {
+    // The manifest marks the newest stable as default. That is the right guess
+    // for a reader who has saved nothing, and wrong for everyone else. A reader
+    // holding 4.6.0 must see 4.6.0 ticked and the newer default clear, or
+    // pressing Save fetches a version they never asked for.
+    const versions = [
+      { file: 'docs/parameters-Copter-stable-V4.7.0.html', label: '4.7.0',
+        bytes: 5e6, 'default': true },
+      { file: 'docs/parameters-Copter-stable-V4.6.0.html', label: '4.6.0',
+        bytes: 5e6 }
+    ];
+    const man = JSON.parse(JSON.stringify(MANIFEST));
+    const copter = man.wikis.find((w) => w.id === 'copter');
+    copter.param_versions = versions;
+
+    const cachesObj = makeCaches();
+    const c = await cachesObj.open('ardupilot-offline-copter');
+    await c.put('/__ap_complete__', completeMarker(man.generated, 'copter'));
+    // The reader saved the OLDER one, and not the default.
+    await c.put('/copter/docs/parameters-Copter-stable-V4.6.0.html',
+                new FakeResponse('old params'));
+
+    const { doc } = load({ manifest: man, caches: cachesObj });
+    for (let i = 0; i < 12; i++) { await settle(); }
+
+    const ticked = [...doc.querySelectorAll('.param-check')]
+      .filter((b) => b.checked).map((b) => b.value);
+    check('the saved version is ticked', 
+          ticked.includes('docs/parameters-Copter-stable-V4.6.0.html'),
+          JSON.stringify(ticked));
+    check('the newer default is NOT ticked, because it is not saved',
+          !ticked.includes('docs/parameters-Copter-stable-V4.7.0.html'),
+          JSON.stringify(ticked));
+  }
+
+  console.log('\nregression: an unsaved wiki still defaults to the newest stable');
+  {
+    // The other half. With nothing stored there is nothing to read, so the
+    // manifest's default is the only sensible answer and must survive.
+    const man = JSON.parse(JSON.stringify(MANIFEST));
+    man.wikis.find((w) => w.id === 'copter').param_versions = [
+      { file: 'docs/parameters-Copter-stable-V4.7.0.html', label: '4.7.0',
+        bytes: 5e6, 'default': true },
+      { file: 'docs/parameters-Copter-stable-V4.6.0.html', label: '4.6.0',
+        bytes: 5e6 }
+    ];
+    const { doc } = load({ manifest: man, caches: makeCaches() });
+    for (let i = 0; i < 12; i++) { await settle(); }
+    const ticked = [...doc.querySelectorAll('.param-check')]
+      .filter((b) => b.checked).map((b) => b.value);
+    check('with nothing saved, the newest stable is ticked',
+          ticked.length === 1 &&
+          ticked[0] === 'docs/parameters-Copter-stable-V4.7.0.html',
+          JSON.stringify(ticked));
+  }
+
   console.log('\nregression: a wiki folded into common keeps its own URLs');
   {
     // The common archive carries two kinds of entry. Shared images are bare

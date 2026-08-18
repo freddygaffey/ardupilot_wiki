@@ -271,7 +271,13 @@
             build: cfg.build, saved: Date.now(), id: entry.id
           }), { headers: { 'Content-Type': 'application/json' } }));
         }).then(function () {
-          return { id: entry.id, changed: changed.length, removed: removed.length };
+          // `done`, not `changed.length`: the count the reader is shown has to
+          // be writes that completed, not writes that were planned. Today the
+          // two are always equal because a failed fetch rejects the whole
+          // update, so nothing reaches here after a failure - but that is a
+          // property of the current control flow, not a guarantee, and
+          // "Updated 9 files" must never be able to mean "meant to update 9".
+          return { id: entry.id, changed: done, removed: removed.length };
         });
       });
     });
