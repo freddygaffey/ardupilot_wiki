@@ -291,6 +291,7 @@
     untarToCache: untarToCache,
     fetchArchive: fetchArchive,
     inflate: inflate,
-    readFrom: readFrom
+    readFrom: readFrom,
+    storeEntry: storeEntry
   };
 })(typeof self !== 'undefined' ? self : this);
