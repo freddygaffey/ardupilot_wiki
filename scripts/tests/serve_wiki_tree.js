@@ -109,6 +109,29 @@ function createServer() {
     const urlPath = (req.url || '/').split('?')[0];
     const file = resolveFile(req.url || '/');
 
+    /*
+     * nginx gzip_static, which the mirror relies on and this has to match.
+     *
+     * The manifest deliberately names `<wiki>-offline.tar`, with no .gz: nginx
+     * finds the .gz beside it and serves that with Content-Encoding: gzip, so
+     * the browser inflates the archive natively and the unpacker gets a plain
+     * tar stream. Without this the archives 404 here while working in
+     * production, which is the wrong way round for a test server whose whole
+     * job is to behave like the real one. Verified against the mirror:
+     * requesting the .tar returns 200, Content-Encoding: gzip.
+     */
+    if (urlPath.endsWith('.tar') && fs.existsSync(file + '.gz')) {
+      const gz = file + '.gz';
+      res.writeHead(200, Object.assign({
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': fs.statSync(gz).size,
+        'Content-Encoding': 'gzip',
+      }, extraHeaders(urlPath)));
+      if (req.method === 'HEAD') { res.end(); return; }
+      fs.createReadStream(gz).pipe(res);
+      return;
+    }
+
     if (urlPath === '/sw.js' && workerBuild) {
       fs.readFile(file, 'utf8', (err, body) => {
         if (err) {
