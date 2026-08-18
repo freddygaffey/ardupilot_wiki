@@ -480,6 +480,78 @@ def write_common_archive(wikis, common_names, out_dir: Path, thumbs,
     return archive.stat().st_size
 
 
+
+# Historical parameter pages, which are large, near-identical, and wanted by a
+# minority.
+#
+# update.py --paramversioning drops one built .html per firmware version into
+# <wiki>/build/html/docs/, named parameters-<Vehicle>-stable-V4.5.0.html and so
+# on. There are 14 for Copter alone at 4 to 6 MB each: 242.7 MB across the five
+# vehicles that have them, against 79.6 MB if only the newest of each series is
+# kept. Point releases within a series differ by about 8%, so most of that is
+# the same file stored again.
+#
+# They are therefore kept OUT of the wiki archive and offered individually. The
+# pages are already served at their real URLs, so nothing new has to be built or
+# published - the panel fetches the ones a reader picks and stores them through
+# the same compressing path as everything else.
+#
+# parameters.html is NOT one of these. That is the latest firmware's list, the
+# one nearly everyone wants, and it stays in the archive.
+PARAM_VERSION_RE = re.compile(
+    r"^parameters-(?P<vehicle>[A-Za-z]+)-(?P<channel>stable|beta|latest)-"
+    r"V?(?P<version>[0-9][0-9A-Za-z.\-]*)\.html$"
+)
+
+
+def param_version_of(rel: Path):
+    """A description of a historical parameter page, or None if it is not one."""
+    if len(rel.parts) != 2 or rel.parts[0] != "docs":
+        return None
+    m = PARAM_VERSION_RE.match(rel.name)
+    if not m:
+        return None
+    return {
+        "file": rel.as_posix(),
+        "channel": m.group("channel"),
+        "version": m.group("version"),
+        "label": f"{m.group('version')}"
+                 + ("" if m.group("channel") == "stable" else f" {m.group('channel')}"),
+    }
+
+
+def param_versions_for(html_root: Path) -> list:
+    """Every historical parameter page this wiki built, newest first."""
+    out = []
+    docs = html_root / "docs"
+    if not docs.is_dir():
+        return out
+    for path in sorted(docs.glob("parameters-*.html")):
+        info = param_version_of(path.relative_to(html_root))
+        if not info:
+            continue
+        info["bytes"] = path.stat().st_size
+        out.append(info)
+
+    def key(e):
+        nums = [int(n) for n in re.findall(r"\d+", e["version"])] or [0]
+        return (nums, e["channel"] != "stable")
+
+    out.sort(key=key, reverse=True)
+
+    # The newest STABLE is what a reader gets unless they say otherwise.
+    #
+    # Not the newest overall: that can be a beta, and a beta parameter list is
+    # the wrong thing to hand someone by default. Not master either - that is
+    # parameters.html, which the wiki links to from everywhere and which
+    # therefore stays in the archive and is always present.
+    for e in out:
+        if e["channel"] == "stable":
+            e["default"] = True
+            break
+    return out
+
+
 def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path, thumbs,
                        wikis, files=None) -> int:
     """Pages, static assets and images unique to this wiki."""
@@ -497,6 +569,10 @@ def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path, thumbs,
                 continue
             # Never fold the offline artefacts back into themselves.
             if parts and parts[0] == "offline":
+                continue
+            # Historical parameter pages are offered separately; see
+            # param_versions_for. parameters.html is not one of these and stays.
+            if param_version_of(rel):
                 continue
             arcname = f"{wiki}/{rel.as_posix()}"
             if path.suffix == ".html":
@@ -585,7 +661,12 @@ def build(wikis, destdir: Path) -> Path:
             "archive": f"{wiki}-offline.tar",
             "files": f"{wiki}-files.json",
         })
-        log(f"  {wiki}: {size / 1048576:.0f} MB, {pages} pages")
+        versions = param_versions_for(html_root)
+        if versions:
+            entries[-1]["param_versions"] = versions
+        log(f"  {wiki}: {size / 1048576:.0f} MB, {pages} pages" +
+            (f", {len(versions)} parameter versions offered separately"
+             if versions else ""))
 
     entries.sort(key=lambda e: -e["mb"])
 
