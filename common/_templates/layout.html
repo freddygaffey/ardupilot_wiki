@@ -40,6 +40,15 @@
 
      Scoped to these pages alone, because it is only worth the risk where the
      page is generated and huge. #}
+  {# The firmware version dropdown on a parameters page lists every version the
+     build produced, but the archive holds only the ones a reader ticked, so
+     offline most of its entries lead to the fallback. This marks the ones that
+     are not saved. Loaded from _static so it travels inside the archive and is
+     therefore present in the one situation it exists for. Parameters pages
+     only: no other page has that dropdown. #}
+  {%- if pagename.startswith('docs/parameters') %}
+  <script src="{{ pathto('_static/common_offline_params.js', 1) }}" defer="defer"></script>
+  {%- endif %}
   {%- if pagename.startswith('docs/parameters') or
          pagename.startswith('docs/binary-features') or
          pagename.startswith('docs/logmessages') %}
