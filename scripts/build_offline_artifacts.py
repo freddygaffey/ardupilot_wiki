@@ -24,6 +24,7 @@ import io
 import json
 import os
 import re
+import shutil
 import tarfile
 import time
 import urllib.error
@@ -654,6 +655,47 @@ def write_file_table(out_dir: Path, name: str, files: dict) -> Path:
     return path
 
 
+def refresh_static(wikis) -> int:
+    """
+    Make sure each wiki's built _static matches its source _static.
+
+    Sphinx copies source/_static into build/html/_static as part of a build. It
+    does nothing at all for a wiki whose .rst files are unchanged, which under
+    --fast is most of them, so editing a shared asset leaves the built tree
+    holding the previous version. copy_common_source_files() is not at fault:
+    it updates source/_static correctly every time. The break is the step after
+    it, and it is silent, because the live site serves from a path that IS
+    refreshed while the archives are packed from one that is not.
+
+    That has now bitten three times. The first two were found by accident; the
+    third was found by test_offline_archives.py, which measured six of eleven
+    wikis shipping a stale panel after what looked like a clean full build.
+
+    Static files are copied verbatim by Sphinx, so doing the copy here is not a
+    workaround for the build, it is the same operation performed at the point
+    that actually depends on it. Cheap: a comparison per file, a write only on
+    a difference.
+    """
+    copied = 0
+    for wiki in wikis:
+        src = Path(wiki) / "source" / "_static"
+        dst = Path(wiki) / "build" / "html" / "_static"
+        if not src.is_dir() or not dst.is_dir():
+            continue
+        for path in sorted(src.rglob("*")):
+            if not path.is_file():
+                continue
+            target = dst / path.relative_to(src)
+            if target.is_file() and target.read_bytes() == path.read_bytes():
+                continue
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(path, target)
+            copied += 1
+    if copied:
+        log(f"refreshed {copied} static file(s) the build had left stale")
+    return copied
+
+
 def build(wikis, destdir: Path) -> Path:
     out_dir = Path(destdir) / "offline"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -662,6 +704,10 @@ def build(wikis, destdir: Path) -> Path:
     if not built:
         log("no built wikis found; nothing to do")
         return out_dir
+
+    # Before anything is packed. An archive is only as current as the tree it
+    # is read from.
+    refresh_static(built)
 
     log(f"classifying images across {len(built)} wikis")
     common_names, per_wiki = classify_images(built)

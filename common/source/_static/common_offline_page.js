@@ -369,6 +369,50 @@
     return paramPicks[w.id];
   }
 
+  /*
+   * Tick what is actually saved, not what is newest.
+   *
+   * The seed above comes from the manifest's `default` flag, which marks the
+   * newest stable. That is the right guess for someone who has saved nothing.
+   * It is the wrong answer for everyone else, and it goes wrong the moment a
+   * release lands: a reader holding 4.7.0 would open the panel to find 4.7.1
+   * ticked and 4.7.0 clear, which is the exact opposite of the truth, and
+   * pressing Save would then fetch the version they did not ask for while
+   * leaving the one they have looking unselected.
+   *
+   * So for any wiki with a completed download, the cache decides. Wikis with
+   * nothing saved keep the default. Runs once per render pass, one cache open
+   * and one match per offered version, all against caches that are already
+   * open.
+   */
+  function syncPicksWithCache(stored) {
+    var wikis = WIKIS.filter(function (w) {
+      return paramsOf(w).length && stored[w.id];
+    });
+    if (!wikis.length) { return Promise.resolve(false); }
+    return Promise.all(wikis.map(function (w) {
+      return caches.open(OFFLINE_CACHE_PREFIX + w.id).then(function (cache) {
+        return Promise.all(paramsOf(w).map(function (v) {
+          return cache.match(paramCacheKey(w, v)).then(function (hit) {
+            return hit ? v.file : null;
+          });
+        }));
+      }).then(function (files) {
+        var found = files.filter(Boolean);
+        // A saved wiki whose parameter pages are all absent means the reader
+        // deliberately took none. Honour that rather than re-ticking a default
+        // they already declined.
+        var next = {};
+        found.forEach(function (f) { next[f] = true; });
+        var before = JSON.stringify(paramPicks[w.id] || {});
+        paramPicks[w.id] = next;
+        return before !== JSON.stringify(next);
+      });
+    })).then(function (changed) {
+      return changed.some(Boolean);
+    }).catch(function () { return false; });
+  }
+
   function pickedFiles(w) {
     var picks = picksFor(w);
     return paramsOf(w).filter(function (v) { return picks[v.file]; });
@@ -436,9 +480,18 @@
     }, Promise.resolve()).then(function () { return stored; });
   }
 
-  function renderWikis() {
+  function renderWikis(afterSync) {
     return storedWikis().then(function (stored) {
       storedIds = stored;
+      // What is stored decides which parameter versions are ticked. Done here,
+      // before the rows are built, so the boxes are right on first paint
+      // rather than correcting themselves a moment later. `afterSync` stops
+      // the recursion: the second pass paints with the synced picks.
+      if (!afterSync) {
+        return syncPicksWithCache(stored).then(function () {
+          return renderWikis(true);
+        });
+      }
       var rows = [COMMON].concat(WIKIS).map(function (w) {
         var isStored = !!stored[w.id];
         var box = w.required
