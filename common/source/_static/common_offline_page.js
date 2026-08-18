@@ -243,11 +243,24 @@
     });
   }
 
+  function wikiById(id) {
+    for (var i = 0; i < WIKIS.length; i++) {
+      if (WIKIS[i].id === id) { return WIKIS[i]; }
+    }
+    return null;
+  }
+
   function selectionBytes() {
     var selectedTotal = 0, toDownload = 0;
 
     selected().forEach(function (c) {
       var b = parseInt(c.dataset.mb, 10) * 1048576;
+      // Chosen parameter versions are fetched alongside the archive, so they
+      // are part of what this selection costs even though they travel
+      // separately. Raw bytes: the figures quoted everywhere else are what
+      // crosses the wire, and these compress on the way in like anything else.
+      var w = wikiById(c.value);
+      if (w) { b += paramBytes(w); }
       selectedTotal += b;
       if (!storedIds[c.value]) { toDownload += b; }
     });
@@ -303,6 +316,104 @@
   // Set while waiting for the browser to finish reclaiming deleted space.
   var reclaimTimer = null;
 
+
+  /*
+   * Which historical parameter versions a reader wants.
+   *
+   * These are not in the wiki archives. update.py --paramversioning builds one
+   * page per firmware version - 14 for Copter at 4 to 6 MB each - and baking
+   * them in would put a third of a wiki's download behind something most
+   * people never open. The manifest lists what exists; the pages are already
+   * served at their real URLs, so a chosen one is fetched directly and stored
+   * through the same compressing path as the archive's own entries.
+   *
+   * Keyed by wiki id, holding a map of file -> true. Seeded from the
+   * manifest's default (the newest stable) the first time a wiki is seen.
+   */
+  var paramPicks = {};
+
+  function paramsOf(w) {
+    return (w && w.param_versions) || [];
+  }
+
+  function picksFor(w) {
+    if (!paramPicks[w.id]) {
+      var seed = {};
+      paramsOf(w).forEach(function (v) {
+        if (v['default']) { seed[v.file] = true; }
+      });
+      paramPicks[w.id] = seed;
+    }
+    return paramPicks[w.id];
+  }
+
+  function pickedFiles(w) {
+    var picks = picksFor(w);
+    return paramsOf(w).filter(function (v) { return picks[v.file]; });
+  }
+
+  /** Bytes the chosen versions add to this wiki, before compression. */
+  function paramBytes(w) {
+    return pickedFiles(w).reduce(function (n, v) { return n + (v.bytes || 0); }, 0);
+  }
+
+  function paramCacheKey(w, v) {
+    return '/' + w.id + '/' + v.file;
+  }
+
+  /*
+   * The disclosure row under a wiki, listing every version it built.
+   *
+   * Hidden until asked for: five vehicles carry these and an always-open list
+   * of fourteen checkboxes each would bury the eleven rows that matter.
+   */
+  function paramRowFor(w) {
+    var versions = paramsOf(w);
+    if (!versions.length) { return ''; }
+    var picks = picksFor(w);
+    var boxes = versions.map(function (v) {
+      return '<label class="apo-param">' +
+               '<input type="checkbox" class="param-check" data-wiki="' + w.id +
+                 '" value="' + v.file + '"' + (picks[v.file] ? ' checked' : '') + '>' +
+               '<span>' + v.label + '</span>' +
+               '<small>' + Math.round((v.bytes || 0) / 1048576) + ' MB</small>' +
+             '</label>';
+    }).join('');
+    return '<tr class="apo-param-row" data-params-for="' + w.id + '" hidden>' +
+             '<td colspan="5">' +
+               '<p class="apo-param-note">Parameter lists for older firmware. ' +
+                 'The current list is always included.</p>' +
+               '<div class="apo-param-grid">' + boxes + '</div>' +
+             '</td>' +
+           '</tr>';
+  }
+
+  /** Fetch and store the versions chosen for one wiki. */
+  function storeParams(w, cache, report) {
+    var wanted = pickedFiles(w);
+    if (!wanted.length) { return Promise.resolve(0); }
+    var stored = 0;
+    return wanted.reduce(function (chain, v) {
+      return chain.then(function () {
+        var url = paramCacheKey(w, v);
+        return fetch(url, { cache: 'no-cache' }).then(function (r) {
+          if (!r.ok) { throw new Error(url + ' (' + r.status + ')'); }
+          return r.arrayBuffer();
+        }).then(function (buf) {
+          var body = new Uint8Array(buf);
+          stored += body.length;
+          if (report) { report(w.name + ' · parameters ' + v.label); }
+          return ApUnpack.storeEntry(cache, url, v.file, body);
+        }).catch(function (err) {
+          // One missing version must not fail a whole wiki: the pages are
+          // republished on every build and a reader who asked for a version
+          // that has just been retired should still get their wiki.
+          console.warn('[offline] parameter version skipped', err && err.message);
+        });
+      });
+    }, Promise.resolve()).then(function () { return stored; });
+  }
+
   function renderWikis() {
     return storedWikis().then(function (stored) {
       storedIds = stored;
@@ -317,7 +428,13 @@
           : '<span class="apo-badge apo-badge-none">Not saved</span>';
         return '<tr data-wiki="' + w.id + '">' +
                  '<td class="apo-name"><label class="apo-pick">' + box +
-                   '<span>' + w.name + '</span></label></td>' +
+                   '<span>' + w.name + '</span></label>' +
+                   (paramsOf(w).length
+                     ? ' <button type="button" class="apo-param-toggle" ' +
+                         'data-toggle-params="' + w.id + '" aria-expanded="false">' +
+                         paramsOf(w).length + ' parameter versions</button>'
+                     : '') +
+                 '</td>' +
                  '<td class="apo-num">' + w.mb + ' MB</td>' +
                  '<td class="apo-num apo-pages">' + (w.pages || '') + '</td>' +
                  // Rendered from state, not painted on afterwards: renderWikis
@@ -329,7 +446,7 @@
                      (isStored ? '100%' : '0') + '"></div>' +
                    '<span>' + (isStored ? '100%' : '') + '</span></div></td>' +
                  '<td class="apo-num">' + badge + '</td>' +
-               '</tr>';
+               '</tr>' + paramRowFor(w);
       });
       el('wiki-rows').innerHTML = rows.join('');
 
@@ -632,6 +749,12 @@
                 base: ARTIFACT_BASE,
                 build: CURRENT_BUILD,
                 signal: activeDownload ? activeDownload.signal : undefined
+              }).then(function () {
+                // After the archive, before the completion marker: the chosen
+                // parameter versions are part of this download, so a copy that
+                // is marked complete without them would be a copy the panel
+                // says is saved and that is missing what the reader asked for.
+                return storeParams(entry, cache, report);
               }).then(function () {
                 rowProgress(entry.id, 100, 'done');
                 // Store the file table beside the files it describes, so a
@@ -1020,7 +1143,44 @@
 
   /* ---------- wiring ---------- */
 
+  /*
+   * The disclosure button, and the versions inside it.
+   *
+   * Delegated like everything else here, because renderWikis() replaces the
+   * whole tbody whenever a download finishes and any handler bound to a row
+   * would go with it.
+   */
+  document.addEventListener('click', function (e) {
+    var btn = e.target.closest && e.target.closest('.apo-param-toggle');
+    if (!btn) { return; }
+    var id = btn.getAttribute('data-toggle-params');
+    var row = document.querySelector('[data-params-for="' + id + '"]');
+    if (!row) { return; }
+    var open = row.hasAttribute('hidden');
+    if (open) { row.removeAttribute('hidden'); } else { row.setAttribute('hidden', ''); }
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+
   document.addEventListener('change', function (e) {
+    if (e.target.classList.contains('param-check')) {
+      var id = e.target.getAttribute('data-wiki');
+      var w = wikiById(id);
+      if (w) {
+        picksFor(w)[e.target.value] = e.target.checked;
+        if (!e.target.checked) { delete picksFor(w)[e.target.value]; }
+      }
+      // Picking a version implies wanting the wiki it belongs to; without this
+      // a reader ticks four versions, presses Save, and nothing happens.
+      var box = document.querySelector('.wiki-check[value="' + id + '"]');
+      if (box && e.target.checked && !box.checked) {
+        box.checked = true;
+        syncSelectAll();
+        updateExportState();
+        updateSaveState();
+      }
+      updateTotal();
+      updateSaveState();
+    }
     if (e.target.classList.contains('wiki-check')) {
       syncSelectAll();
       updateTotal();
