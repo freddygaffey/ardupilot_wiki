@@ -49,6 +49,10 @@ function liftLookup(src) {
                     /const OFFLINE_CACHE_PREFIX\s*=\s*[^;]*;/,
                     /const FOLDED_INTO_COMMON\s*=\s*[^;]*;/,
                     /const AP_ENCODED\s*=\s*[^;]*;/,
+                    // Before STATIC_CACHE, which interpolates it.
+                    /const CACHE_VERSION\s*=\s*[^;]*;/,
+                    /const STATIC_CACHE\s*=\s*[^;]*;/,
+                    /const PARAM_INDEX\s*=\s*[^;]*;/,
                     /let knownCacheNames\s*=\s*[^;]*;/,
                     /const markerChecked\s*=\s*[^;]*;/,
                     /const openedCaches\s*=\s*[^;]*;/]) {
@@ -62,6 +66,7 @@ function liftLookup(src) {
   // return value.
   for (const name of ['storedShapes', 'likelyCacheName', 'isComplete',
                       'offlineCacheFor', 'inflate', 'heldOffline', 'cacheFirst',
+                      'keep', 'paramIndex',
                       'plausibleBody']) {
     const at = src.indexOf('function ' + name + '(');
     if (at === -1) { return null; }
@@ -188,7 +193,8 @@ function run(workerSrc, label) {
   vm.createContext(ctx);
   vm.runInContext(lifted +
     'this.storedShapes=storedShapes;this.heldOffline=heldOffline;' +
-    'this.cacheFirst=cacheFirst;this.likelyCacheName=likelyCacheName;', ctx);
+    'this.cacheFirst=cacheFirst;this.likelyCacheName=likelyCacheName;' +
+    'this.paramIndex=paramIndex;this.PARAM_INDEX=PARAM_INDEX;', ctx);
 
   const ask = (u) => ctx.heldOffline({ url: 'https://example.test' + u });
   const askImage = async (u) => {
@@ -833,6 +839,96 @@ async function checkVersionBump() {
 
 function seenDeleted(w, name) { return w.seen.deleted.includes(name); }
 
+/** A Request or string, as the path the caches are keyed by. */
+function keyOfUrl(r) {
+  const u = typeof r === 'string' ? r : r.url;
+  return u.startsWith('http') ? new URL(u).pathname : u;
+}
+
+/*
+ * The firmware version dropdown offers only what this device can open.
+ *
+ * The index names every version the build produced; the archive holds the ones
+ * the reader ticked, because those pages are 4 to 6 MB each. Offline that made
+ * the dropdown offer fifteen doors of which one opened.
+ *
+ * Filtered in the worker rather than on the page, and this is why: 66 of the 72
+ * pages carrying that dropdown are frozen HTML copied out of
+ * ../old_params_mversion which Sphinx never renders, so no template can reach
+ * them. They all fetch this one URL. Nothing filtered is stored either - a
+ * trimmed copy written to the cache would sit under the archive's file table,
+ * which hashes this path, so the next differential update would fetch the real
+ * one back and the dropdown would quietly start lying again.
+ */
+async function checkParamIndexFiltered() {
+  console.log('\nservice worker: the version dropdown offers only what is held');
+
+  const INDEX = '/copter/_static/parameters-Copter.json';
+  const published = {
+    'Copter stable V4.7.0': 'parameters-Copter-stable-V4.7.0.html',
+    'Copter stable V4.6.3': 'parameters-Copter-stable-V4.6.3.html',
+    'Copter stable V4.5.7': 'parameters-Copter-stable-V4.5.7.html',
+    'Copter latest V4.8.0-dev': 'parameters.html'
+  };
+  const held = new Set([
+    INDEX,
+    '/copter/docs/parameters.html',
+    '/copter/docs/parameters-Copter-stable-V4.7.0.html'
+  ]);
+
+  const body = (path) => ({
+    url: path,
+    clone() { return body(path); },
+    headers: { get: () => null },
+    json: async () => published,
+    text: async () => JSON.stringify(published),
+  });
+
+  const ctx = {
+    URL, console,
+    caches: {
+      keys: async () => ['ardupilot-offline-copter'],
+      match: async (r) => (held.has(keyOfUrl(r)) ? body(keyOfUrl(r)) : undefined),
+      open: async () => ({
+        match: async (r) => {
+          const k = keyOfUrl(r);
+          if (k === '/__ap_complete__') { return body(k); }
+          return held.has(k) ? body(k) : undefined;
+        },
+        put: async () => undefined,
+      }),
+    },
+    fetch: async () => { throw new TypeError('Failed to fetch'); },
+    Request: class { constructor(u) { this.url = String(u); } },
+    Response: class {
+      constructor(b, init) { this._b = b; Object.assign(this, init); }
+      async json() { return JSON.parse(this._b); }
+    },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(liftLookup(fs.readFileSync(WORKER, 'utf8')) +
+    'this.paramIndex=paramIndex;this.PARAM_INDEX=PARAM_INDEX;', ctx);
+
+  check('the index URL is recognised as one to filter',
+        ctx.PARAM_INDEX.test(INDEX), INDEX);
+  check('an ordinary static file is not',
+        !ctx.PARAM_INDEX.test('/copter/_static/theme.css'));
+
+  const res = await ctx.paramIndex({ url: 'https://example.test' + INDEX },
+                                   new URL('https://example.test' + INDEX));
+  const out = res ? await res.json() : null;
+  const labels = out ? Object.keys(out) : [];
+
+  check('offline, only the versions actually stored are offered',
+        labels.length === 2, JSON.stringify(labels));
+  check('the version the reader saved is one of them',
+        labels.indexOf('Copter stable V4.7.0') !== -1, JSON.stringify(labels));
+  check('the current list, which ships in the archive, is the other',
+        labels.indexOf('Copter latest V4.8.0-dev') !== -1, JSON.stringify(labels));
+  check('a version that was never saved is gone',
+        labels.indexOf('Copter stable V4.6.3') === -1, JSON.stringify(labels));
+}
+
 async function main() {
   console.log('\nservice worker: offline lookup\n');
   checkWorkerEvaluates();
@@ -978,6 +1074,7 @@ async function main() {
   await checkMarkerRespected();
   await checkNoFalseUpdateToast();
   await checkFullStorageFailsOpen();
+  await checkParamIndexFiltered();
 
   console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                        : '\nall checks passed\n');

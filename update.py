@@ -942,48 +942,6 @@ def put_cached_parameters_files_in_sites(site=None):
                 pass
 
 
-def add_offline_script_to_cached_parameters(site=None):
-    """
-    Give the frozen parameter pages the script that fixes their dropdown.
-
-    put_cached_parameters_files_in_sites() above copies pre-built HTML out of
-    ../old_params_mversion. Those files are never rendered by Sphinx, so a
-    change to common/_templates/layout.html reaches parameters.html, which is
-    rebuilt every run, and never reaches these 66. They carry pwa.js and the
-    content-visibility styles only because layout.html happened to contain them
-    on the day they were generated.
-
-    Each one shows the same firmware version dropdown, listing every version the
-    build produced while the reader's archive holds only what they ticked, so
-    offline most of its entries lead to the fallback. Without this, the fix
-    covers the page a reader arrives at and not the page the dropdown takes them
-    to.
-
-    A single tag before </head>, skipped if already present so repeated builds
-    do not stack copies. The path matches the one the page's own inline script
-    already uses for parameters-<Vehicle>.json, so it resolves from docs/.
-    """
-    tag = ('<script src="../_static/common_offline_params.js" '
-           'defer="defer"></script>')
-    patched = 0
-    for key in PARAMETER_SITE:
-        if site is not None and site != key:
-            continue
-        folder = Path(key) / "build" / "html" / "docs"
-        if not folder.is_dir():
-            continue
-        for page in sorted(folder.glob("parameters-*.html")):
-            html = page.read_text(encoding="utf-8", errors="replace")
-            if "common_offline_params.js" in html or "</head>" not in html:
-                continue
-            page.write_text(html.replace("</head>", tag + "\n</head>", 1),
-                            encoding="utf-8")
-            patched += 1
-    if patched:
-        info(f"Offline: version dropdown script added to {patched} cached "
-             f"parameter page(s)")
-
-
 def update_frontend_json():
     """
     Frontend get posts from Forum server and insert it into JSON
@@ -1335,7 +1293,6 @@ class WikiUpdater:
         sphinx_make(self.args.site, self.args.parallel, self.args.fast)
         if self.args.paramversioning:
             put_cached_parameters_files_in_sites(self.args.site)
-            add_offline_script_to_cached_parameters(self.args.site)
             cache_parameters_files(self.args.site)
 
         check_build(self.args.site)

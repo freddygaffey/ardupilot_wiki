@@ -457,6 +457,87 @@ function isPage(url) {
   return /\.html?$/.test(url.pathname) || url.pathname.endsWith('/');
 }
 
+/*
+ * The firmware version index behind the dropdown on a parameters page.
+ *
+ * /copter/_static/parameters-Copter.json, a map of label to filename, which
+ * parameters.html and all 66 historical parameter pages fetch to build their
+ * <select>. Roughly 971 bytes.
+ */
+const PARAM_INDEX = /^\/([^/]+)\/_static\/parameters-[A-Za-z0-9_]+\.json$/;
+
+/*
+ * Answer the version index with the versions this device can actually open.
+ *
+ * The index names every version the build produced. The archive holds only the
+ * ones a reader ticked, because the pages are 4 to 6 MB each and were made
+ * opt-in to keep Copter at 74 MB rather than 317 MB. So offline the dropdown
+ * offers fifteen doors and one opens: measured on a default save, six followed,
+ * five landed on the offline fallback.
+ *
+ * Filtered here rather than on the page, and that is the whole point. A page
+ * script would have to be delivered to every page carrying the dropdown, and 66
+ * of them are frozen HTML copied out of ../old_params_mversion that Sphinx
+ * never renders, so no template can reach them. They all fetch this one URL.
+ * One intercept covers all 72.
+ *
+ * Nothing filtered is ever stored. Writing a trimmed copy into the cache would
+ * put it under the archive's file table, which hashes this path, so the next
+ * differential update would fetch the real one back and the dropdown would
+ * quietly start lying again. Computing it per request means the answer is
+ * always the current contents of the cache.
+ *
+ * Network first, so being online is never affected: every version really is
+ * reachable then, and the reader should see all of them.
+ */
+async function paramIndex(request, url) {
+  try {
+    const fresh = await fetch(request);
+    if (fresh && fresh.ok) {
+      await keep(STATIC_CACHE, request, fresh.clone());
+      return fresh;
+    }
+  } catch (err) {
+    // Offline. Fall through to the stored index.
+  }
+
+  const held = await heldOffline(request);
+  if (!held) {
+    return undefined;
+  }
+
+  let index;
+  try {
+    index = await held.clone().json();
+  } catch (err) {
+    return held;               // not the shape we expected; do not mangle it
+  }
+
+  const wiki = url.pathname.split('/')[1];
+  const out = {};
+  for (const label of Object.keys(index)) {
+    // Values are bare filenames resolved against the page, which lives in
+    // docs/. The page itself carries no path, so this is where it is built.
+    const target = new URL('/' + wiki + '/docs/' + index[label], url.origin);
+    if (await heldOffline(new Request(target.href))) {
+      out[label] = index[label];
+    }
+  }
+
+  // An empty dropdown is worse than an over-full one, and it should not be
+  // reachable: a reader looking at a parameters page offline necessarily has
+  // that page, so its own entry survives the filter. Belt and braces.
+  if (!Object.keys(out).length) {
+    return held;
+  }
+
+  return new Response(JSON.stringify(out), {
+    status: 200,
+    statusText: 'OK',
+    headers: { 'Content-Type': 'application/json' }
+  });
+}
+
 function isStatic(url) {
   // .js and .css are handled earlier, network-first. This covers fonts and the
   // rest of _static, which are large, change rarely, and are safe from cache.
@@ -980,6 +1061,13 @@ self.addEventListener('fetch', (event) => {
 
   if (isImage(url)) {
     event.respondWith(safely(cacheFirst(request, IMAGE_CACHE), request));
+    return;
+  }
+
+  // Before isStatic, which is cache-first: this one has to try the network
+  // every time so that being online shows every version.
+  if (PARAM_INDEX.test(url.pathname)) {
+    event.respondWith(safely(paramIndex(request, url), request));
     return;
   }
 

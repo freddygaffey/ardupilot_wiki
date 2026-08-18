@@ -1508,6 +1508,51 @@ async function main() {
           !dd || ![...dd.options].some((o) => o.value.indexOf('V4.5.2') !== -1));
   }
 
+  console.log('\nB8: the toast says why, and offers a button');
+  {
+    // "A full download is needed" had three causes and one wording: a diff too
+    // large, a published file list that will not fetch, and a saved copy with
+    // no file list to compare against. Only the first is "a lot has changed".
+    // The other two are "I cannot tell what changed", and wording them as the
+    // first sends the reader looking for a change that never happened - the
+    // real diff across every wiki today is one file.
+    const cachesObj = makeCaches();
+    const c = await cachesObj.open('ardupilot-offline-dev');
+    await c.put('/dev/index.html', new FakeResponse('<html>'));
+    await c.put('/__ap_complete__', completeMarker(OLD_BUILD, 'dev'));
+    (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'common'));
+
+    const { doc, sandbox, fetchCalls } = load({
+      manifest: MANIFEST, caches: cachesObj,
+      archives: { 'dev/index.html': '<html>new' },
+    });
+    await settle();
+    doc.getElementById('autoupdate').checked = false;
+    doc.getElementById('autoupdate').dispatchEvent(
+      new sandbox.window.Event('change', { bubbles: true }));
+    doc.getElementById('autoupdate').checked = true;
+    doc.getElementById('autoupdate').dispatchEvent(
+      new sandbox.window.Event('change', { bubbles: true }));
+    for (let i = 0; i < 20; i++) { await settle(); }
+
+    const msg = (doc.querySelector('.ap-toast-msg') || {}).textContent || '';
+    const btn = doc.querySelector('.ap-toast-action');
+    check('the toast names the wiki rather than sending the reader to look',
+          /Developer/.test(msg), JSON.stringify(msg));
+    check('and it offers a button', !!btn && !btn.hidden &&
+          /redownload/i.test(btn.textContent),
+          btn ? JSON.stringify(btn.textContent) : 'NO BUTTON');
+    check('the button has not downloaded anything by merely existing',
+          !fetchCalls.some((u) => u.indexOf('.tar') !== -1));
+
+    btn.click();
+    for (let i = 0; i < 20; i++) { await settle(); }
+    check('pressing it starts the download, which a quiet toast may not do alone',
+          fetchCalls.some((u) => u.indexOf('.tar') !== -1),
+          JSON.stringify(fetchCalls.filter((u) => u.indexOf('.tar') !== -1).slice(0, 2)));
+  }
+
   console.log('\nB14: a shortlist of ticks, and a dropdown for the rest');
   {
     // Copter builds fourteen versions. Fourteen tick boxes is why the block had
