@@ -56,6 +56,8 @@ const VISITED = '/dev/docs/building-setup-linux.html';
 const ALSO_VISITED = '/dev/index.html';
 const NEVER_VISITED = '/dev/docs/apmcopter-programming-libraries.html';
 const SEARCH_PAGE = '/dev/search.html';
+// Never served by the server; only ever answered from a compressed cache entry.
+const COMPRESSED_PROBE = '/dev/docs/ap-compressed-probe.html';
 
 /* ---------------------------------------------------------------- harness -- */
 
@@ -391,6 +393,29 @@ async function runEngine(name, launcher, base) {
           'median ' + onlineSpeed.median + ' ms, worst ' + onlineSpeed.worst +
           ' ms of [' + onlineSpeed.all.join(', ') + ']');
 
+    /*
+     * A page stored the way a downloaded wiki now stores one: gzipped, with the
+     * marker header, in an ardupilot-offline-* cache carrying its completion
+     * marker. If the worker serves this as-is the reader sees mojibake, not an
+     * error, which is the kind of failure that reaches people rather than
+     * tests. Seeded before the server stops so the write itself is ordinary.
+     */
+    const compressedSeed = await page.evaluate(async (probe) => {
+      const html = '<!doctype html><html><head><title>Compressed probe</title>' +
+        '</head><body><h1 id="probe">INFLATED-FROM-CACHE</h1><p>' +
+        'padding '.repeat(400) + '</p></body></html>';
+      const packed = await new Response(
+        new Blob([html]).stream().pipeThrough(new CompressionStream('gzip'))
+      ).arrayBuffer();
+      const cache = await caches.open('ardupilot-offline-dev');
+      await cache.put('/__ap_complete__', new Response('1'));
+      await cache.put(probe, new Response(packed, {
+        headers: { 'Content-Type': 'text/html; charset=utf-8',
+                   'x-ap-encoding': 'gzip' },
+      }));
+      return { raw: html.length, packed: packed.byteLength };
+    }, COMPRESSED_PROBE);
+
     /* ---- go offline for real ------------------------------------------- */
 
     serverHandle = global.__server;
@@ -495,6 +520,24 @@ async function runEngine(name, launcher, base) {
             JSON.stringify(fb.title));
     }
 
+
+    /* ---- a compressed cache entry, read back offline -------------------- */
+
+    let probeErr = null;
+    try {
+      await page.goto(base + COMPRESSED_PROBE, { waitUntil: 'load', timeout: 20000 });
+    } catch (err) {
+      probeErr = String(err.message).split('\n')[0];
+    }
+    const probeText = probeErr ? null : await page.evaluate(() => {
+      const h = document.getElementById('probe');
+      return h ? h.textContent : (document.body.innerText || '').slice(0, 40);
+    });
+    check(name, 'a gzipped cache entry is inflated, not served as bytes',
+          probeText === 'INFLATED-FROM-CACHE',
+          probeErr || JSON.stringify(String(probeText).slice(0, 30)) +
+          '  (' + compressedSeed.raw + ' -> ' + compressedSeed.packed + ' bytes)');
+
     /* ---- the offline panel itself -------------------------------------- */
 
     let panelError = null;
@@ -539,7 +582,18 @@ async function runEngine(name, launcher, base) {
     const fatal = consoleErrors
       .concat(pageErrors)
       .filter((t) => !/favicon|Failed to load resource/i.test(t))
-      .filter((t) => !/\/sw\.js/.test(t));
+      .filter((t) => !/\/sw\.js/.test(t))
+      /*
+       * A message that names only third-party URLs is about a third party.
+       * Firefox reports the YouTube embeds' blocked doubleclick requests with
+       * no location of its own, so filtering by m.location() alone lets them
+       * through. Reading the URLs out of the text catches them without a
+       * blocklist of hostnames that would need maintaining.
+       */
+      .filter((t) => {
+        const urls = t.match(/https?:\/\/[^\s"')]+/g);
+        return !urls || urls.some((u) => u.startsWith(base));
+      });
     check(name, 'no unexplained console errors', fatal.length === 0,
           fatal.slice(0, 3).join(' | '));
 

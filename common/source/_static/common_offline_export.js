@@ -164,7 +164,7 @@
    * it: 11 MB across eleven wikis becomes 5 MB, against a 970 MB export.
    */
   function readSearchIndex(entry) {
-    return entry.cache.match(entry.path)
+    return ApUnpack.readFrom(entry.cache, entry.path)
       .then(function (r) { return r.text(); })
       .then(function (src) {
         var open = src.indexOf('('), close = src.lastIndexOf(')');
@@ -264,7 +264,7 @@
             var chain = Promise.resolve();
             pages.forEach(function (p, i) {
               chain = chain.then(function () {
-                return p.cache.match(p.path)
+                return ApUnpack.readFrom(p.cache, p.path)
                   .then(function (res) { return res.text(); })
                   .then(function (html) {
                     var title = (html.match(/<title>([^<]*)<\/title>/i) || [])[1] ||
@@ -309,7 +309,7 @@
               var byWiki = {};
               loaded.forEach(function (e) { if (e) { byWiki[e[0]] = e[1]; } });
               var stem = stemmerSrc
-                ? stemmerSrc.cache.match(stemmerSrc.path)
+                ? ApUnpack.readFrom(stemmerSrc.cache, stemmerSrc.path)
                     .then(function (r) { return r.text(); })
                     .catch(function () { return ''; })
                 : Promise.resolve('');
@@ -354,7 +354,7 @@
     var chain = Promise.resolve('');
     wanted.forEach(function (path) {
       chain = chain.then(function (acc) {
-        return styles[path].match(path)
+        return ApUnpack.readFrom(styles[path], path)
           .then(function (r) { return r.text(); })
           .then(function (css) { return inlineCssUrls(css, path, assets); })
           .then(function (css) { return acc + '\n' + css; })
@@ -381,7 +381,7 @@
         var clean = ref.split('?')[0].split('#')[0];
         var resolved = clean.charAt(0) === '/' ? clean : resolvePath(cssPath, clean);
         if (!assets[resolved]) { return current; }
-        return assets[resolved].match(resolved)
+        return ApUnpack.readFrom(assets[resolved], resolved)
           .then(function (r) { return r.arrayBuffer(); })
           .then(function (buf) {
             var uri = 'data:' + mimeFor(resolved) + ';base64,' +
@@ -449,7 +449,7 @@
 
         var id = imgIds[hit] = imgIds.__next++;
         if (imgPaths) { imgPaths[resolved] = id; }
-        return assets[hit].match(hit)
+        return ApUnpack.readFrom(assets[hit], hit)
           .then(function (res) { return res.arrayBuffer(); })
           .then(function (buf) {
             fresh.push({

@@ -132,10 +132,7 @@
           var entryName = override || name;
           override = null;
           var path = prefix + entryName;
-          return cache.put(
-            new Request(path),
-            new Response(body, { headers: { 'Content-Type': mimeFor(entryName) } })
-          ).then(function () {
+          return storeEntry(cache, path, entryName, body).then(function () {
             if (onEntry) { onEntry(path); }
             return step();
           });
@@ -144,6 +141,95 @@
     }
 
     return step();
+  }
+
+
+  /*
+   * Cache Storage holds what you put in it, uncompressed.
+   *
+   * The archives arrive as .tar.gz, so the DOWNLOAD was never the problem;
+   * unpacking is what costs. Measured across all twelve archives: 454.8 MB of
+   * html, js, css and search indexes against 711.5 MB of images that are
+   * already jpeg and png and cannot be squeezed further. Stored as they came
+   * out of the tar that is 1,166 MB, which is past the 1.0 GB WebKit reports
+   * as its quota. Gzipping just the text takes it to 769 MB.
+   *
+   * So text goes in compressed and the service worker inflates it on the way
+   * out. Images go in untouched, because spending CPU on both ends to save
+   * nothing would be worse than doing nothing.
+   *
+   * AP_ENCODED marks the ones that need inflating. A header rather than a
+   * naming convention, because the key has to stay the real page URL for the
+   * worker to find it, and rather than "compress anything that looks like
+   * text" because the reader of a cache entry should not have to guess what
+   * the writer decided.
+   */
+  var AP_ENCODED = 'x-ap-encoding';
+  var COMPRESSIBLE = /\.(html?|js|mjs|css|json|svg|xml|txt|inv|map)$/i;
+
+  function canCompress() {
+    return typeof CompressionStream === 'function';
+  }
+
+  function gzip(bytes) {
+    var stream = new Response(bytes).body
+      .pipeThrough(new CompressionStream('gzip'));
+    return new Response(stream).arrayBuffer();
+  }
+
+  /**
+   * Write one entry, compressed when that is worth doing.
+   *
+   * Falls back to storing the bytes as they are whenever anything is not
+   * right: no CompressionStream (nothing shipping supports service workers
+   * and not this, but the check is free), or the compressed form came out no
+   * smaller. A reader must never end up with an entry that cannot be read
+   * back, so every failure path here stores the plain bytes.
+   */
+  function storeEntry(cache, path, entryName, body) {
+    var type = mimeFor(entryName);
+    var plain = function () {
+      return cache.put(new Request(path),
+        new Response(body, { headers: { 'Content-Type': type } }));
+    };
+    if (!canCompress() || !COMPRESSIBLE.test(entryName) || body.length < 1024) {
+      return plain();
+    }
+    return gzip(body).then(function (packed) {
+      if (!packed || packed.byteLength >= body.length) { return plain(); }
+      var headers = { 'Content-Type': type };
+      headers[AP_ENCODED] = 'gzip';
+      return cache.put(new Request(path), new Response(packed, { headers: headers }));
+    }).catch(plain);
+  }
+
+
+  /*
+   * Read an entry back, inflating it if it was stored compressed.
+   *
+   * Everything that reads these caches has to come through here or through the
+   * service worker's copy of it. The exporter reads them directly to build the
+   * single-file HTML, and a gzip body handed to .text() produces mojibake
+   * rather than an error, so a missed call site would corrupt an export
+   * silently rather than fail.
+   */
+  function inflate(response) {
+    if (!response || !response.headers ||
+        response.headers.get(AP_ENCODED) !== 'gzip') {
+      return response;
+    }
+    if (typeof DecompressionStream !== 'function') { return undefined; }
+    var headers = new Headers(response.headers);
+    headers.delete(AP_ENCODED);
+    return new Response(
+      response.body.pipeThrough(new DecompressionStream('gzip')),
+      { status: 200, statusText: 'OK', headers: headers }
+    );
+  }
+
+  /** cache.match, but readable. */
+  function readFrom(cache, path) {
+    return cache.match(path).then(inflate);
   }
 
   /**
@@ -203,6 +289,8 @@
   global.ApUnpack = {
     mimeFor: mimeFor,
     untarToCache: untarToCache,
-    fetchArchive: fetchArchive
+    fetchArchive: fetchArchive,
+    inflate: inflate,
+    readFrom: readFrom
   };
 })(typeof self !== 'undefined' ? self : this);
