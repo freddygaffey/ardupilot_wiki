@@ -524,3 +524,27 @@
 
 #quota-warning[hidden] { display: none; }
 #quota-warning { margin: .6em 0 0; }
+
+/* The dropdown that reaches the parameter versions not worth a tick box of
+   their own. Sits in the same grid as the ticks and is the same height, so it
+   reads as one more option rather than a separate control. */
+.apo-param-more {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.5rem;
+  border: 1px dashed rgba(128, 128, 128, 0.5);
+  border-radius: 3px;
+  font-size: 0.9em;
+}
+.apo-param-more select {
+  flex: 1 1 auto;
+  min-width: 7rem;
+  max-width: 100%;
+  padding: 0.15rem 0.25rem;
+  font: inherit;
+}
+/* The current list is part of the wiki download. Muted so it reads as a
+   statement of fact rather than a choice the reader failed to make. */
+.apo-param-fixed { opacity: 0.75; }
+.apo-param-fixed input { cursor: not-allowed; }

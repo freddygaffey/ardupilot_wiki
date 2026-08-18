@@ -423,6 +423,80 @@
     return pickedFiles(w).reduce(function (n, v) { return n + (v.bytes || 0); }, 0);
   }
 
+  // Versions promoted out of the dropdown and into the tick list. Held per
+  // wiki for the life of the page. A promoted version that gets saved is
+  // recognised by syncPicksWithCache on the next load and shortlists itself,
+  // so this only has to survive until then.
+  var paramPromoted = {};
+
+  /** "4.7.0" -> "4.7". The release series a version belongs to. */
+  function seriesOf(v) {
+    var m = /^(\d+\.\d+)/.exec(v.version || '');
+    return m ? m[1] : (v.version || v.file);
+  }
+
+  /** Newest first, so "the newest of this series" is a comparison not a guess. */
+  function compareVersions(a, b) {
+    var pa = String(a.version || '').split('.');
+    var pb = String(b.version || '').split('.');
+    for (var i = 0; i < Math.max(pa.length, pb.length); i++) {
+      var na = parseInt(pa[i], 10) || 0, nb = parseInt(pb[i], 10) || 0;
+      if (na !== nb) { return nb - na; }
+    }
+    // A stable release outranks a beta carrying the same number.
+    if (a.channel !== b.channel) { return a.channel === 'stable' ? -1 : 1; }
+    return 0;
+  }
+
+  /*
+   * Which versions get a tick box of their own.
+   *
+   * Copter builds fourteen. Showing all fourteen as ticks was the reason the
+   * whole block had to be hidden behind a disclosure button in the first place,
+   * and it still asked the reader to read fourteen near-identical lines to find
+   * the two they cared about. Nine of the fourteen are point releases within a
+   * series that differ from their neighbours by about 8%.
+   *
+   * So the ticks are the ones worth a glance:
+   *   - the newest stable of each release series (4.7.0, 4.6.3, 4.5.7)
+   *   - anything already saved, so what you have is never hidden from you
+   *   - anything promoted from the dropdown, so a choice you made stays made
+   *
+   * Everything else goes in the dropdown, and picking it from there promotes it
+   * here. The user asked for exactly this: "both tick and dropdown ... like the
+   * dropdown is custom then it will appear as a tickbox".
+   */
+  function shortlistFor(w) {
+    var versions = paramsOf(w);
+    var picks = picksFor(w);
+    var promoted = paramPromoted[w.id] || {};
+    var newestOfSeries = {};
+    versions.forEach(function (v) {
+      if (v.channel !== 'stable') { return; }
+      var key = seriesOf(v);
+      if (!newestOfSeries[key] || compareVersions(v, newestOfSeries[key]) < 0) {
+        newestOfSeries[key] = v;
+      }
+    });
+    var keep = {};
+    Object.keys(newestOfSeries).forEach(function (k) {
+      keep[newestOfSeries[k].file] = true;
+    });
+    versions.forEach(function (v) {
+      if (picks[v.file] || promoted[v.file]) { keep[v.file] = true; }
+    });
+    return versions.filter(function (v) { return keep[v.file]; })
+                   .sort(compareVersions);
+  }
+
+  /** The rest: reachable through the dropdown, one press away from a tick. */
+  function paramRestFor(w) {
+    var shown = {};
+    shortlistFor(w).forEach(function (v) { shown[v.file] = true; });
+    return paramsOf(w).filter(function (v) { return !shown[v.file]; })
+                      .sort(compareVersions);
+  }
+
   function paramCacheKey(w, v) {
     return '/' + w.id + '/' + v.file;
   }
@@ -437,19 +511,49 @@
     var versions = paramsOf(w);
     if (!versions.length) { return ''; }
     var picks = picksFor(w);
-    var boxes = versions.map(function (v) {
+    var mb = function (v) { return Math.round((v.bytes || 0) / 1048576); };
+
+    // The current list ships inside the wiki archive and cannot be deselected.
+    // Shown rather than merely stated, because "the current list is always
+    // included" in prose above a grid of unticked boxes reads as though the
+    // current list were one of the unticked boxes.
+    var fixed = '<label class="apo-param apo-param-fixed" ' +
+                  'title="Part of the wiki download; cannot be deselected">' +
+                  '<input type="checkbox" checked disabled>' +
+                  '<span>Latest (master)</span>' +
+                  '<small>always included</small>' +
+                '</label>';
+
+    var boxes = shortlistFor(w).map(function (v) {
       return '<label class="apo-param">' +
                '<input type="checkbox" class="param-check" data-wiki="' + w.id +
                  '" value="' + v.file + '"' + (picks[v.file] ? ' checked' : '') + '>' +
                '<span>' + v.label + '</span>' +
-               '<small>' + Math.round((v.bytes || 0) / 1048576) + ' MB</small>' +
+               '<small>' + mb(v) + ' MB</small>' +
              '</label>';
     }).join('');
+
+    var rest = paramRestFor(w);
+    var more = rest.length
+      ? '<label class="apo-param-more">' +
+          '<span>Another version</span>' +
+          '<select class="param-more" data-wiki="' + w.id + '" ' +
+            'aria-label="Add another parameter version for ' + w.name + '">' +
+            '<option value="">' + rest.length + ' more\u2026</option>' +
+            rest.map(function (v) {
+              return '<option value="' + v.file + '">' + v.label +
+                     ' \u00b7 ' + mb(v) + ' MB</option>';
+            }).join('') +
+          '</select>' +
+        '</label>'
+      : '';
+
     return '<tr class="apo-param-row" data-params-for="' + w.id + '" hidden>' +
              '<td colspan="5">' +
                '<p class="apo-param-note">Parameter lists for older firmware. ' +
-                 'The current list is always included.</p>' +
-               '<div class="apo-param-grid">' + boxes + '</div>' +
+                 'The newest of each release series is offered here; pick any ' +
+                 'other from the dropdown and it joins the list.</p>' +
+               '<div class="apo-param-grid">' + fixed + boxes + more + '</div>' +
              '</td>' +
            '</tr>';
   }
@@ -1301,6 +1405,47 @@
     var open = row.hasAttribute('hidden');
     if (open) { row.removeAttribute('hidden'); } else { row.setAttribute('hidden', ''); }
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  });
+
+  /*
+   * A version chosen from the dropdown becomes a ticked box and stays one.
+   *
+   * Re-rendering only this row, not the table: renderWikis() rebuilds the whole
+   * tbody, which would collapse the disclosure the reader just opened and lose
+   * their place mid-choice.
+   */
+  document.addEventListener('change', function (e) {
+    if (!e.target.classList.contains('param-more')) { return; }
+    var id = e.target.getAttribute('data-wiki');
+    var file = e.target.value;
+    var w = wikiById(id);
+    if (!w || !file) { return; }
+
+    if (!paramPromoted[id]) { paramPromoted[id] = {}; }
+    paramPromoted[id][file] = true;
+    picksFor(w)[file] = true;
+
+    var row = document.querySelector('[data-params-for="' + id + '"]');
+    if (row) {
+      var fresh = document.createElement('tbody');
+      fresh.innerHTML = paramRowFor(w);
+      var next = fresh.firstChild;
+      if (next) {
+        // The disclosure is open, or the reader could not have reached the
+        // dropdown. Keep it open.
+        next.removeAttribute('hidden');
+        row.parentNode.replaceChild(next, row);
+      }
+    }
+    // Choosing a version implies wanting the wiki, same as ticking one.
+    var box = document.querySelector('.wiki-check[value="' + id + '"]');
+    if (box && !box.checked) {
+      box.checked = true;
+      syncSelectAll();
+      updateExportState();
+    }
+    updateTotal();
+    updateSaveState();
   });
 
   document.addEventListener('change', function (e) {
