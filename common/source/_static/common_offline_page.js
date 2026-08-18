@@ -97,6 +97,10 @@
       toastEl.innerHTML =
         '<div class="ap-toast-title"></div>' +
         '<div class="ap-toast-msg"></div>' +
+        // Hidden unless a caller supplies an action. A toast that says a full
+        // download is needed and then tells the reader to go and find a page
+        // is asking them to do the work of a button.
+        '<button type="button" class="ap-toast-action apo-btn apo-btn-primary" hidden></button>' +
         '<div class="ap-toast-track"><div class="ap-toast-bar"></div></div>';
       document.body.appendChild(toastEl);
     }
@@ -108,6 +112,21 @@
 
     toastEl.querySelector('.ap-toast-title').textContent = opts.title || '';
     toastEl.querySelector('.ap-toast-msg').textContent = opts.msg || '';
+
+    var action = toastEl.querySelector('.ap-toast-action');
+    if (action) {
+      if (opts.action && opts.onAction) {
+        action.textContent = opts.action;
+        action.hidden = false;
+        action.onclick = function () {
+          action.disabled = true;
+          opts.onAction();
+        };
+      } else {
+        action.hidden = true;
+        action.onclick = null;
+      }
+    }
     var track = toastEl.querySelector('.ap-toast-track');
     var bar = toastEl.querySelector('.ap-toast-bar');
     toastEl.classList.remove('ap-toast-done');
@@ -1199,9 +1218,25 @@
             announce('A full download is needed to update ' +
                      names.join(', ') +
                      '. Press Check for updates to start it.');
+            // The reason matters, and until now all three routes here said the
+            // same thing. A wiki lands in `full` when its diff is genuinely
+            // too large, when its published file list cannot be fetched, and
+            // when the saved copy carries no file list to compare against at
+            // all - which is the case for anything saved before file lists
+            // existed, or where that fetch failed at save time. Only the first
+            // is "a lot has changed"; the other two are "I cannot tell what
+            // changed", and reporting them as the first sent the reader
+            // looking for a change that never happened.
             toast({ title: 'Update available',
-                    msg: 'A full download is needed. Open the Offline panel to update.',
-                    mode: 'done' });
+                    msg: 'These cannot be updated in place, so they need '
+                       + 'downloading again: ' + names.join(', ') + '.',
+                    mode: 'done',
+                    action: 'Redownload',
+                    onAction: function () {
+                      toast({ mode: 'hide' });
+                      var btn = el('check-btn');
+                      if (btn) { btn.click(); }
+                    } });
             return renderWikis();
           }
 

@@ -548,3 +548,12 @@
    statement of fact rather than a choice the reader failed to make. */
 .apo-param-fixed { opacity: 0.75; }
 .apo-param-fixed input { cursor: not-allowed; }
+
+/* The toast's action button. Only appears when a toast offers something to do,
+   which today is a wiki that cannot be updated in place and has to be
+   downloaded again. */
+.ap-toast-action {
+  margin-top: 0.6rem;
+  align-self: flex-start;
+}
+.ap-toast-action[hidden] { display: none; }
