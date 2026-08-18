@@ -1508,6 +1508,44 @@ async function main() {
           !dd || ![...dd.options].some((o) => o.value.indexOf('V4.5.2') !== -1));
   }
 
+  console.log('\nRemove all quotes what it removes, not what the origin is charged');
+  {
+    // Seen live: a table totalling 697 MB, a footer saying 1.0 GB used, and a
+    // button offering to "Delete 1.6 GB". Three numbers, one screen. The button
+    // read navigator.storage.estimate().usage, which counts space the browser
+    // has billed the origin for including anything freed but not yet reclaimed,
+    // so after a day of saving and deleting it bore no relation to what
+    // pressing it would return. A clean download of all eleven wikis measures
+    // 746 MB.
+    const cachesObj = makeCaches();
+    for (const id of ['common', 'copter', 'rover']) {
+      (await cachesObj.open('ardupilot-offline-' + id)).put('/__ap_complete__',
+        completeMarker(MANIFEST.generated, id));
+    }
+    // A quota reading wildly above the real content, as a real browser gives
+    // after repeated download-and-delete cycles.
+    const { doc } = load({ manifest: MANIFEST, caches: cachesObj, usage: 1.6e9 });
+    await settle();
+
+    $(doc, 'clear-btn').click();
+    await settle();
+    const label = $(doc, 'clear-btn').textContent || '';
+
+    const expected = [MANIFEST.common].concat(MANIFEST.wikis)
+      .filter((w) => ['common', 'copter', 'rover'].indexOf(w.id) !== -1)
+      .reduce((n, w) => n + w.mb, 0);
+
+    // Any GB figure is wrong here: only 506 MB is saved. Matching the exact
+    // string would not bite, because fmt is 1024-based and renders 1.6e9 as
+    // "1.5 GB".
+    check('the button does not quote the inflated quota figure',
+          !/GB/.test(label), JSON.stringify(label));
+    check('it quotes the size of what is actually saved',
+          label.indexOf(String(expected)) !== -1 ||
+          new RegExp(String(Math.round(expected / 1024 * 10) / 10)).test(label),
+          JSON.stringify(label) + ' for ' + expected + ' MB saved');
+  }
+
   console.log('\nB8: the toast says why, and offers a button');
   {
     // "A full download is needed" had three causes and one wording: a diff too

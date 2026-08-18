@@ -817,8 +817,25 @@
       return clearAll();
     }
 
-    return storage().then(function (r) {
-      var used = (r.estimate || {}).usage || 0;
+    return Promise.resolve().then(function () {
+      /*
+       * What this button will actually remove, not what the origin is charged.
+       *
+       * It used navigator.storage.estimate().usage, which counts everything the
+       * browser has ever billed this site for, including space freed but not
+       * yet reclaimed. After a day of saving and deleting that drifts a long
+       * way from reality: observed reading "Delete 1.6 GB?" beside a table
+       * totalling 697 MB and a footer saying 1.0 GB, three numbers for one
+       * screen. A clean download of all eleven wikis measures 746 MB, so most
+       * of that 1.6 GB was already gone and pressing the button would not have
+       * returned it.
+       *
+       * The sizes the table shows are the honest answer to "what am I about to
+       * lose", and using them makes the two agree.
+       */
+      var used = [COMMON].concat(WIKIS).reduce(function (n, w) {
+        return storedIds[w.id] ? n + (w.mb || 0) * 1048576 : n;
+      }, 0);
       btn.textContent = used ? 'Delete ' + fmt(used) + '? Press again'
                              : 'Press again to confirm';
       btn.classList.add('apo-btn-armed');
