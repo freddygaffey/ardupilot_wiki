@@ -1472,6 +1472,109 @@ async function main() {
           (await bodyAt(common, '/_common/ardupilot/docs/about.html')) === null);
   }
 
+  console.log('\nB14 + B2: a saved point release is never hidden in the dropdown');
+  {
+    // The two features could fight. The shortlist keeps the newest of each
+    // series; a reader who saved 4.5.2 has a version that is NOT the newest of
+    // anything. If the shortlist won, their saved copy would vanish into the
+    // dropdown and the panel would show it as not chosen while it sat in
+    // storage. What you have must always be visible.
+    const mk = (ver) => ({
+      file: `docs/parameters-Copter-stable-V${ver}.html`, channel: 'stable',
+      version: ver, label: ver, bytes: 4e6,
+      ...(ver === '4.7.0' ? { 'default': true } : {})
+    });
+    const man = JSON.parse(JSON.stringify(MANIFEST));
+    man.wikis.find((x) => x.id === 'copter').param_versions =
+      ['4.7.0', '4.6.3', '4.6.2', '4.5.7', '4.5.2', '4.5.1'].map(mk);
+
+    const cachesObj = makeCaches();
+    const c = await cachesObj.open('ardupilot-offline-copter');
+    await c.put('/__ap_complete__', completeMarker(man.generated, 'copter'));
+    await c.put('/copter/docs/parameters-Copter-stable-V4.5.2.html',
+                new FakeResponse('saved params'));
+
+    const { doc } = load({ manifest: man, caches: cachesObj });
+    for (let i = 0; i < 14; i++) { await settle(); }
+
+    const boxes = [...doc.querySelectorAll('[data-params-for=\"copter\"] .param-check')];
+    const saved = boxes.find((b) => b.value.indexOf('V4.5.2') !== -1);
+    check('a saved point release appears as a tick, not buried in the dropdown',
+          !!saved, boxes.map((b) => b.value.match(/V([\d.]+)/)[1]).join(', '));
+    check('and it is ticked, because it is what the reader actually has',
+          !!saved && saved.checked);
+    const dd = doc.querySelector('[data-params-for=\"copter\"] .param-more');
+    check('it is not also offered in the dropdown',
+          !dd || ![...dd.options].some((o) => o.value.indexOf('V4.5.2') !== -1));
+  }
+
+  console.log('\nB14: a shortlist of ticks, and a dropdown for the rest');
+  {
+    // Copter builds fourteen versions. Fourteen tick boxes is why the block had
+    // to be hidden behind a disclosure in the first place, and it still made the
+    // reader scan fourteen near-identical lines. The ticks are now the newest
+    // stable of each release series; everything else is one dropdown press away.
+    const man = JSON.parse(JSON.stringify(MANIFEST));
+    const mk = (ver, ch, dflt) => ({
+      file: `docs/parameters-Copter-${ch}-V${ver}.html`,
+      channel: ch, version: ver, label: ver + (ch === 'stable' ? '' : ' ' + ch),
+      bytes: 4e6, ...(dflt ? { 'default': true } : {})
+    });
+    man.wikis.find((w) => w.id === 'copter').param_versions = [
+      mk('4.7.0', 'beta'), mk('4.7.0', 'stable', true),
+      mk('4.6.3', 'stable'), mk('4.6.2', 'stable'), mk('4.6.1', 'stable'),
+      mk('4.6.0', 'stable'), mk('4.5.7', 'stable'), mk('4.5.6', 'stable'),
+      mk('4.5.5', 'stable'), mk('4.5.4', 'stable'), mk('4.5.3', 'stable'),
+      mk('4.5.2', 'stable'), mk('4.5.1', 'stable'), mk('4.5.0', 'stable')
+    ];
+
+    const { doc, w } = load({ manifest: man, caches: makeCaches() });
+    for (let i = 0; i < 12; i++) { await settle(); }
+
+    const ticksOf = () => [...doc.querySelectorAll('[data-params-for=\"copter\"] .param-check')]
+      .map((b) => b.value);
+    const sel = () => doc.querySelector('[data-params-for=\"copter\"] .param-more');
+
+    const ticks = ticksOf();
+    check('only the newest stable of each series gets a tick',
+          ticks.length === 3, ticks.length + ' ticks: ' + JSON.stringify(ticks));
+    check('and they are the newest of 4.7, 4.6 and 4.5',
+          ticks.includes('docs/parameters-Copter-stable-V4.7.0.html') &&
+          ticks.includes('docs/parameters-Copter-stable-V4.6.3.html') &&
+          ticks.includes('docs/parameters-Copter-stable-V4.5.7.html'),
+          JSON.stringify(ticks));
+    check('the current list is shown as always included, and not deselectable',
+          !!doc.querySelector('[data-params-for=\"copter\"] .apo-param-fixed input[disabled]'));
+
+    const dropdown = sel();
+    check('a dropdown carries the remaining versions', !!dropdown &&
+          dropdown.options.length === 12,   // 11 remaining + the placeholder
+          dropdown ? dropdown.options.length + ' options' : 'NO DROPDOWN');
+    check('a point release is in the dropdown, not the ticks',
+          !ticks.includes('docs/parameters-Copter-stable-V4.6.0.html') &&
+          [...dropdown.options].some((o) => o.value === 'docs/parameters-Copter-stable-V4.6.0.html'));
+
+    // Promote one, the thing the user actually asked for.
+    dropdown.value = 'docs/parameters-Copter-stable-V4.6.0.html';
+    dropdown.dispatchEvent(new w.Event('change', { bubbles: true }));
+    for (let i = 0; i < 6; i++) { await settle(); }
+
+    const after = ticksOf();
+    check('choosing from the dropdown promotes it to a tick box',
+          after.includes('docs/parameters-Copter-stable-V4.6.0.html'),
+          JSON.stringify(after));
+    check('the promoted version arrives already ticked',
+          [...doc.querySelectorAll('[data-params-for=\"copter\"] .param-check')]
+            .some((b) => b.value === 'docs/parameters-Copter-stable-V4.6.0.html' && b.checked));
+    check('it leaves the dropdown, so it cannot be added twice',
+          ![...sel().options].some((o) => o.value === 'docs/parameters-Copter-stable-V4.6.0.html'),
+          sel().options.length + ' options left');
+    check('the disclosure stays open while choosing',
+          !doc.querySelector('[data-params-for=\"copter\"]').hasAttribute('hidden'));
+    check('choosing a version selects the wiki it belongs to',
+          doc.querySelector('.wiki-check[value=\"copter\"]').checked);
+  }
+
   console.log('\nregression: parameter ticks follow the cache, not the manifest (B2)');
   {
     // The manifest marks the newest stable as default. That is the right guess
