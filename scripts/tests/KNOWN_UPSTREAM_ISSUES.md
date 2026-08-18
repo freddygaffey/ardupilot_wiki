@@ -362,10 +362,11 @@ Neither is fixed here, and neither is worked around. The duplicate targets are
 worth a look by whoever owns `build_parameters.py`, since 240 of them will bury
 any genuinely new warning in the same build.
 
-## 9. Sub and Blimp request `useralerts.js` on every page and get a 404
+## 9. Sub and Blimp load a user-alerts script for a page they do not have
 
-**Where:** `common/source/_static/useralerts.js` (the `copywiki` marker), and
-`sub/source/conf.py` / `blimp/source/conf.py` (`html_js_files`).
+**Where:** `sub/source/conf.py` and `blimp/source/conf.py` (`html_js_files`),
+against `common/source/_static/useralerts.js` and
+`common/source/docs/common-user-alerts.rst` (their `copywiki` markers).
 
 **Symptom:** every page of the Sub and Blimp wikis requests
 `_static/useralerts.js` and receives 404. Live on ardupilot.org today:
@@ -376,39 +377,44 @@ ardupilot.org/sub/_static/useralerts.js     ->  404
 ardupilot.org/blimp/_static/useralerts.js   ->  404
 ```
 
-**Cause:** six wikis declare `./useralerts.js` in `html_js_files`, so Sphinx
-emits a `<script>` tag for it on every page they build. Only four wikis are
-listed in the file's own `copywiki` marker, so only four receive it.
+**Cause:** six wikis declare `./useralerts.js` in `html_js_files`; four are
+listed in that file's `copywiki` marker. Ordinary template drift, all on master:
+`988225988` added user alerts, `1437da11a` set the marker to the four vehicles
+that then existed, `15bc5face` initialised Blimp from Copter and `dfeeba78b`
+initialised Sub from Blimp, each inheriting the `conf.py` line. Nobody widened
+the marker.
 
-```
-html_js_files:      copter, plane, rover, sub, blimp, antennatracker
-copywiki marker:    copter, plane, rover,           antennatracker
-```
+**The fix is to remove the declaration, NOT to widen the marker.** Widening it
+looks like the obvious repair and is a regression. The script writes its table
+into `$('.useralerts-list tbody')`, an element that exists only on the
+`common-user-alerts` page, and that page's own marker is
+`copter,plane,rover,antennatracker` - so Sub and Blimp do not have it. The
+script also branches on the URL for copter, plane, rover and tracker only, so
+`vehicle` would be `undefined` on those two wikis in any case.
 
-The history is ordinary template drift, all on master:
+Shipping the file to them therefore renders nothing, and replaces a cheap local
+404 with a successful load that then calls
+`$.getScript('https://firmware.ardupilot.org/useralerts/manifest.js')` on every
+page view, cross-origin, to populate a selector matching nothing. Measured that
+way round before it was reverted.
 
-- `988225988` Common: Add user alerts
-- `1437da11a` Build: Ensure useralerts.js is only copied for vehicles - sets the
-  marker to the four vehicles that existed
-- `15bc5face` Blimp: Init Blimp using Copter as a template - inherits Copter's
-  `conf.py` line
-- `dfeeba78b` Sub: Initialise using Blimp as a template - inherits it again
+**Consequence as it stands:** one failed request per page on two wikis. Nothing
+is broken for readers, because there is no alerts page on those wikis to break.
 
-Nobody updated the marker when the two new vehicles were cloned in.
+**Worth deciding separately:** whether Sub and Blimp should have user alerts at
+all. Making that work is three changes, not one - the page's marker, the
+script's marker, and `sub`/`blimp` branches in the script's vehicle detection -
+and it is a product question rather than a build bug.
 
-**Consequence:** user alerts exist to warn readers about a bad firmware release.
-On Sub and Blimp the mechanism has never run, so those readers have never been
-shown one, and nothing reports this because a missing script fails silently.
+**Also visible from here:** the script is loaded on every page of all four
+wikis that have it, and fetches the external manifest on each one, while doing
+anything only on the single alerts page. Roughly 860 requests' worth of that on
+Copter alone per full crawl.
 
-**Fix:** add `sub,blimp` to the marker in `useralerts.js`. One line. Belongs on
-master rather than on the offline branch, since it is neither caused by nor
-related to the offline work.
-
-**How it was found:** `test_offline_archives.py`,
-`check_no_dangling_assets()`, which resolves every local `.js` and `.css`
-reference in every built page against the file it names. 9,073 references, and
-this was the only pair that did not resolve. Worth knowing that the same check
-catches the general case: any built page pointing at an asset that is not there.
+**How it was found:** `test_offline_archives.py`, `check_no_dangling_assets()`,
+which resolves every local `.js` and `.css` reference in every built page
+against the file it names. 9,073 references, and this was the only pair that did
+not resolve.
 
 ---
 

@@ -153,7 +153,6 @@ html_favicon = '../../images/favicon_sub.ico'
 html_static_path = ['_static']
 
 html_js_files = [
-    './useralerts.js',
     ('https://plausible.ardupilot.org/js/script.outbound-links.js', {"data-domain": "ardupilot.org", "defer": "defer"}),
 ]
 
