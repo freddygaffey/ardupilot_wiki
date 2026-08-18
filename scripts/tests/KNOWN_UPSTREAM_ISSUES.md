@@ -362,6 +362,56 @@ Neither is fixed here, and neither is worked around. The duplicate targets are
 worth a look by whoever owns `build_parameters.py`, since 240 of them will bury
 any genuinely new warning in the same build.
 
+## 9. Sub and Blimp request `useralerts.js` on every page and get a 404
+
+**Where:** `common/source/_static/useralerts.js` (the `copywiki` marker), and
+`sub/source/conf.py` / `blimp/source/conf.py` (`html_js_files`).
+
+**Symptom:** every page of the Sub and Blimp wikis requests
+`_static/useralerts.js` and receives 404. Live on ardupilot.org today:
+
+```
+ardupilot.org/copter/_static/useralerts.js  ->  200
+ardupilot.org/sub/_static/useralerts.js     ->  404
+ardupilot.org/blimp/_static/useralerts.js   ->  404
+```
+
+**Cause:** six wikis declare `./useralerts.js` in `html_js_files`, so Sphinx
+emits a `<script>` tag for it on every page they build. Only four wikis are
+listed in the file's own `copywiki` marker, so only four receive it.
+
+```
+html_js_files:      copter, plane, rover, sub, blimp, antennatracker
+copywiki marker:    copter, plane, rover,           antennatracker
+```
+
+The history is ordinary template drift, all on master:
+
+- `988225988` Common: Add user alerts
+- `1437da11a` Build: Ensure useralerts.js is only copied for vehicles - sets the
+  marker to the four vehicles that existed
+- `15bc5face` Blimp: Init Blimp using Copter as a template - inherits Copter's
+  `conf.py` line
+- `dfeeba78b` Sub: Initialise using Blimp as a template - inherits it again
+
+Nobody updated the marker when the two new vehicles were cloned in.
+
+**Consequence:** user alerts exist to warn readers about a bad firmware release.
+On Sub and Blimp the mechanism has never run, so those readers have never been
+shown one, and nothing reports this because a missing script fails silently.
+
+**Fix:** add `sub,blimp` to the marker in `useralerts.js`. One line. Belongs on
+master rather than on the offline branch, since it is neither caused by nor
+related to the offline work.
+
+**How it was found:** `test_offline_archives.py`,
+`check_no_dangling_assets()`, which resolves every local `.js` and `.css`
+reference in every built page against the file it names. 9,073 references, and
+this was the only pair that did not resolve. Worth knowing that the same check
+catches the general case: any built page pointing at an asset that is not there.
+
+---
+
 ## The theme asks for a nav separator that does not exist
 
 `_static/css/ardupilot.css` line 60 sets

@@ -173,6 +173,64 @@ def check_archives_carry_current_static():
           if stale_build else f"{len(shared)} assets across the built wikis")
 
 
+def check_no_dangling_assets():
+    """
+    No built page may reference a local asset that is not there.
+
+    The general form of a specific bug. A build-time pass once injected a
+    <script src="../_static/common_offline_params.js"> into the 66 frozen
+    parameter pages. Those pages make a round trip: update.py copies them out of
+    ../old_params_mversion into the build tree, and copies the build tree back
+    over ../old_params_mversion a line later. The injection landed between the
+    two, so it was written into that cache as the new source of truth.
+
+    Deleting the injecting code did not undo it. The cache is OUTSIDE the repo,
+    so git could not see it, git status was clean, and the diff was spotless
+    while every future build would still have deposited the tag and every deploy
+    would have shipped a page pointing at a script that no longer existed.
+
+    Whatever the cause, the visible symptom is a dangling reference, so that is
+    what this looks for. Uniqued before resolving: the same handful of assets
+    appear on thousands of pages.
+    """
+    ref = re.compile(rb'(?:src|href)="([^"]+\.(?:js|css))"')
+    # Conditional comments are not markup to any browser released this decade.
+    # sphinx_rtd_theme still emits <!--[if lt IE 9]><script src=".../
+    # html5shiv.min.js"></script><![endif]--> and does not ship the file, so it
+    # 404s on ardupilot.org today and always has. Nothing loads it. Dropping
+    # these blocks before scanning keeps the check about references that are
+    # actually fetched.
+    ie_only = re.compile(rb"<!--\[if[^>]*>.*?<!\[endif\]-->", re.S)
+    missing, checked = {}, 0
+    for wiki in WIKIS:
+        root = REPO / wiki / "build" / "html"
+        if not root.is_dir():
+            continue
+        seen = set()
+        for page in root.rglob("*.html"):
+            for m in ref.finditer(ie_only.sub(b"", page.read_bytes())):
+                url = m.group(1).decode("utf-8", "replace")
+                # Local references only. Absolute and cross-origin ones are
+                # somebody else's to serve.
+                if url.startswith(("http://", "https://", "//", "data:")):
+                    continue
+                seen.add((url.split("?")[0], page))
+        for url, page in seen:
+            # A root-relative URL resolves against the deployed webroot, which
+            # is frontend/, not the wiki's build tree: /js/pwa.js is served from
+            # frontend/js/pwa.js alongside the wikis, not from inside one.
+            base = (REPO / "frontend") if url.startswith("/") else page.parent
+            target = base / url.lstrip("/")
+            checked += 1
+            if not target.exists():
+                missing.setdefault(url, page.relative_to(REPO).as_posix())
+
+    check("no built page references a script or stylesheet that is missing",
+          not missing,
+          "; ".join(f"{u} (e.g. {p})" for u, p in list(missing.items())[:3])
+          or f"{checked} references resolve")
+
+
 def main():
     wikis = [w for w in (sys.argv[1:] or WIKIS)]
     print("\noffline archives: what the reader receives\n")
@@ -210,6 +268,7 @@ def main():
 
     check_assets_follow_pages()
     check_archives_carry_current_static()
+    check_no_dangling_assets()
 
     check("archives were present to test", checked > 0,
           f"{checked} wikis" if checked else "run update.py --offline first")
