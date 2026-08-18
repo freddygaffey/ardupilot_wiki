@@ -128,8 +128,8 @@ It costs storage. Roughly:
 
 ===============================  ==========
 Shared images (required)         about 440 MB
-A vehicle wiki on top of that    3 to 75 MB
-All eleven wikis                 about 700 MB
+A vehicle wiki on top of that    4 to 75 MB
+All ten wikis                    about 700 MB
 ===============================  ==========
 
 The shared images are needed whichever wiki you choose, because nearly every

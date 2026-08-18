@@ -302,6 +302,13 @@ is passed, writing into ``<destdir>/offline/``:
    separate because including them per wiki would multiply several hundred
    megabytes across eleven.
 
+   The About wiki rides along inside it, keeping its ``/ardupilot/...`` paths.
+   At 3 MB it was too small to be worth a row of its own on the download page,
+   so ``FOLD_INTO_COMMON`` in ``scripts/build_offline_artifacts.py`` writes it
+   here instead. The service worker has a matching list, so ``/ardupilot/``
+   requests ask the common cache directly rather than falling through to the
+   exhaustive search.
+
 ``<wiki>-offline.tar.gz``
    Content unique to a single wiki.
 

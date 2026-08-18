@@ -18,22 +18,28 @@
   global.ArduPilotOfflineVersion = VERSION;
 
 
-  // Sizes measured from a real build. The build should eventually publish these
-  // in offline-manifest.json; until it does they come from here so the page
-  // never shows invented numbers.
-  var COMMON = { id: 'common', name: 'Common (required)', mb: 455, pages: 0, required: true };
+  // What the table shows for the fraction of a second before the manifest
+  // arrives, and all it has to show if the manifest cannot be fetched. Copied
+  // from a real build's offline-manifest.json, so refresh them when the figures
+  // move: these last read 110 MB for Copter, which stopped being true the day
+  // the historical parameter pages moved out of the archives.
+  //
+  // "About" has no row: at 3 MB and 28 pages it was the smallest entry by an
+  // order of magnitude, and whether to include it was a question with only one
+  // sensible answer. It travels inside common now, which is why common has a
+  // page count at all. See FOLD_INTO_COMMON in build_offline_artifacts.py.
+  var COMMON = { id: 'common', name: 'Common (required)', mb: 442, pages: 28, required: true };
   var WIKIS = [
-    { id: 'copter', name: 'Copter', mb: 110, pages: 845 },
-    { id: 'plane', name: 'Plane', mb: 74, pages: 814 },
-    { id: 'dev', name: 'Developer', mb: 66, pages: 311 },
-    { id: 'rover', name: 'Rover', mb: 62, pages: 746 },
-    { id: 'sub', name: 'Sub', mb: 39, pages: 643 },
-    { id: 'blimp', name: 'Blimp', mb: 31, pages: 291 },
-    { id: 'planner', name: 'Mission Planner', mb: 14, pages: 75 },
-    { id: 'mavproxy', name: 'MAVProxy', mb: 10, pages: 114 },
-    { id: 'antennatracker', name: 'Antenna Tracker', mb: 9, pages: 39 },
-    { id: 'planner2', name: 'APM Planner 2', mb: 6, pages: 42 },
-    { id: 'ardupilot', name: 'About', mb: 5, pages: 27 }
+    { id: 'copter', name: 'Copter', mb: 74, pages: 860 },
+    { id: 'dev', name: 'Developer', mb: 52, pages: 313 },
+    { id: 'plane', name: 'Plane', mb: 42, pages: 829 },
+    { id: 'rover', name: 'Rover', mb: 32, pages: 761 },
+    { id: 'sub', name: 'Sub', mb: 15, pages: 653 },
+    { id: 'blimp', name: 'Blimp', mb: 12, pages: 292 },
+    { id: 'planner', name: 'Mission Planner', mb: 12, pages: 76 },
+    { id: 'mavproxy', name: 'MAVProxy', mb: 7, pages: 115 },
+    { id: 'planner2', name: 'APM Planner 2', mb: 5, pages: 43 },
+    { id: 'antennatracker', name: 'Antenna Tracker', mb: 4, pages: 55 }
   ];
 
   // The archives are ordinary static files in the built tree, written to
@@ -45,6 +51,10 @@
   var PAGE_CACHE_PREFIX = 'ardupilot-pages-';
   var OFFLINE_CACHE_PREFIX = 'ardupilot-offline-';
   var COMPLETE_MARKER = '/__ap_complete__';
+  // Wikis that used to have an archive and a cache of their own and now travel
+  // inside common. Kept in step with FOLD_INTO_COMMON in
+  // scripts/build_offline_artifacts.py and FOLDED_INTO_COMMON in sw.js.
+  var FOLDED_INTO_COMMON = ['ardupilot'];
   var AUTOUPDATE_KEY = 'ap-autoupdate';
   // Quota estimates are deliberately fuzzed by browsers, and unpacking needs
   // room to work, so require noticeably more headroom than the raw payload.
@@ -377,7 +387,7 @@
    * The disclosure row under a wiki, listing every version it built.
    *
    * Hidden until asked for: five vehicles carry these and an always-open list
-   * of fourteen checkboxes each would bury the eleven rows that matter.
+   * of fourteen checkboxes each would bury the ten rows that matter.
    */
   function paramRowFor(w) {
     var versions = paramsOf(w);
@@ -665,6 +675,33 @@
   }
 
   /*
+   * Retire the cache of a wiki that has since been folded into common.
+   *
+   * Anyone who saved About before the fold has an ardupilot-offline-ardupilot
+   * cache that nothing lists any more: no row owns it, so no button removes it,
+   * and it sits there counting against the quota while the service worker finds
+   * its pages only by searching every cache.
+   *
+   * Deleting saved pages is not something to do lightly, so this runs at
+   * exactly one moment: a common download has just finished, meaning the same
+   * pages are now in the common cache under the same paths. Before that instant
+   * the old cache is the reader's only copy and is left alone. Failure is
+   * ignored - the worst case is the cache we meant to tidy up staying put.
+   */
+  function dropFoldedCaches(entry) {
+    if (!entry || entry.id !== 'common') { return Promise.resolve(); }
+    return Promise.all(FOLDED_INTO_COMMON.map(function (id) {
+      return caches.delete(OFFLINE_CACHE_PREFIX + id).then(function (gone) {
+        if (gone) {
+          delete storedIds[id];
+          forgetSaved(id);
+        }
+      });
+    })).then(function () { notifyWorkerCachesChanged(); })
+      .catch(function () { /* tidying, not a step of the download */ });
+  }
+
+  /*
    * Check there is room before starting. A download that dies partway leaves a
    * cache with holes in it, and at these sizes that is a long wait for nothing.
    */
@@ -840,7 +877,7 @@
                 storedIds[entry.id] = true;
                 rememberSaved(entry.id);
                 notifyWorkerCachesChanged();
-                return renderStorage();
+                return dropFoldedCaches(entry).then(renderStorage);
               });
             });
           });

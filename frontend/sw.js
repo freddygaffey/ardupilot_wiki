@@ -281,12 +281,21 @@ function storedShapes(url) {
  * that can hold it). The path says which - /sub/docs/x.html is only in the sub
  * download - so ask it directly, exhaustive search as fallback.
  */
+// Wikis with no archive of their own, whose files travel inside common. Kept
+// in step with FOLD_INTO_COMMON in scripts/build_offline_artifacts.py. Getting
+// this wrong costs speed and not correctness - the exhaustive fallback below
+// still finds the page - but that is the 692ms path on every About request.
+const FOLDED_INTO_COMMON = new Set(['ardupilot']);
+
 function likelyCacheName(path) {
   if (path.startsWith('/_common/')) {
     return OFFLINE_CACHE_PREFIX + 'common';
   }
   const first = path.split('/')[1];
-  return first ? OFFLINE_CACHE_PREFIX + first : null;
+  if (!first) {
+    return null;
+  }
+  return OFFLINE_CACHE_PREFIX + (FOLDED_INTO_COMMON.has(first) ? 'common' : first);
 }
 
 // Memoised for this worker's lifetime. caches.open() CREATES a cache that does
