@@ -1293,28 +1293,11 @@ class WikiUpdater:
         info("=== Step 5b: Post-build passes ===")
         info(f"Time elapsed so far: {time.time() - tstart:.2f} seconds")
 
-        # Defer YouTube embeds. A single embed is a cross-origin connection
-        # and about a megabyte of YouTube's code, started during initial
-        # load whether or not anybody watches: measured 511 ms against 4 ms
-        # for the page's own document. loading="lazy" defers it and changes
-        # nothing else. Done as a pass over built HTML because the iframe
-        # comes from sphinxcontrib.youtube, a third-party package. NOT
-        # wrapped in a blanket except: it rewrites pages in place (atomically,
-        # see lazy_embeds), so a real failure must stop the build rather than
-        # ship half-rewritten pages. Only a missing module is survivable.
-        #
-        # Runs for a partial build too: it is a per-page rewrite, so skipping
-        # it under --site would leave that one wiki's pages loading YouTube
-        # eagerly while the other ten do not.
-        #
-        # Reads from the source tree, not --destdir. Sphinx writes into
-        # <wiki>/build/html and copy_build moves that to --destdir further down
-        # this method, so at this point --destdir holds the PREVIOUS build or
-        # nothing at all. Passing it here made the pass look in
-        # <destdir>/<wiki>/build/html, which does not exist, so it silently
-        # rewrote nothing on exactly the production runs that pass --destdir.
+        # Both passes read the source tree, not --destdir: copy_build moves
+        # <wiki>/build/html there later in this method.
         passes_root = Path(".")
         wikis = [self.args.site] if self.args.site else ALL_WIKIS
+
         try:
             from scripts.lazy_embeds import run as make_embeds_lazy
         except ImportError as ex:
@@ -1323,22 +1306,6 @@ class WikiUpdater:
             n = make_embeds_lazy(wikis, passes_root)
             info(f"deferred YouTube embeds on {n} pages")
 
-        # Re-deflate PNGs losslessly. The wiki's images arrive from whatever
-        # tool each contributor used and nothing has ever recompressed them;
-        # redoing the deflate stream at maximum effort returns about 10% of
-        # their bytes with every pixel unchanged. Measured over all 1,635
-        # distinct built PNGs: 1,364 MB to 1,231 MB as served, all verified
-        # pixel-identical, with 923 of them already optimal and giving nothing.
-        #
-        # Every image is decoded again and compared with the original before
-        # the smaller version is accepted, and the original is kept if Pillow
-        # is missing, if anything raises, or if the result is not smaller. So
-        # the worst case is that this does nothing, never that an image
-        # degrades.
-        #
-        # A cold run is about 2 minutes; results cache on the content hash in
-        # .image-cache/, so subsequent builds pay almost nothing and only new
-        # or edited images are recompressed.
         try:
             from scripts.optimise_images import run as optimise_images
         except ImportError as ex:
@@ -1347,22 +1314,9 @@ class WikiUpdater:
             n, saved = optimise_images(wikis, passes_root)
             info(f"recompressed {n} PNGs, saving {saved / 1048576:.1f} MB")
 
-        # The archives, manifest and per-file hash tables. Assembled from the
-        # HTML that already exists, so the cost is packing rather than a
-        # second Sphinx pass: about 22 seconds on a build that takes minutes.
-        # That is cheap enough that there is nothing to gain by making it
-        # opt-in, and an artefact set built only when somebody remembers a flag
-        # is one that is quietly stale.
-        #
-        # A partial build is the exception, and it has to be. --site rebuilds
-        # one wiki, so the tree holds no others, and packing from it would
-        # publish a manifest and a shared archive describing one wiki where
-        # readers have eleven saved. Every saved copy reads that manifest to
-        # decide whether it is out of date, so a truncated one is not a missing
-        # feature: it is a broken update for everybody who already saved a copy.
-        #
-        # A failure in the pack IS fatal. A half-written artefact set, once
-        # deployed, is indistinguishable from a good one.
+        # Skipped for a partial build: --site leaves the other wikis unbuilt,
+        # and a manifest describing one wiki would tell every saved copy it is
+        # out of date.
         if self.args.site:
             info(f"offline artefacts skipped: --site {self.args.site} builds "
                  "one wiki, and the archives describe all of them")
