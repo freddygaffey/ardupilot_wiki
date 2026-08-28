@@ -41,7 +41,7 @@ GZIP_LEVEL = 1
 # /offline/ page does not have to hardcode it. Set this in the build environment
 # rather than editing the page:
 #
-#     ARDUPILOT_OFFLINE_BASE=https://offline.ardupilot.org python3 update.py --offline
+#     ARDUPILOT_OFFLINE_BASE=https://offline.ardupilot.org python3 update.py
 #
 # Left unset, the page falls back to its built-in default.
 ARTIFACT_BASE_ENV = "ARDUPILOT_OFFLINE_BASE"

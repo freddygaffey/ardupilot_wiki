@@ -43,7 +43,7 @@
   ];
 
   // The archives are ordinary static files in the built tree, written to
-  // <destdir>/offline/ by update.py --offline and served by nginx like any
+  // <destdir>/offline/ by update.py and served by nginx like any
   // other file: same origin as the pages, so no CORS and no separate host. The
   // manifest's "artifact_base" overrides this when they are hosted elsewhere.
   var ARTIFACT_BASE = '/offline';

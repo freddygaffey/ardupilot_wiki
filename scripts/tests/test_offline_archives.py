@@ -5,8 +5,8 @@ Check what a reader actually receives, by reading the archives themselves.
     python3 scripts/tests/test_offline_archives.py [wiki ...]
 
 Everything else tests the code that builds the archives. This tests the bytes
-that come out, which is the only thing a reader ever sees. Run it after
-`update.py --offline`.
+that come out, which is the only thing a reader ever sees. Run it after a
+full `update.py`.
 
 It exists because of the donate button. The sidebar's donate control is an
 <input type="image"> sourced from paypalobjects.com, and it is on every page.
@@ -283,7 +283,7 @@ def main():
     check_no_dangling_assets()
 
     check("archives were present to test", checked > 0,
-          f"{checked} wikis" if checked else "run update.py --offline first")
+          f"{checked} wikis" if checked else "run a full update.py first")
 
     print("\n" + (f"{failures} CHECK(S) FAILED\n" if failures else "all checks passed\n"))
     return 1 if failures else 0
