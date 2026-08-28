@@ -1256,6 +1256,34 @@ class WikiUpdater:
 
         check_build(self.args.site)
 
+        info("=== Step 5b: Post-build passes ===")
+        info(f"Time elapsed so far: {time.time() - tstart:.2f} seconds")
+
+        # Re-deflate the built PNGs losslessly. The wiki's images arrive from
+        # whatever tool each contributor happened to use and nothing here has
+        # ever recompressed them; redoing the deflate stream at maximum effort
+        # returns about a tenth of their bytes with every pixel unchanged.
+        #
+        # Measured over all 1,635 distinct built PNGs: 1,364 MB to 1,231 MB as
+        # served, all verified pixel-identical, with 923 of them already
+        # optimal and giving back nothing.
+        #
+        # Reads from the source tree rather than --destdir: Sphinx writes into
+        # <wiki>/build/html and copy_build moves that to --destdir further down
+        # this method, so at this point --destdir holds the previous build or
+        # nothing at all.
+        #
+        # A cold run is about two minutes. Results cache on the content hash in
+        # .image-cache/, so later builds only recompress new or edited images.
+        wikis = [self.args.site] if self.args.site else ALL_WIKIS
+        try:
+            from scripts.optimise_images import run as optimise_images
+        except ImportError as ex:
+            error(f"image pass unavailable, skipping: {ex}")
+        else:
+            n, saved = optimise_images(wikis, Path("."))
+            info(f"recompressed {n} PNGs, saving {saved / 1048576:.1f} MB")
+
         if self.args.enablebackups:
             make_backup(building_time, self.args.site, self.args.destdir, self.args.backupdestdir)
             delete_old_wiki_backups(self.args.backupdestdir, N_BACKUPS_RETAIN)

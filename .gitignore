@@ -62,3 +62,7 @@ build_options.py
 
 # Mac file
 .DS_Store
+
+# Lossless PNG results, keyed by content hash (scripts/optimise_images.py).
+# Safe to delete; the next build refills it.
+/.image-cache/
