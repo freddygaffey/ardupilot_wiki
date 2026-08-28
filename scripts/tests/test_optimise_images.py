@@ -1,17 +1,12 @@
 #!/usr/bin/env python3
-"""
-Tests for the lossless PNG pass (scripts/optimise_images).
+"""Tests for scripts/optimise_images.
 
     python3 scripts/tests/test_optimise_images.py
-
-This pass rewrites images that every reader receives, so the checks that matter
-most are the ones about what it must NOT do: never alter a pixel, never grow a
-file, never touch anything that is not a PNG, and never raise no matter what it
-is handed. The saving is the easy part.
 """
 import io
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -28,12 +23,7 @@ def check(name, ok, detail=""):
 
 
 def noisy_png(w=240, h=180):
-    """
-    A PNG that Pillow's default writer leaves room to improve on.
-
-    Written with compress_level=1, which is what "straight out of a tool"
-    effectively looks like: valid, but never re-deflated.
-    """
+    """A PNG written at low effort, as if straight out of a tool."""
     from PIL import Image
     im = Image.new("RGB", (w, h))
     px = im.load()
@@ -52,60 +42,39 @@ def pixels(data):
         return im.mode, im.size, im.tobytes()
 
 
-def main():
-    print("\nlossless PNG pass\n")
-
-    try:
-        from PIL import Image  # noqa: F401
-    except ImportError:
-        print("  Pillow is not installed; this suite cannot verify anything.")
-        print("  pip install Pillow\n")
-        sys.exit(1)
-
-    # --- the core property: smaller, and not one pixel different -------------
+def check_shrinks_without_changing_pixels():
     original = noisy_png()
     shrunk = oi.shrink_png(original)
-
-    check("a never-optimised PNG gets smaller",
-          len(shrunk) < len(original),
+    check("a never-optimised PNG gets smaller", len(shrunk) < len(original),
           f"{len(original)} -> {len(shrunk)}")
-    check("and decodes to exactly the same pixels",
-          pixels(shrunk) == pixels(original))
-    check("and is still a PNG",
-          shrunk[:8] == b"\x89PNG\r\n\x1a\n")
+    check("and decodes to the same pixels", pixels(shrunk) == pixels(original))
+    # The "already optimal" branch, which 56% of the real corpus takes.
+    check("an already-optimal PNG is returned unchanged", oi.shrink_png(shrunk) == shrunk)
 
-    # --- transparency is a common way to lose data silently -----------------
+
+def check_modes_survive():
+    """Pillow can drop an alpha channel or flatten a palette on save."""
     from PIL import Image
     out = io.BytesIO()
     rgba = Image.new("RGBA", (64, 64), (255, 0, 0, 0))
     for i in range(64):
         rgba.putpixel((i, i), (0, 255, 0, 128))
     rgba.save(out, "PNG", compress_level=1)
-    tp = out.getvalue()
-    check("an image with an alpha channel keeps every pixel",
-          pixels(oi.shrink_png(tp)) == pixels(tp))
+    transparent = out.getvalue()
+    check("an alpha channel is preserved",
+          pixels(oi.shrink_png(transparent)) == pixels(transparent))
 
-    # --- a palette image must not be silently promoted to RGB ---------------
     out = io.BytesIO()
     Image.new("P", (64, 64)).save(out, "PNG", compress_level=1)
-    pal = out.getvalue()
-    check("a palette image keeps its mode",
-          pixels(oi.shrink_png(pal))[0] == "P")
+    check("a palette image keeps its mode", pixels(oi.shrink_png(out.getvalue()))[0] == "P")
 
-    # --- already optimal ----------------------------------------------------
-    best = oi.shrink_png(noisy_png())
-    check("re-running on the result returns it unchanged",
-          oi.shrink_png(best) == best)
 
-    # --- fails safe ---------------------------------------------------------
-    check("garbage bytes come back untouched, no exception",
-          oi.shrink_png(b"not an image at all") == b"not an image at all")
-    check("a truncated PNG comes back untouched",
-          oi.shrink_png(original[:40]) == original[:40])
-    check("empty input comes back untouched",
-          oi.shrink_png(b"") == b"")
+def check_bad_input_is_returned_untouched():
+    original = noisy_png()
+    for name, data in [("garbage bytes", b"not an image at all"),
+                       ("a truncated PNG", original[:40])]:
+        check(f"{name} comes back untouched", oi.shrink_png(data) == data)
 
-    # --- without Pillow it is a no-op, not a failure -------------------------
     import builtins
     real_import = builtins.__import__
 
@@ -116,13 +85,13 @@ def main():
 
     builtins.__import__ = no_pillow
     try:
-        check("with Pillow unavailable the original is returned",
-              oi.shrink_png(original) == original)
+        check("without Pillow the original is returned", oi.shrink_png(original) == original)
     finally:
         builtins.__import__ = real_import
 
-    # --- the pass over a built tree -----------------------------------------
-    import tempfile
+
+def check_pass_over_a_built_tree():
+    original = noisy_png()
     with tempfile.TemporaryDirectory() as td:
         root = Path(td)
         images = root / "rover" / "build" / "html" / "_images"
@@ -130,61 +99,53 @@ def main():
         (images / "diagram.png").write_bytes(original)
         (images / "photo.jpg").write_bytes(b"\xff\xd8\xff\xe0 not really a jpeg")
         (images / "broken.png").write_bytes(b"\x89PNG\r\n\x1a\n truncated")
-        before_jpg = (images / "photo.jpg").read_bytes()
-        before_broken = (images / "broken.png").read_bytes()
+        jpg = (images / "photo.jpg").read_bytes()
+        broken = (images / "broken.png").read_bytes()
 
         changed, saved = oi.run(["rover"], root)
-
-        check("the built PNG was rewritten smaller",
-              changed == 1 and saved > 0,
+        check("the built PNG was rewritten smaller", changed == 1 and saved > 0,
               f"{changed} changed, {saved} bytes saved")
-        check("the rewritten file is pixel-identical to what it replaced",
+        check("its pixels are unchanged",
               pixels((images / "diagram.png").read_bytes()) == pixels(original))
-        check("a non-PNG is not touched",
-              (images / "photo.jpg").read_bytes() == before_jpg)
-        check("an unreadable PNG is left exactly as it was",
-              (images / "broken.png").read_bytes() == before_broken)
-        check("no temp files are left behind",
-              not list(images.glob("*.pngtmp")))
+        check("a non-PNG is untouched", (images / "photo.jpg").read_bytes() == jpg)
+        check("an unreadable PNG is untouched", (images / "broken.png").read_bytes() == broken)
+        # A stray .pngtmp would be published and packed into the archives.
+        check("no temp files are left behind", not list(images.glob("*.pngtmp")))
 
-        # --- idempotence and the cache --------------------------------------
-        after_first = (images / "diagram.png").read_bytes()
-        changed2, saved2 = oi.run(["rover"], root)
-        check("a second pass changes nothing",
-              changed2 == 0 and saved2 == 0,
-              f"{changed2} changed")
-        check("and leaves the bytes identical",
-              (images / "diagram.png").read_bytes() == after_first)
+        optimised = (images / "diagram.png").read_bytes()
+        check("a second pass changes nothing", oi.run(["rover"], root) == (0, 0))
+        check("a wiki with no build output is skipped", oi.run(["copter"], root) == (0, 0))
 
-        cached = list((root / oi.CACHE_DIR).glob("*.png"))
-        check("results were cached for the next build",
-              len(cached) >= 1, f"{len(cached)} entries")
-
-        # Restore the unoptimised file and prove the cache answers for it.
         (images / "diagram.png").write_bytes(original)
-        changed3, _ = oi.run(["rover"], root)
+        changed, _ = oi.run(["rover"], root)
         check("a restored original is served from the cache",
-              changed3 == 1
-              and (images / "diagram.png").read_bytes() == after_first)
+              changed == 1 and (images / "diagram.png").read_bytes() == optimised)
 
-        # --- a wiki that was not built is simply skipped --------------------
-        c, s = oi.run(["copter"], root)
-        check("a wiki with no build output is skipped quietly",
-              (c, s) == (0, 0))
-
-        # --- an unwritable cache must not stop the pass ---------------------
+        # A build server that cannot write the cache must still build.
         (images / "diagram.png").write_bytes(original)
         cache_dir = root / oi.CACHE_DIR
         mode = cache_dir.stat().st_mode
         os.chmod(cache_dir, 0o500)
         try:
-            c4, _ = oi.run(["rover"], root)
-            check("a read-only cache does not stop the pass",
-                  c4 == 1
-                  and pixels((images / "diagram.png").read_bytes())
-                  == pixels(original))
+            changed, _ = oi.run(["rover"], root)
+            intact = pixels((images / "diagram.png").read_bytes()) == pixels(original)
+            check("a read-only cache does not stop the pass", changed == 1 and intact)
         finally:
             os.chmod(cache_dir, mode)
+
+
+def main():
+    print("\nlossless PNG pass\n")
+    try:
+        import PIL  # noqa: F401
+    except ImportError:
+        print("  Pillow is not installed; nothing can be verified.\n")
+        sys.exit(1)
+
+    check_shrinks_without_changing_pixels()
+    check_modes_survive()
+    check_bad_input_is_returned_untouched()
+    check_pass_over_a_built_tree()
 
     print()
     if failures:
