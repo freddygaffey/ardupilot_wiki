@@ -1219,13 +1219,6 @@ class WikiUpdater:
             help="Build multiple parameters pages for each vehicle based on its firmware repo.",
         )
         parser.add_argument(
-            "--offline",
-            dest="offline",
-            action="store_true",
-            default=False,
-            help="also build the downloadable offline copies and their manifest",
-        )
-        parser.add_argument(
             "--verbose",
             dest="verbose",
             action="store_true",
@@ -1297,36 +1290,51 @@ class WikiUpdater:
 
         check_build(self.args.site)
 
-        # Everything the offline feature adds is behind --offline, so a plain
-        # build - which is what ArduPilot's own build server runs - is byte for
-        # byte what it was before this branch. The offline extras are opt-in and
-        # self-contained, invoked from here rather than woven through the build.
-        if self.args.offline:
-            info("=== Step 5b: Building offline artefacts ===")
-            info(f"Time elapsed so far: {time.time() - tstart:.2f} seconds")
+        info("=== Step 5b: Post-build passes ===")
+        info(f"Time elapsed so far: {time.time() - tstart:.2f} seconds")
 
-            # Defer YouTube embeds. A single embed is a cross-origin connection
-            # and about a megabyte of YouTube's code, started during initial
-            # load whether or not anybody watches: measured 511 ms against 4 ms
-            # for the page's own document. loading="lazy" defers it and changes
-            # nothing else. Done as a pass over built HTML because the iframe
-            # comes from sphinxcontrib.youtube, a third-party package. NOT
-            # wrapped in a blanket except: it rewrites pages in place (atomically,
-            # see lazy_embeds), so a real failure must stop the build rather than
-            # ship half-rewritten pages. Only a missing module is survivable.
-            try:
-                from scripts.lazy_embeds import run as make_embeds_lazy
-            except ImportError as ex:
-                error(f"lazy-embed pass unavailable, skipping: {ex}")
-            else:
-                wikis = [self.args.site] if self.args.site else ALL_WIKIS
-                n = make_embeds_lazy(wikis, Path(self.args.destdir or "."))
-                info(f"deferred YouTube embeds on {n} pages")
+        # Defer YouTube embeds. A single embed is a cross-origin connection
+        # and about a megabyte of YouTube's code, started during initial
+        # load whether or not anybody watches: measured 511 ms against 4 ms
+        # for the page's own document. loading="lazy" defers it and changes
+        # nothing else. Done as a pass over built HTML because the iframe
+        # comes from sphinxcontrib.youtube, a third-party package. NOT
+        # wrapped in a blanket except: it rewrites pages in place (atomically,
+        # see lazy_embeds), so a real failure must stop the build rather than
+        # ship half-rewritten pages. Only a missing module is survivable.
+        #
+        # Runs for a partial build too: it is a per-page rewrite, so skipping
+        # it under --site would leave that one wiki's pages loading YouTube
+        # eagerly while the other ten do not.
+        try:
+            from scripts.lazy_embeds import run as make_embeds_lazy
+        except ImportError as ex:
+            error(f"lazy-embed pass unavailable, skipping: {ex}")
+        else:
+            wikis = [self.args.site] if self.args.site else ALL_WIKIS
+            n = make_embeds_lazy(wikis, Path(self.args.destdir or "."))
+            info(f"deferred YouTube embeds on {n} pages")
 
-            # The archives, manifest and per-file hash tables. Assembled from the
-            # HTML that already exists, so the cost is packing rather than a
-            # second Sphinx pass. A failure here IS fatal now: a half-written
-            # artifact set deployed looks identical to a good one.
+        # The archives, manifest and per-file hash tables. Assembled from the
+        # HTML that already exists, so the cost is packing rather than a
+        # second Sphinx pass: about 22 seconds on a build that takes minutes.
+        # That is cheap enough that there is nothing to gain by making it
+        # opt-in, and an artefact set built only when somebody remembers a flag
+        # is one that is quietly stale.
+        #
+        # A partial build is the exception, and it has to be. --site rebuilds
+        # one wiki, so the tree holds no others, and packing from it would
+        # publish a manifest and a shared archive describing one wiki where
+        # readers have eleven saved. Every saved copy reads that manifest to
+        # decide whether it is out of date, so a truncated one is not a missing
+        # feature: it is a broken update for everybody who already saved a copy.
+        #
+        # A failure in the pack IS fatal. A half-written artefact set, once
+        # deployed, is indistinguishable from a good one.
+        if self.args.site:
+            info(f"offline artefacts skipped: --site {self.args.site} builds "
+                 "one wiki, and the archives describe all of them")
+        else:
             from scripts.build_offline_artifacts import build as build_offline
             build_offline(ALL_WIKIS, Path(self.args.destdir or "."))
 

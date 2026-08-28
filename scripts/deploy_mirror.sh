@@ -7,7 +7,7 @@
 # Build first, in place, with the archives:
 #
 #   ARDUPILOT_OFFLINE_BASE=https://your.host/offline \
-#     python3 update.py --fast --cached-parameter-files --offline
+#     python3 update.py --fast --cached-parameter-files
 #
 # WHY THIS EXISTS RATHER THAN --destdir
 #
@@ -67,7 +67,7 @@ if [ -z "$FRONTEND_ONLY" ]; then
         fi
     done
     if [ ! -f offline/offline-manifest.json ]; then
-        echo "no offline/offline-manifest.json - build with --offline" >&2
+        echo "no offline/offline-manifest.json - run a full build first" >&2
         exit 1
     fi
 fi

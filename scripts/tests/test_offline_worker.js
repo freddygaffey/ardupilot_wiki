@@ -120,7 +120,7 @@ function run(workerSrc, label) {
     // printing "all checks passed": the exact class of silent skip that lets a
     // real regression through. If the archives are not built, say so and fail.
     console.error('\nFAILED: this suite needs the built archives.\n' +
-                  '  python3 update.py --offline   (or --site ' + WIKI + ' --offline)\n');
+                  '  python3 update.py\n');
     process.exit(1);
   }
   const wikiNames = tarNames(wikiArchive);

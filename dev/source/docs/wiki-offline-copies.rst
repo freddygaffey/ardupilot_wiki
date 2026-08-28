@@ -290,8 +290,8 @@ Building and Serving
 
     How the archives are built and served.
 
-``scripts/build_offline_artifacts.py`` runs during a build when ``--offline``
-is passed, writing into ``<destdir>/offline/``:
+``scripts/build_offline_artifacts.py`` runs at the end of every full build,
+writing into ``<destdir>/offline/``:
 
 ``offline-manifest.json``
    Sizes, page counts and a build id. The download page renders from this
@@ -399,7 +399,7 @@ Testing
    Runs the exporter against build output and inspects the result.
 
 ``scripts/tests/test_offline_archives.py``
-   Inspects the finished archives. Requires ``update.py --offline`` first.
+   Inspects the finished archives. Requires a full ``update.py`` first.
 
 ``scripts/tests/test_lazy_embeds.py``
    Covers the post-build pass that defers YouTube embeds.
