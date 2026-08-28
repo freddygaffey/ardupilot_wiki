@@ -241,83 +241,57 @@ the firmware server and the forum) and must stay absolute.
 
 ---
 
-## 7. The wiki's PNGs have never been through a lossless optimiser
+## 7. The wiki's PNGs had never been through a lossless optimiser
 
-**Where:** the images themselves, wherever authors added them.
+**Status: fixed on this branch**, by `scripts/optimise_images.py`, running as a
+pass over the built output. Kept here because the numbers were measured for
+this branch and the earlier figure in this file was wrong.
 
 Images arrive from whatever tool each contributor happened to use, and nothing
-in the build re-deflates them. Re-encoding losslessly, same dimensions, same
-colours, no artefacts, recovers a useful amount for nothing:
+in the build re-deflated them. Redoing the deflate stream at maximum effort
+recovers real bytes with every pixel unchanged.
 
-| file | before | after | saved |
+**The corrected measurement.** This entry previously claimed 16%, taken from a
+sample of the largest files. Measured properly across every distinct built PNG:
+
+| | before | after | saved |
 | --- | --- | --- | --- |
-| `AEROFOX-H7_IMG.png` | 12.7 MB | 6.0 MB | 53% |
-| `H743StampFrontBack.png` | 3.8 MB | 3.1 MB | 19% |
-| `JHEMCU-H743HD-Uart-pins.png` | 3.8 MB | 3.4 MB | 10% |
-| `AEROFOX-H7_pinout.png` | 8.3 MB | 8.1 MB | 2% |
+| 1,635 distinct PNGs | 354.5 MB | 325.5 MB | **8.2%** |
+| as served, 6,294 occurrences | 1,364.1 MB | 1,230.8 MB | **9.8%** (133 MB) |
 
-Measured across a sample of the largest: **16% saved, pixel-identical.** The
-spread is wide because some files were already well compressed and some were
-not compressed at all.
+All 1,635 were verified pixel-identical by decoding both and comparing, and
+none failed. **923 of the 1,635, or 56%, were already optimal** and gave back
+nothing: the wide spread is the point, and the honest headline is about 10% of
+PNG bytes rather than the 16% a sample of the biggest files suggested.
 
-There are 5,787 PNGs across the eleven wikis. The shared image set alone
-carries 282 MB of them.
+A cold run takes about 2 minutes. Results cache on the content hash in
+`.image-cache/`, so later builds only touch new or edited images.
 
 **Why lossless and not something with a better ratio.** JPEG or WebP would save
 considerably more, and both were measured: JPEG at q85 gave 69% on these files.
-But the saving is worst exactly where the risk is highest. `AEROFOX-H7_pinout.png`
-is a 9,449px pinout diagram, deliberately large so pin labels stay readable
-when zoomed, and it gives back only 28% to JPEG while gaining ringing artefacts
-along every hard edge. Resizing has the same problem: a cap at 800px would
-touch 1,239 of 2,331 images, and Sphinx links every thumbnail to the full-size
-file, so shrinking the original also removes the zoomed view a reader gets by
-clicking.
-
-**What the offline branch does, and does not do.** `shrink_png()` in
-`scripts/build_offline_artifacts.py` recompresses PNGs **only on the way into
-the downloadable archives.** The built site is read and never written, so the
-wiki as served is byte-for-byte unchanged and this cannot affect anyone who is
-not downloading an offline copy. It falls back to the original bytes if Pillow
-is absent, if anything raises, or if the result is not actually smaller.
-Results are cached by content hash in `offline/.png-cache`, since the work is
-identical on every build.
-
-**For upstream: compress on the way out, not in the repository.**
-
-The obvious version of this is to recompress the images and commit them. The
-better version is to do it in the build, as a step over the output before it is
-served. The repository keeps the originals exactly as authors supplied them,
-nothing changes for contributors, every future image is covered without anyone
-remembering to do it, and there is no large commit touching thousands of binary
-files for reviewers to take on trust.
-
-The cost is build time, and it is bounded: results cache on the content hash,
-so the work happens once per distinct image rather than once per build.
-
-**This is deliberately not implemented on the offline branch.** It was written
-and then removed, so that the offline change remains about offline copies
-alone. Compressing images changes what every reader receives and is worth
-proposing on its own terms rather than arriving inside an unrelated feature.
-Until it is done, offline archives carry the images exactly as the build
-produces them.
-
-If proposed, the argument is:
-
-* **It is lossless.** Dimensions, colours and every pixel are unchanged; only
-  the deflate stream is redone. No diagram, screenshot or pinout degrades, and
-  it can be verified by decoding both and comparing.
-* **The saving is real but uneven**, so claim it honestly: 16% across a sample
-  of the largest files, with individual results from 53% down to nothing.
-  Files an author already optimised give back little; files exported straight
-  from a tool give back a lot.
-* **It fails safe.** Return the original bytes when the encoder is unavailable,
-  when anything raises, or when the result is not actually smaller. A build
-  must never break because an image could not be recompressed.
+But the saving is worst exactly where the risk is highest.
+`AEROFOX-H7_pinout.png` is a 9,449px pinout diagram, deliberately large so pin
+labels stay readable when zoomed, and it gives back only 28% to JPEG while
+gaining ringing artefacts along every hard edge. Resizing has the same problem:
+a cap at 800px would touch 1,239 of 2,331 images, and Sphinx links every
+thumbnail to the full-size file, so shrinking the original also removes the
+zoomed view a reader gets by clicking.
 
 Anything requiring re-encoding, resizing, or a format change (JPEG, WebP, AVIF)
-is a different proposal with different trade-offs, and should not be mixed into
-this one. Those were measured too: JPEG at q85 gives 69% on the same files, but
-returns least on the pinout diagrams where its artefacts would matter most.
+remains a different proposal with different trade-offs, and was deliberately
+kept out of this one.
+
+**Why over the build output rather than the repository.** Committing
+recompressed images churns the repository, has to be redone whenever anyone
+adds one, asks contributors to remember something, and lands reviewers with a
+commit touching thousands of binary files they can only take on trust. Git also
+keeps the old blobs forever, so the repository would grow rather than shrink.
+The build pass costs nothing ongoing, covers every future image without anyone
+acting, and keeps the originals exactly as their authors supplied them.
+
+**It fails safe.** The original bytes are returned when Pillow is unavailable,
+when anything raises, when the result is not smaller, or when the result is not
+pixel-identical. The worst case is that it does nothing.
 
 ---
 

@@ -3,7 +3,7 @@
   "private": true,
   "description": "Test-only manifest for the offline reading feature. The wiki itself is built by update.py and needs none of this.",
   "scripts": {
-    "test": "node scripts/tests/test_offline_page.js && node scripts/tests/test_offline_worker.js rover && node scripts/tests/test_offline_export.js rover && python3 scripts/tests/test_offline_archives.py && python3 scripts/tests/test_lazy_embeds.py && python3 scripts/tests/test_image_resize.py",
+    "test": "node scripts/tests/test_offline_page.js && node scripts/tests/test_offline_worker.js rover && node scripts/tests/test_offline_export.js rover && python3 scripts/tests/test_offline_archives.py && python3 scripts/tests/test_lazy_embeds.py && python3 scripts/tests/test_image_resize.py && python3 scripts/tests/test_optimise_images.py",
     "test:worker": "node scripts/tests/test_offline_worker.js",
     "test:panel": "node scripts/tests/test_offline_page.js",
     "test:export": "node scripts/tests/test_offline_export.js",
@@ -11,7 +11,8 @@
     "test:export:full": "node --max-old-space-size=8192 scripts/tests/test_offline_export.js --full",
     "test:archives": "python3 scripts/tests/test_offline_archives.py",
     "test:browsers": "node scripts/tests/test_offline_browsers.js",
-    "serve": "node scripts/tests/serve_wiki_tree.js 8000"
+    "serve": "node scripts/tests/serve_wiki_tree.js 8000",
+    "test:images": "python3 scripts/tests/test_optimise_images.py"
   },
   "devDependencies": {
     "jsdom": "^29.0.0",
