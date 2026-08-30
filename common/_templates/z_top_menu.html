@@ -103,9 +103,17 @@
            {%- endif %}
            {# ArduPilot offline. pathto keeps the URL right whatever depth the
               current page sits at; hasdoc means it only appears where the page
-              was actually built. #}
+              was actually built. The second entry is the opt-in switch for the
+              service worker, wired by /js/pwa.js: nothing registers until a
+              reader presses it (or saves a wiki), so everyone else browses
+              exactly as before. #}
            {%- if hasdoc('docs/common-offline') %}
-             <li><a href="{{ pathto('docs/common-offline') }}">{{ _('Offline') }}</a></li>
+             <li><a href="{{ pathto('docs/common-offline') }}">{{ _('Offline') }}</a>
+               <ul>
+                 <li><a href="{{ pathto('docs/common-offline') }}">{{ _('Offline Copies') }}</a></li>
+                 <li><a id="ap-offline-enable" href="{{ pathto('docs/common-offline') }}">{{ _('Enable offline mode') }}</a></li>
+               </ul>
+             </li>
            {%- endif %}
         </ul>
         

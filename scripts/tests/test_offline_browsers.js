@@ -303,8 +303,25 @@ async function runEngine(name, launcher, base) {
   try {
     /* ---- online: register the worker and read a few pages -------------- */
 
-    const control = await phase(name, 'register + take control', async () => {
+    /* The worker is opt-in. A reader who has not asked for offline mode must
+     * get NO registration at all - that is the property that lets the feature
+     * ship to production dormant - so pin it before opting in. */
+    const dormant = await phase(name, 'no worker without opt-in', async () => {
       await page.goto(base + VISITED, { waitUntil: 'load' });
+      await page.waitForTimeout(1200);
+      return page.evaluate(async () => {
+        const reg = await navigator.serviceWorker.getRegistration();
+        return { registered: !!reg };
+      });
+    });
+    check(name, 'a reader who has not opted in gets no service worker',
+          !dormant.registered, JSON.stringify(dormant));
+
+    const control = await phase(name, 'opt in, register + take control', async () => {
+      await page.evaluate(() => {
+        window.localStorage.setItem('ap-offline-enabled', '1');
+      });
+      await page.reload({ waitUntil: 'load' });
       return waitForControl(page);
     });
     check(name, 'service worker takes control',

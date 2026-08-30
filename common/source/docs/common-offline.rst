@@ -149,6 +149,10 @@ is involved, and the pages you read offline are the same files the site serves
 normally. While automatic updates are enabled, the wiki may check this site for
 changed pages while it is open.
 
+Offline mode is off until you ask for it. Saving a wiki turns it on, and so
+does **Enable offline mode** in the Offline menu. Until then the site behaves
+exactly as it always has, and nothing runs in the background.
+
 Install as an App
 =================
 
