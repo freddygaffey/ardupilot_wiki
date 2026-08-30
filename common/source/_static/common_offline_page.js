@@ -1548,7 +1548,13 @@
               e.target.closest('#clear-btn, #download-cache-btn, #check-btn, #dl-single');
     if (!hit) { return; }
     if (hit.id === 'clear-btn') { confirmClear(); }
-    if (hit.id === 'download-cache-btn') { saveSelectedReal(); }
+    if (hit.id === 'download-cache-btn') {
+      // Saving is the clearest possible opt-in to offline mode, so it also
+      // turns the service worker on (pwa.js). Without a worker the saved
+      // pages would download, store, and then never be served.
+      if (window.ApOffline) { window.ApOffline.enable(); }
+      saveSelectedReal();
+    }
     if (hit.id === 'check-btn') { checkForUpdates(); }
     if (hit.id === 'dl-single') { e.preventDefault(); exportHtmlFile(); }
   });

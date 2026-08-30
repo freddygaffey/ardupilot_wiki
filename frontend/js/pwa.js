@@ -189,13 +189,72 @@
     }
   });
 
-  // Registered here rather than inside the load handler: the service worker is
-  // part of what the browser checks before deciding the site is installable,
-  // so waiting for load delays beforeinstallprompt for no reason.
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', registerServiceWorker);
-  } else {
+  // The worker is OPT-IN. Nothing registers until the reader asks for offline
+  // mode - by the menu control below, or by saving a wiki, both deliberate
+  // acts. A reader who never opts in browses the wiki exactly as it was before
+  // this feature existed: no worker, no interception, nothing to go wrong.
+  // That is also what lets the feature ship to production dormant and be
+  // tested there in parallel.
+  var OFFLINE_KEY = 'ap-offline-enabled';
+  var ENABLE_CONTROL_ID = 'ap-offline-enable';
+
+  function offlineEnabled() {
+    try {
+      return window.localStorage.getItem(OFFLINE_KEY) === '1';
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function enableOffline() {
+    try {
+      window.localStorage.setItem(OFFLINE_KEY, '1');
+    } catch (err) {
+      /* private browsing; the registration below still holds for this tab */
+    }
     registerServiceWorker();
+    reflectEnableControl();
+  }
+
+  // The menu carries an "Enable offline mode" item on every page. Label it
+  // honestly on arrival, and make pressing it the switch.
+  function reflectEnableControl() {
+    var control = document.getElementById(ENABLE_CONTROL_ID);
+    if (control && offlineEnabled()) {
+      control.textContent = 'Offline mode: on';
+    }
+  }
+
+  document.addEventListener('click', function (event) {
+    var control = event.target.closest ?
+        event.target.closest('#' + ENABLE_CONTROL_ID) : null;
+    if (!control) { return; }
+    event.preventDefault();
+    enableOffline();
+  });
+
+  // The offline page's Save button opts in too: saving a wiki only to have no
+  // worker to serve it offline would be a download that does nothing.
+  window.ApOffline = { enabled: offlineEnabled, enable: enableOffline };
+
+  function startWhenOptedIn() {
+    reflectEnableControl();
+    if (offlineEnabled()) {
+      registerServiceWorker();
+      return;
+    }
+    // Enabled on an earlier visit but the flag is gone (site data partially
+    // cleared, or a build from before opt-in): the registration itself is the
+    // reader's answer, so honour it and restore the flag.
+    navigator.serviceWorker.getRegistration().then(function (registration) {
+      if (registration) { enableOffline(); }
+    }).catch(function () { /* nothing registered, nothing to honour */ });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startWhenOptedIn);
+  } else {
+    startWhenOptedIn();
   }
 
   function registerServiceWorker() {

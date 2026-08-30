@@ -31,9 +31,10 @@ Three distinct things are provided here. They do different jobs, and which one
 you want depends on what you are trying to achieve.
 
 **Browse faster.** Every page you visit is stored on your device and served
-from there the next time it is requested. There is nothing to configure, and it
-begins working from your second visit onwards. This applies to ordinary
-browsing over a normal internet connection.
+from there the next time it is requested. It starts when you turn offline mode
+on - **Enable offline mode** in the Offline menu, or saving a wiki - and works
+from then on. This applies to ordinary browsing over a normal internet
+connection.
 
 **Save a wiki for offline use.** Saving downloads the wiki you select into your
 browser, together with the shared image set used by all wikis. The shared images
@@ -107,13 +108,15 @@ existed, on a first visit with it, and on every visit afterwards.
 | Parameter list (6.1 MB)          | about 8,300 ms | about 8,300 ms | about 2,300 ms | 3.5x faster  |
 +----------------------------------+----------------+----------------+----------------+--------------+
 
-The table assumes you have opened some page of the wiki before, which is the
-situation almost every reader is in. The service worker and the script that
-registers it are about 24 KB compressed, fetched once on the first page you
-ever open and never again; charging that to every new page would describe a
-first-ever visit rather than an ordinary one. Excluded, a page you have not read costs exactly
-what it cost before the feature existed. It is free until it starts paying,
-which it does the second time you open anything.
+The table assumes offline mode is on and you have opened some page of the wiki
+before, which is the situation every opted-in reader is in. The service worker
+and the script that registers it are about 24 KB compressed, fetched once when
+offline mode is first enabled and never again; charging that to every new page
+would describe a first-ever visit rather than an ordinary one. Excluded, a
+page you have not read costs exactly what it cost before the feature existed.
+It is free until it starts paying, which it does the second time you open
+anything. A reader who never enables offline mode is not in the table at all:
+their pages cost what they always did.
 
 The request row says "about one" rather than none because a stored page is
 returned immediately and the worker then asks the server whether it has
@@ -164,7 +167,12 @@ That interception is the whole mechanism. The pages are unmodified static HTML
 as built by Sphinx; nothing is rewritten and no framework is introduced.
 
 Implementation is in ``frontend/sw.js``, registered by ``frontend/js/pwa.js``,
-which ``common/_templates/layout.html`` includes on every page.
+which ``common/_templates/layout.html`` includes on every page. Inclusion is
+not registration: ``pwa.js`` registers the worker only after the reader has
+opted in, by saving a wiki or by pressing **Enable offline mode** in the
+Offline menu. A reader who never opts in gets no worker and browses the wiki
+exactly as before the feature existed, which is what allows it to be deployed
+dormant and tested in production without touching anyone else.
 
 .. note::
 
