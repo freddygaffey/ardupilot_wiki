@@ -65,3 +65,14 @@ build_options.py
 
 # Generated offline artefacts (archives + manifest), rebuilt by update.py
 /offline/
+
+# Template overrides copied into each wiki by update.py; the originals live in
+# common/_templates and are the only copy that should be edited or committed.
+/*/source/_templates/
+!/common/_templates/
+!/common/_templates/*.html
+
+# Test-only dependencies, installed on demand rather than vendored:
+#   npm install
+/node_modules/
+/package-lock.json
