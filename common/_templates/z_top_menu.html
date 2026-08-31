@@ -1,16 +1,6 @@
-{# VERBATIM COPY of sphinx_rtd_theme's z_top_menu.html, plus one extra item
-   (marked "ArduPilot offline" below).
-
-   Overriding replaces the theme's version outright, so this copy must be
-   re-synced whenever the menu changes upstream:
-
-       https://github.com/ArduPilot/sphinx_rtd_theme -> z_top_menu.html
-
-   The better home for the extra item is upstream in the theme, at which point
-   this whole override can be deleted.
-
-   Copied into each wiki by update.py; edit common/_templates, not the copies.
-#}
+{# Verbatim copy of sphinx_rtd_theme's z_top_menu.html plus the Offline entry.
+   Overriding replaces the theme's file, so re-sync when it changes upstream.
+   Copied into each wiki by update.py; edit here, not the copies. #}
     {# Static site menu. #}
     <div id='cssmenu'>
         <ul>
@@ -101,12 +91,7 @@
                </ul>
              </li>
            {%- endif %}
-           {# ArduPilot offline. pathto keeps the URL right whatever depth the
-              current page sits at; hasdoc means it only appears where the page
-              was actually built. The second entry is the opt-in switch for the
-              service worker, wired by /js/pwa.js: nothing registers until a
-              reader presses it (or saves a wiki), so everyone else browses
-              exactly as before. #}
+           {# The Offline page and the opt-in switch, wired by /js/pwa.js. #}
            {%- if hasdoc('docs/common-offline') %}
              <li><a href="{{ pathto('docs/common-offline') }}">{{ _('Offline') }}</a>
                <ul>

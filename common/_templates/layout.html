@@ -1,21 +1,7 @@
-{# Adds the PWA hooks to every wiki page.
-
-   The ArduPilot sphinx_rtd_theme fork exposes a single hook inside <head>
-   ({% block extrahead %}, layout.html:124), which is all we need: the manifest
-   link makes the site installable and pwa.js registers the service worker.
-
-   Paths are absolute because the service worker is scoped to the site root and
-   therefore has to be served from there, while these pages live under
-   /copter/, /plane/ and so on.
-
-   Void elements are self-closed and boolean attributes carry values, which
-   HTML5 accepts and XML requires. Sphinx's epub builder emits XHTML, and a
-   reader parses it strictly: a bare <meta ...> or defer here made every page
-   of the book unopenable, not just this markup.
-
-   This file is copied into each wiki's source/_templates/ by update.py. Edit it
-   here, not in the copies.
-#}
+{# PWA hooks on every page, through the theme's extrahead block: the manifest
+   link and pwa.js. Absolute paths because the worker is served from the site
+   root. Void elements are self-closed: the epub builder parses this as XML.
+   Copied into each wiki by update.py; edit here, not the copies. #}
 {% extends "!layout.html" %}
 
 {% block extrahead %}
@@ -24,55 +10,22 @@
   <meta name="theme-color" content="#2980b9" />
   <link rel="apple-touch-icon" href="/apple-icon.png" />
   <script src="/js/pwa.js" defer="defer"></script>
-  {# The offline page's stylesheet belongs in <head>. Declared inside the
-     page's own raw HTML it is not found until the parser is most of the way
-     down the body, so the panel paints unstyled and then jumps. Only that one
-     page needs it, hence the guard. #}
-  {# The generated reference pages are enormous: the copter parameter list is
-     5.8MB and builds 215,470 DOM elements, which takes the browser 33 seconds
-     to lay out. The HTML itself arrives from cache in 321ms, so this is all
-     layout, and no amount of caching touches it.
-
-     content-visibility lets the browser skip layout for sections that are off
-     screen, and contain-intrinsic-size gives it an estimate so the scrollbar
-     and anchor positions stay sensible. Jumping to an anchor inside a skipped
-     section still works: the browser renders it on demand.
-
-     Scoped to these pages alone, because it is only worth the risk where the
-     page is generated and huge. #}
+  {# The generated reference pages are huge (5.8 MB, 215,470 elements, 33 s of
+     layout); content-visibility lets the browser skip off-screen sections. #}
   {%- if pagename.startswith('docs/parameters') or
          pagename.startswith('docs/binary-features') or
          pagename.startswith('docs/logmessages') %}
   <style>
-    /* The group sections, one per parameter prefix: 356 of them on the copter
-       list, each holding roughly sixteen parameters.
-
-       The size estimate has to be near the truth or this makes scrolling
-       WORSE, not better. At 320px the browser put the page at ~114,000px when
-       it is over 850,000px, so every scroll discovered real heights, the
-       document grew underneath the reader and the scrollbar re-anchored
-       continuously. 5.8MB over 356 groups is ~16KB each, which lays out around
-       2,400px. "auto" then replaces the estimate with the measured height once
-       a group has been rendered once, so only the first pass uses it. */
+    /* One group per parameter prefix, about 16 KB each. The estimate must be
+       near the truth or the scrollbar re-anchors continuously. */
     .rst-content section > section > section {
       content-visibility: auto;
       contain-intrinsic-size: auto 2400px;
     }
   </style>
   <script>
-    /* Scroll to the anchor as soon as it exists, not once the whole page has
-       been parsed.
-
-       These pages run to 5.8MB, so parsing them takes seconds, and the browser
-       cannot scroll to a target it has not read yet: it shows the top of the
-       page and jumps a second or three later. Deferred scripts are no use
-       here, because "deferred" means after parsing, which is exactly the wait
-       we are trying to avoid.
-
-       So watch for the target while the document is still arriving, reveal the
-       sections containing it, and scroll the moment it appears. Inline and
-       blocking on purpose: it must run before the parser gets there. It costs
-       one observer that disconnects itself on the first hit. */
+    /* Scroll to the anchor as soon as it exists rather than after 5.8 MB has
+       parsed. Inline and blocking on purpose. */
     (function () {
       if (!location.hash || location.hash.length < 2) { return; }
       var id;
@@ -93,8 +46,7 @@
           }
         }
         el.scrollIntoView();
-        /* Content above it is still arriving and will move it, so correct once
-           the document is complete. */
+        /* Content above is still arriving; correct once complete. */
         document.addEventListener('DOMContentLoaded', function () {
           el.scrollIntoView();
         });
@@ -106,6 +58,8 @@
     })();
   </script>
   {%- endif %}
+  {# The offline page's stylesheet belongs in <head>, or the panel paints
+     unstyled and then jumps. #}
   {%- if pagename == 'docs/common-offline' %}
   <link rel="stylesheet" href="{{ pathto('_static/common_offline.css', 1) }}" />
   {%- endif %}
