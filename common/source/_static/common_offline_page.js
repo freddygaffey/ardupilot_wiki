@@ -1,33 +1,20 @@
 /*
  * [copywiki destination="copter,plane,rover,sub,blimp,antennatracker,dev,planner,planner2,ardupilot,mavproxy"]
  *
- * Marker required: without one a .js copies to only four of the eleven wikis,
- * leaving the panel scriptless on the other seven.
- *
- * Logic for /offline/. State is measured from Cache Storage and the Storage
- * API, not remembered, so an evicted copy shows as gone. Download fetches one
- * pre-built archive per wiki and unpacks it locally rather than crawling.
+ * The Offline page: saves wikis from the pre-built archives, checks for
+ * updates, exports. State is measured from Cache Storage each time, not
+ * remembered, so an evicted copy shows as gone.
  */
 (function (global) {
   'use strict';
 
-  // Bumped when this file changes in a way worth telling apart at runtime.
-  // window.ArduPilotOfflineVersion answers "is the page running the code I just
-  // deployed?" without inferring it from behaviour.
+  // Answers "is the page running the code just deployed" at runtime.
   var VERSION = 'verified-bytes-1';
   global.ArduPilotOfflineVersion = VERSION;
 
 
-  // What the table shows for the fraction of a second before the manifest
-  // arrives, and all it has to show if the manifest cannot be fetched. Copied
-  // from a real build's offline-manifest.json, so refresh them when the figures
-  // move: these last read 110 MB for Copter, which stopped being true the day
-  // the historical parameter pages moved out of the archives.
-  //
-  // "About" has no row: at 3 MB and 28 pages it was the smallest entry by an
-  // order of magnitude, and whether to include it was a question with only one
-  // sensible answer. It travels inside common now, which is why common has a
-  // page count at all. See FOLD_INTO_COMMON in build_offline_artifacts.py.
+  // Fallback rows until the manifest arrives; refresh from a real build when
+  // the figures move. About travels inside common (FOLD_INTO_COMMON).
   var COMMON = { id: 'common', name: 'Common (required)', mb: 442, pages: 28, required: true };
   var WIKIS = [
     { id: 'copter', name: 'Copter', mb: 74, pages: 860 },
@@ -42,22 +29,17 @@
     { id: 'antennatracker', name: 'Antenna Tracker', mb: 4, pages: 55 }
   ];
 
-  // The archives are ordinary static files in the built tree, written to
-  // <destdir>/offline/ by update.py and served by nginx like any
-  // other file: same origin as the pages, so no CORS and no separate host. The
-  // manifest's "artifact_base" overrides this when they are hosted elsewhere.
+  // Static files in the built tree, same origin; the manifest's artifact_base
+  // overrides this.
   var ARTIFACT_BASE = '/offline';
 
   var PAGE_CACHE_PREFIX = 'ardupilot-pages-';
   var OFFLINE_CACHE_PREFIX = 'ardupilot-offline-';
   var COMPLETE_MARKER = '/__ap_complete__';
-  // Wikis that used to have an archive and a cache of their own and now travel
-  // inside common. Kept in step with FOLD_INTO_COMMON in
-  // scripts/build_offline_artifacts.py and FOLDED_INTO_COMMON in sw.js.
+  // Kept in step with FOLD_INTO_COMMON (build) and FOLDED_INTO_COMMON (sw.js).
   var FOLDED_INTO_COMMON = ['ardupilot'];
   var AUTOUPDATE_KEY = 'ap-autoupdate';
-  // Quota estimates are deliberately fuzzed by browsers, and unpacking needs
-  // room to work, so require noticeably more headroom than the raw payload.
+  // Quota estimates are fuzzed, and unpacking needs working room.
   var HEADROOM = 1.5;
 
   // Build id of the manifest currently published, filled in on load.
@@ -65,10 +47,7 @@
 
   function el(id) { return document.getElementById(id); }
 
-  // The worker memoises which offline caches exist and carry a completion
-  // marker, and only refreshes that on CACHES_CHANGED. Send it after every
-  // change to what is stored, or a wiki saved mid-session stays invisible to
-  // the worker until it restarts.
+  // The worker memoises which caches exist; tell it after every change.
   function notifyWorkerCachesChanged() {
     try {
       if (navigator.serviceWorker && navigator.serviceWorker.controller) {
@@ -82,9 +61,7 @@
     return m >= 1024 ? (m / 1024).toFixed(1) + ' GB' : Math.round(m) + ' MB';
   }
 
-  // Update toast: a card shown while a saved wiki checks for or applies an
-  // update. The bar sweeps for unknown-length steps, fills as files are
-  // applied, turns green when done, then fades out. Styled in common_offline.css.
+  // Progress card for update checks. Styled in common_offline.css.
   var toastEl = null, toastHideTimer = null;
 
   function toast(opts) {
@@ -97,9 +74,6 @@
       toastEl.innerHTML =
         '<div class="ap-toast-title"></div>' +
         '<div class="ap-toast-msg"></div>' +
-        // Hidden unless a caller supplies an action. A toast that says a full
-        // download is needed and then tells the reader to go and find a page
-        // is asking them to do the work of a button.
         '<button type="button" class="ap-toast-action apo-btn apo-btn-primary" hidden></button>' +
         '<div class="ap-toast-track"><div class="ap-toast-bar"></div></div>';
       document.body.appendChild(toastEl);
@@ -154,9 +128,8 @@
       var offline = names.filter(function (n) { return n.indexOf(OFFLINE_CACHE_PREFIX) === 0; });
       return Promise.all(offline.map(function (name) {
         return caches.open(name).then(function (cache) {
-          // Only a cache carrying the completion marker counts. An interrupted
-          // download leaves entries behind, and treating those as a usable copy
-          // is how somebody ends up offline with half a wiki.
+          // Only a cache with the completion marker counts; the rest is an
+          // aborted download.
           return cache.match(COMPLETE_MARKER).then(function (marker) {
             if (!marker) { return; }
             stored[name.slice(OFFLINE_CACHE_PREFIX.length).split('-')[0]] = true;
@@ -197,11 +170,7 @@
       var est = r[0].estimate, persisted = r[0].persisted, pages = r[1];
       var used = est.usage || 0;
 
-      // Two different things get called "saved" and they contradict each other:
-      // wikis you deliberately downloaded, and pages cached simply because you
-      // read them. The table shows the first, so the footer reporting the
-      // second as "saved" made "Remove all" look enabled with nothing to
-      // remove. Name them separately.
+      // Saved wikis and pages cached while reading are different things.
       var savedWikis = Object.keys(storedIds).filter(function (id) {
         return id !== 'common';
       }).length;
@@ -212,12 +181,7 @@
       if (pages) {
         parts.push(pages + ' page' + (pages === 1 ? '' : 's') + ' cached while reading');
       }
-      // Chrome's quota accounting lags a deletion by seconds, so immediately
-      // after Remove all this said "no wikis saved · 542 MB used", which reads
-      // as a failure to delete anything. Measured: still pinned at 568 MB
-      // twenty-five seconds after the caches were verifiably gone, and correct
-      // on the next load. Say what is happening instead of quoting a number
-      // that contradicts the line beside it, and look again shortly.
+      // Chrome's quota figure lags a deletion by seconds; say so and look again.
       var nothingHeld = !savedWikis && !pages && !storedIds.common;
       if (nothingHeld && used > 5 * 1048576) {
         parts.push('freeing space');
@@ -230,14 +194,12 @@
       } else {
         parts.push(fmt(used) + ' used');
       }
-      // Free space is not shown: the browser's quota is a fuzzed figure it can
-      // revise, not disk space, so it invites a meaningless comparison.
-      // checkRoom still consults it before a download.
+      // Free space is not shown: the quota is a fuzzed figure, not disk space.
       parts.push('storage ' + (persisted ? 'permanent' : 'temporary'));
       el('storage-status').textContent = parts.join(' · ');
 
-      // No button: browsers routinely decline a bare persist() request, so it
-      // appeared to do nothing. Installing is the signal they do act on.
+      // No persist button: browsers routinely decline it; installing is what
+      // they act on.
       var evicted = evictedIds();
       var evictNote = evicted.length
         ? '<div class="apo-note apo-note-warn">&#9888; ' +
@@ -255,8 +217,7 @@
           '<a href="#install-as-an-app" data-ap-install>Install it now</a>, ' +
           'or read what that means below.</div>');
 
-      // Nothing cached means nothing to remove, so the button should not invite
-      // a press. Disarm it too, in case it was armed when the last of it went.
+      // Nothing stored, nothing to remove.
       var clear = el('clear-btn');
       if (clear) {
         var anything = pages > 0 || Object.keys(storedIds).length > 0;
@@ -284,10 +245,7 @@
 
     selected().forEach(function (c) {
       var b = parseInt(c.dataset.mb, 10) * 1048576;
-      // Chosen parameter versions are fetched alongside the archive, so they
-      // are part of what this selection costs even though they travel
-      // separately. Raw bytes: the figures quoted everywhere else are what
-      // crosses the wire, and these compress on the way in like anything else.
+      // Chosen parameter versions travel separately but count toward the selection.
       var w = wikiById(c.value);
       if (w) { b += paramBytes(w); }
       selectedTotal += b;
@@ -303,10 +261,8 @@
 
   var storedIds = {};
 
-  // Eviction detection. Temporary storage can be reclaimed without warning and
-  // a saved wiki just vanishes; reading Cache Storage alone shows it as not
-  // saved, silently. So saved ids are mirrored to localStorage - a record with
-  // no matching cache is one the browser reclaimed, and the panel says so.
+  // Saved ids are mirrored to localStorage, so an evicted wiki can be reported
+  // rather than silently read as unsaved.
   var SAVED_IDS_KEY = 'ap-saved-ids';
 
   function savedRecord() {
@@ -334,9 +290,7 @@
     } catch (err) { /* ignore */ }
   }
 
-  // Ids we recorded as saved but that are no longer in Cache Storage: the
-  // browser reclaimed them. 'common' is excluded because it is not a wiki a
-  // reader thinks of themselves as having saved.
+  // Recorded as saved but no longer in Cache Storage: the browser reclaimed it.
   function evictedIds() {
     return savedRecord().filter(function (id) {
       return id !== 'common' && !storedIds[id];
@@ -346,35 +300,17 @@
   var reclaimTimer = null;
 
 
-  /*
-   * Which historical parameter versions a reader wants.
-   *
-   * These are not in the wiki archives. update.py --paramversioning builds one
-   * page per firmware version - 14 for Copter at 4 to 6 MB each - and baking
-   * them in would put a third of a wiki's download behind something most
-   * people never open. The manifest lists what exists; the pages are already
-   * served at their real URLs, so a chosen one is fetched directly and stored
-   * through the same compressing path as the archive's own entries.
-   *
-   * Keyed by wiki id, holding a map of file -> true. Seeded from the
-   * manifest's default (the newest stable) the first time a wiki is seen.
-   */
+  // Historical parameter versions a reader wants, keyed by wiki id, file ->
+  // true. They are not in the archives (14 for Copter at 4 to 6 MB each);
+  // chosen ones are fetched from their live URLs.
   var paramPicks = {};
 
   function paramsOf(w) {
     return (w && w.param_versions) || [];
   }
 
-  /*
-   * Seeded from the manifest's default, and NOT before the manifest is here.
-   *
-   * The panel renders immediately from the built-in wiki list so it is not
-   * blank while the manifest loads, and at that point no wiki has any versions
-   * at all. Memoising then cached an empty selection for every wiki, so when
-   * the real list arrived and the rows were drawn again this returned that
-   * empty object and the default was never ticked. Nothing looked broken: the
-   * versions were listed correctly, just all unchecked.
-   */
+  // Seeded from the manifest's default, and not before the manifest is here:
+  // memoising an empty selection first left the default unticked.
   function picksFor(w) {
     var versions = paramsOf(w);
     if (!versions.length) { return paramPicks[w.id] || {}; }
@@ -388,22 +324,8 @@
     return paramPicks[w.id];
   }
 
-  /*
-   * Tick what is actually saved, not what is newest.
-   *
-   * The seed above comes from the manifest's `default` flag, which marks the
-   * newest stable. That is the right guess for someone who has saved nothing.
-   * It is the wrong answer for everyone else, and it goes wrong the moment a
-   * release lands: a reader holding 4.7.0 would open the panel to find 4.7.1
-   * ticked and 4.7.0 clear, which is the exact opposite of the truth, and
-   * pressing Save would then fetch the version they did not ask for while
-   * leaving the one they have looking unselected.
-   *
-   * So for any wiki with a completed download, the cache decides. Wikis with
-   * nothing saved keep the default. Runs once per render pass, one cache open
-   * and one match per offered version, all against caches that are already
-   * open.
-   */
+  // Tick what is saved, not what is newest: a reader holding 4.7.0 must not
+  // find 4.7.1 ticked. Wikis with nothing saved keep the default.
   function syncPicksWithCache(stored) {
     var wikis = WIKIS.filter(function (w) {
       return paramsOf(w).length && stored[w.id];
@@ -418,9 +340,7 @@
         }));
       }).then(function (files) {
         var found = files.filter(Boolean);
-        // A saved wiki whose parameter pages are all absent means the reader
-        // deliberately took none. Honour that rather than re-ticking a default
-        // they already declined.
+        // All absent means the reader took none; honour that.
         var next = {};
         found.forEach(function (f) { next[f] = true; });
         var before = JSON.stringify(paramPicks[w.id] || {});
@@ -442,10 +362,7 @@
     return pickedFiles(w).reduce(function (n, v) { return n + (v.bytes || 0); }, 0);
   }
 
-  // Versions promoted out of the dropdown and into the tick list. Held per
-  // wiki for the life of the page. A promoted version that gets saved is
-  // recognised by syncPicksWithCache on the next load and shortlists itself,
-  // so this only has to survive until then.
+  // Promoted from the dropdown; once saved, syncPicksWithCache keeps it.
   var paramPromoted = {};
 
   /** "4.7.0" -> "4.7". The release series a version belongs to. */
@@ -467,24 +384,8 @@
     return 0;
   }
 
-  /*
-   * Which versions get a tick box of their own.
-   *
-   * Copter builds fourteen. Showing all fourteen as ticks was the reason the
-   * whole block had to be hidden behind a disclosure button in the first place,
-   * and it still asked the reader to read fourteen near-identical lines to find
-   * the two they cared about. Nine of the fourteen are point releases within a
-   * series that differ from their neighbours by about 8%.
-   *
-   * So the ticks are the ones worth a glance:
-   *   - the newest stable of each release series (4.7.0, 4.6.3, 4.5.7)
-   *   - anything already saved, so what you have is never hidden from you
-   *   - anything promoted from the dropdown, so a choice you made stays made
-   *
-   * Everything else goes in the dropdown, and picking it from there promotes it
-   * here. The user asked for exactly this: "both tick and dropdown ... like the
-   * dropdown is custom then it will appear as a tickbox".
-   */
+  // Ticks: the newest stable of each series, anything saved, anything
+  // promoted. The rest is in the dropdown.
   function shortlistFor(w) {
     var versions = paramsOf(w);
     var picks = picksFor(w);
@@ -520,22 +421,15 @@
     return '/' + w.id + '/' + v.file;
   }
 
-  /*
-   * The disclosure row under a wiki, listing every version it built.
-   *
-   * Hidden until asked for: five vehicles carry these and an always-open list
-   * of fourteen checkboxes each would bury the ten rows that matter.
-   */
+  // The disclosure row under a wiki. Hidden until asked for: fourteen boxes
+  // each would bury the ten rows that matter.
   function paramRowFor(w) {
     var versions = paramsOf(w);
     if (!versions.length) { return ''; }
     var picks = picksFor(w);
     var mb = function (v) { return Math.round((v.bytes || 0) / 1048576); };
 
-    // The current list ships inside the wiki archive and cannot be deselected.
-    // Shown rather than merely stated, because "the current list is always
-    // included" in prose above a grid of unticked boxes reads as though the
-    // current list were one of the unticked boxes.
+    // The current list is in the archive; shown as a ticked, disabled box.
     var fixed = '<label class="apo-param apo-param-fixed" ' +
                   'title="Part of the wiki download; cannot be deselected">' +
                   '<input type="checkbox" checked disabled>' +
@@ -594,9 +488,7 @@
           if (report) { report(w.name + ' · parameters ' + v.label); }
           return ApUnpack.storeEntry(cache, url, v.file, body);
         }).catch(function (err) {
-          // One missing version must not fail a whole wiki: the pages are
-          // republished on every build and a reader who asked for a version
-          // that has just been retired should still get their wiki.
+          // One retired version must not fail the whole wiki.
           console.warn('[offline] parameter version skipped', err && err.message);
         });
       });
@@ -606,10 +498,7 @@
   function renderWikis(afterSync) {
     return storedWikis().then(function (stored) {
       storedIds = stored;
-      // What is stored decides which parameter versions are ticked. Done here,
-      // before the rows are built, so the boxes are right on first paint
-      // rather than correcting themselves a moment later. `afterSync` stops
-      // the recursion: the second pass paints with the synced picks.
+      // Sync picks with the cache before painting; `afterSync` stops the recursion.
       if (!afterSync) {
         return syncPicksWithCache(stored).then(function () {
           return renderWikis(true);
@@ -635,9 +524,7 @@
                  '</td>' +
                  '<td class="apo-num">' + w.mb + ' MB</td>' +
                  '<td class="apo-num apo-pages">' + (w.pages || '') + '</td>' +
-                 // Rendered from state, not painted on afterwards: renderWikis
-                 // rebuilds this tbody when a download finishes, which used to
-                 // wipe the bar the moment it reached 100%.
+                 // From state: this tbody is rebuilt when a download finishes.
                  '<td class="apo-num"><div class="apo-progress"' +
                    (isStored ? '' : ' hidden') + '>' +
                    '<div class="apo-progress-bar" style="width:' +
@@ -702,10 +589,7 @@
     return Array.prototype.slice.call(document.querySelectorAll('.wiki-check'));
   }
 
-  /**
-   * Mirror the rows: ticked when every wiki is, indeterminate when only some
-   * are. Common is excluded, its box being required and disabled.
-   */
+  /** Ticked when every wiki is, indeterminate when some are. */
   function syncSelectAll() {
     var box = el('select-all');
     if (!box) { return; }
@@ -729,8 +613,7 @@
     var total = el('selection-total');
     if (!total) { return; }
 
-    // Kept short: this sits in a right-aligned column barely wider than the
-    // checkbox beside it, and a sentence long enough to wrap reads badly there.
+    // Short: the column is barely wider than the checkbox.
     if (!b.total) {
       total.textContent = 'Nothing selected';
     } else if (!b.toDownload) {
@@ -745,26 +628,9 @@
     warnIfOverQuota(b);
   }
 
-  /*
-   * Say so BEFORE the download, not after it has failed.
-   *
-   * checkRoom() already refuses a download that cannot fit, but it runs when
-   * Save is pressed, by which point the reader has made every choice and is
-   * told no. This warns while they are still choosing.
-   *
-   * Quota, not a browser check. WebKit is the one that reports about 1.0 GB
-   * against Chromium's 6.5 and Firefox's 10.7 on the same machine, so it is
-   * where this will fire - but a Chrome profile that is already full hits the
-   * identical wall, and asking the browser what it will give us is both more
-   * honest and one less thing to keep up to date than a list of user agents.
-   *
-   * Why it matters here rather than being a nicety: WebKit does not refuse a
-   * write that would exceed the quota, it discards the origin. Measured on a
-   * full uncompressed download - storage climbed to 953 MB, Sub finished, and
-   * it dropped to 52 MB, with every archive still reporting success. A reader
-   * who ignores this warning does not get an error, they get nothing, having
-   * waited for the whole download.
-   */
+  // Warn while choosing, not after Save fails. WebKit reports about 1 GB and
+  // does not refuse a write over quota: it discards the origin, with every
+  // archive still reporting success.
   var QUOTA_MARGIN = 1.15;
 
   function warnIfOverQuota(b) {
@@ -786,11 +652,9 @@
 
   /* ---------- actions ---------- */
 
-  // Removing is destructive and slow to undo, so it asks first in place, says
-  // how much is at stake, and disarms itself if left alone.
+  // Destructive, so it asks in place and disarms itself if left alone.
   var CONFIRM_MS = 6000;
-  // A double click should never delete anything. The second press is ignored
-  // until this has passed, so confirming has to be a deliberate, separate act.
+  // A double click must never delete anything.
   var CONFIRM_DEAD_MS = 700;
 
   var clearArmed = null;
@@ -800,8 +664,6 @@
     if (clearArmed) { clearTimeout(clearArmed); }
     clearArmed = null;
     btn.textContent = 'Remove all';
-    // Stays red: it is destructive whether or not it is armed. Arming is
-    // signalled by the label, the darker shade and the draining bar.
     btn.classList.remove('apo-btn-armed');
     var bar = btn.querySelector('.apo-arm');
     if (bar) { bar.remove(); }
@@ -818,21 +680,8 @@
     }
 
     return Promise.resolve().then(function () {
-      /*
-       * What this button will actually remove, not what the origin is charged.
-       *
-       * It used navigator.storage.estimate().usage, which counts everything the
-       * browser has ever billed this site for, including space freed but not
-       * yet reclaimed. After a day of saving and deleting that drifts a long
-       * way from reality: observed reading "Delete 1.6 GB?" beside a table
-       * totalling 697 MB and a footer saying 1.0 GB, three numbers for one
-       * screen. A clean download of all eleven wikis measures 746 MB, so most
-       * of that 1.6 GB was already gone and pressing the button would not have
-       * returned it.
-       *
-       * The sizes the table shows are the honest answer to "what am I about to
-       * lose", and using them makes the two agree.
-       */
+      // What this button removes, from the table's sizes: storage.estimate()
+      // counts space freed but not yet reclaimed.
       var used = [COMMON].concat(WIKIS).reduce(function (n, w) {
         return storedIds[w.id] ? n + (w.mb || 0) * 1048576 : n;
       }, 0);
@@ -843,8 +692,7 @@
       var bar = document.createElement('span');
       bar.className = 'apo-arm';
       btn.appendChild(bar);
-      // Force a layout so the transition starts from full width rather than
-      // being collapsed into the same frame.
+      // Force a layout so the transition starts from full width.
       void bar.offsetWidth;
       bar.style.transitionDuration = CONFIRM_MS + 'ms';
       bar.classList.add('apo-arm-run');
@@ -867,20 +715,8 @@
     });
   }
 
-  /*
-   * Retire the cache of a wiki that has since been folded into common.
-   *
-   * Anyone who saved About before the fold has an ardupilot-offline-ardupilot
-   * cache that nothing lists any more: no row owns it, so no button removes it,
-   * and it sits there counting against the quota while the service worker finds
-   * its pages only by searching every cache.
-   *
-   * Deleting saved pages is not something to do lightly, so this runs at
-   * exactly one moment: a common download has just finished, meaning the same
-   * pages are now in the common cache under the same paths. Before that instant
-   * the old cache is the reader's only copy and is left alone. Failure is
-   * ignored - the worst case is the cache we meant to tidy up staying put.
-   */
+  // Retire a folded wiki's old cache, only once a common download has just
+  // finished: until then it is the reader's only copy.
   function dropFoldedCaches(entry) {
     if (!entry || entry.id !== 'common') { return Promise.resolve(); }
     return Promise.all(FOLDED_INTO_COMMON.map(function (id) {
@@ -894,10 +730,7 @@
       .catch(function () { /* tidying, not a step of the download */ });
   }
 
-  /*
-   * Check there is room before starting. A download that dies partway leaves a
-   * cache with holes in it, and at these sizes that is a long wait for nothing.
-   */
+  // A download that dies partway leaves a cache with holes.
   function checkRoom(neededBytes) {
     return storage().then(function (r) {
       var est = r.estimate;
@@ -913,21 +746,11 @@
   }
 
   /* ---------- download and unpack ---------- */
-  //
-  // The tar reader and the archive fetch live in common_offline_unpack.js
-  // (window.ApUnpack), so this file stays about the panel rather than about
-  // byte formats. mimeFor is used by the differential update below too.
+  // Tar reading and the archive fetch: common_offline_unpack.js. Differential
+  // updates: common_offline_update.js, handed the live config on each call.
 
   var mimeFor = ApUnpack.mimeFor;
 
-  // Differential updates live in common_offline_update.js (window.ApUpdate).
-  // The panel hands it the live config at each call: where the artifacts are,
-  // the current build, the wiki list. updateStored resolves {changed, removed}
-  // or null (fall back to the archive); tableUrl and storeTable are shared with
-  // the download path below.
-
-  // The config ApUpdate needs, read fresh each call so a manifest reload is
-  // always reflected.
   function updateCfg() {
     return {
       base: ARTIFACT_BASE, build: CURRENT_BUILD, wikis: WIKIS,
@@ -944,31 +767,16 @@
     if (activeDownload) { activeDownload.abort(); }
   }
 
-  /**
-   * Download what is selected and not already held.
-   *
-   * `refreshIds` re-fetches something already stored; only the update check
-   * passes it. Without that filter a second press re-fetched every selected
-   * wiki, several hundred megabytes, to end up where it started.
-   */
+  /** Download what is selected and not already held; `refreshIds` re-fetches
+   *  stored wikis (only the update check passes it). */
   function saveSelectedReal(refreshIds) {
-    // A several-hundred-megabyte download has to be stoppable. The same button
-    // becomes Cancel rather than adding a second one that is dead most of the
-    // time.
+    // The same button becomes Cancel.
     if (activeDownload) { return cancelDownload(); }
 
     var refresh = refreshIds || [];
     var chosen = selected().map(function (c) { return c.value; });
-    // The chosen wikis first, the shared-image archive (common) LAST.
-    //
-    // A wiki's own archive holds every one of its pages plus the images unique
-    // to it, so the wiki is fully navigable the moment it lands - tens of MB,
-    // downloaded in seconds. common is 440 MB of images shared across wikis;
-    // putting it first meant nothing was readable for the minutes it took. Now
-    // it backfills afterwards, and until it finishes a shared image is served
-    // from the network when online and is simply absent offline, which is a far
-    // better failure than a blank half-hour. Refreshing an already-saved wiki
-    // (the update fallback) still re-fetches common if it was asked for.
+    // Chosen wikis first, common (440 MB of shared images) last, so a wiki is
+    // readable in seconds while the images backfill.
     var queue = WIKIS.filter(function (w) {
       return chosen.indexOf(w.id) !== -1;
     }).concat([COMMON]).filter(function (w) {
@@ -1002,22 +810,20 @@
     function report(text) { progress.textContent = text; }
     report('Checking space…');
 
-    // Ask for persistence before storing rather than after, so the data is
-    // protected from the moment it lands.
+    // Persistence before storing, so the data is protected from the start.
     var persistFirst = navigator.storage && navigator.storage.persist
       ? navigator.storage.persist() : Promise.resolve(false);
 
     return persistFirst
       .then(function () { return checkRoom(totalBytes); })
       .then(function () {
-        // Staged under a build-scoped name and only marked complete at the very
-        // end, so an interrupted download can never look like a usable copy.
+        // Marked complete only at the end, so an interrupted download never
+        // looks usable.
         return queue.reduce(function (chain, entry) {
           return chain.then(function () {
             var cacheName = OFFLINE_CACHE_PREFIX + entry.id;
             return caches.open(cacheName).then(function (cache) {
-              // raw_bytes, not mb: the browser decompresses before we count,
-              // so the stream is larger than the download.
+              // raw_bytes: the browser decompresses before we count.
               var entryBytes = entry.raw_bytes || (entry.mb || 0) * 1048576;
               var entryGot = 0;
               return ApUnpack.fetchArchive(entry, cache, function (n) {
@@ -1032,19 +838,13 @@
                 build: CURRENT_BUILD,
                 signal: activeDownload ? activeDownload.signal : undefined
               }).then(function () {
-                // After the archive, before the completion marker: the chosen
-                // parameter versions are part of this download, so a copy that
-                // is marked complete without them would be a copy the panel
-                // says is saved and that is missing what the reader asked for.
+                // Before the completion marker: the chosen versions are part of
+                // this download.
                 return storeParams(entry, cache, report);
               }).then(function () {
                 rowProgress(entry.id, 100, 'done');
-                // Store the file table beside the files it describes, so a
-                // later update can compare against exactly what was written
-                // here. A failure to fetch it is not fatal: the wiki is
-                // complete and usable, and the next update falls back to
-                // re-fetching the archive, which is what happened before
-                // tables existed.
+                // The file table beside the files, for a later differential
+                // update. Not fatal if missing: the next update re-fetches.
                 return fetch(ApUpdate.tableUrl(entry, ARTIFACT_BASE, CURRENT_BUILD), { cache: 'no-cache' })
                   .then(function (r) { return r.ok ? r.json() : null; })
                   .then(function (table) {
@@ -1052,21 +852,13 @@
                   })
                   .catch(function () { return null; });
               }).then(function () {
-                // The marker records the build, not just the time: an update
-                // check is only meaningful against what was actually stored.
+                // The marker records the build an update check compares against.
                 return cache.put(COMPLETE_MARKER,
                   new Response(JSON.stringify({
                     build: CURRENT_BUILD, saved: Date.now(), id: entry.id
                   }), { headers: { 'Content-Type': 'application/json' } }));
               }).then(function () {
-                // One source of truth, updated the moment it becomes true.
-                //
-                // The rows were painted live as each archive landed while the
-                // footer was computed from a snapshot taken at page load and
-                // refreshed only when the whole queue finished. Mid-download
-                // the panel said every row was Saved and, on the same screen,
-                // that no wikis were saved and the full 696 MB was still to
-                // download. Both readings came from the same run.
+                // One source of truth, updated the moment it is true.
                 storedIds[entry.id] = true;
                 rememberSaved(entry.id);
                 notifyWorkerCachesChanged();
@@ -1090,8 +882,8 @@
         activeDownload = null;
         button.classList.remove('busy');
         setLabel('Save selected');
-        // Bars for anything that completed stay at 100%; only unfinished ones
-        // are cleared, so a cancelled run does not look like a successful one.
+        // Only unfinished bars are cleared, so a cancelled run does not look
+        // successful.
         queue.forEach(function (w) {
           if (!storedIds[w.id]) { rowProgress(w.id, null); }
         });
@@ -1099,21 +891,12 @@
       });
   }
 
-  /**
-   * Ask the server what the current build is and compare it against what each
-   * stored copy recorded when it was saved. Anything behind is re-fetched.
-   *
-   * This is a real request, not a reassuring message: a reader checking before
-   * heading out needs to know whether what they are carrying is current.
-   */
+  /** Compare the server's build with each stored copy and re-fetch what is
+   *  behind. */
   function checkForUpdates(quiet) {
     var out = el('check-result');
 
-    // An automatic run says nothing until it has something worth saying.
-    // Printing "Checking…" over the panel every half minute would be noise,
-    // and worse, it would look like the page was acting on an instruction the
-    // reader had not given. News - that an update is being applied, or that it
-    // was - is announced either way.
+    // An automatic run says nothing until it has news.
     function announce(text) { out.hidden = false; out.textContent = text; }
     var report = quiet ? function () {} : announce;
 
@@ -1136,11 +919,7 @@
             return n.indexOf(OFFLINE_CACHE_PREFIX) === 0;
           });
           return Promise.all(offline.map(function (name) {
-            // The cache is named for the wiki it holds, so the id is known
-            // without reading anything. The marker names it too, but a marker
-            // that is unreadable or from an older format would otherwise leave
-            // that wiki permanently stuck: it reports itself up to date, and
-            // no update ever selects it.
+            // The cache name gives the id even when the marker is unreadable.
             var id = name.slice(OFFLINE_CACHE_PREFIX.length).split('-')[0];
             return caches.open(name).then(function (c) {
               return c.match(COMPLETE_MARKER).then(function (m) {
@@ -1164,17 +943,14 @@
           }
           return;
         }
-        // Real news: something moved, and pages the reader is holding are
-        // about to change under them. Said out loud even on an automatic run.
+        // Real news, announced even on an automatic run.
         announce('Updating ' + stale.length + ' item' +
                  (stale.length === 1 ? '' : 's') + '…');
         toast({ title: 'Updating saved wikis',
                 msg: 'Checking what changed…', mode: 'sweep' });
 
-        // Try the differential path first: compare the stored file table with
-        // the published one and fetch only what moved. Anything saved before
-        // tables existed has nothing to compare against and resolves null, and
-        // those fall back to re-fetching the whole archive.
+        // Differential first; anything without a stored table falls back to
+        // the archive.
         var byId = {};
         [COMMON].concat(WIKIS).forEach(function (w) { byId[w.id] = w; });
 
@@ -1213,21 +989,9 @@
             }
             return renderWikis();
           }
-          /*
-           * The cheap path could not cover these, so what remains is a full
-           * archive download, hundreds of megabytes for common alone.
-           *
-           * On a quiet, timer-driven run that MUST NOT start by itself. It was
-           * observed doing exactly that: a background tick, no click anywhere,
-           * and the button flipped to Cancel with 439 MB on its way, which on
-           * mobile data is an expensive surprise nobody consented to. A
-           * download that size is a decision, and decisions belong to the
-           * reader: announce that a full refresh is waiting and leave the
-           * button armed.
-           *
-           * A manual press of Check for updates is that consent, and proceeds
-           * as before.
-           */
+          // A full archive download must never start from a timer: it is
+          // hundreds of megabytes and the reader's decision. A manual press is
+          // consent.
           if (quiet) {
             var names = full.map(function (id) {
               return (byId[id] && byId[id].name) || id;
@@ -1235,15 +999,8 @@
             announce('A full download is needed to update ' +
                      names.join(', ') +
                      '. Press Check for updates to start it.');
-            // The reason matters, and until now all three routes here said the
-            // same thing. A wiki lands in `full` when its diff is genuinely
-            // too large, when its published file list cannot be fetched, and
-            // when the saved copy carries no file list to compare against at
-            // all - which is the case for anything saved before file lists
-            // existed, or where that fetch failed at save time. Only the first
-            // is "a lot has changed"; the other two are "I cannot tell what
-            // changed", and reporting them as the first sent the reader
-            // looking for a change that never happened.
+            // Say these need re-downloading, not that a lot changed: a missing
+            // or unfetchable table is the usual reason.
             toast({ title: 'Update available',
                     msg: 'These cannot be updated in place, so they need '
                        + 'downloading again: ' + names.join(', ') + '.',
@@ -1257,9 +1014,7 @@
             return renderWikis();
           }
 
-          // Re-select what could not be updated differentially and reuse the
-          // download path, so there is one implementation of fetching and
-          // unpacking.
+          // Re-select what needs a full fetch and reuse the one download path.
           selectable().forEach(function (c) {
             c.checked = full.indexOf(c.value) !== -1;
           });
@@ -1272,9 +1027,7 @@
         });
       })
       .catch(function (err) {
-        // A failed automatic check is ordinary: it means the reader is offline,
-        // which is the situation this whole feature exists for. Only a check
-        // somebody asked for reports that it could not be done.
+        // A failed automatic check means offline, which is ordinary.
         report((err && err.message) || 'Check failed');
       });
   }
@@ -1302,9 +1055,7 @@
     b.title = chosen ? '' : 'Select at least one wiki first';
   }
 
-  // What an export contains: the selection, limited to what is actually saved.
-  // Reading the stored set alone ignored the selection, so ticking every wiki
-  // and getting one back looked like corruption rather than a missing download.
+  // The selection, limited to what is saved.
   function exportSelection() {
     var chosen = selected().map(function (c) { return c.value; });
     var have = chosen.filter(function (id) { return storedIds[id]; });
@@ -1312,13 +1063,8 @@
     return { ids: have, missing: missing, chosen: chosen };
   }
 
-  /**
-   * Name an export after its contents plus the build date - the only thing
-   * telling someone months later which vehicles the file holds.
-   *   one wiki    copter-2026-08-08.html
-   *   several     blimp-copter-rover-2026-08-08.html
-   *   everything  ardupilot-all-2026-08-08.html
-   */
+  /** Name an export after its contents and the build date, e.g.
+   *  blimp-copter-rover-2026-08-08.html. */
   function exportName(ids, extension) {
     var stamp = (CURRENT_BUILD || new Date().toISOString()).slice(0, 10);
     var base;
@@ -1332,8 +1078,7 @@
     return base + '-' + stamp + extension;
   }
 
-  // Build a file from the selection: anything selected but not yet saved is
-  // downloaded first, then the file is built from the cache - one press, not two.
+  // Anything selected but unsaved is downloaded first: one press, not two.
   function buildExport(buttonId) {
     var link = el(buttonId);
     if (!link || !global.ArduPilotExport || !selected().length) { return; }
@@ -1372,17 +1117,9 @@
     });
   }
 
-  /*
-   * Automatic updates. A check that finds nothing costs one manifest request, a
-   * few hundred bytes: file tables are fetched only for wikis whose recorded
-   * build id actually moved, which is what makes a timer reasonable rather than
-   * only-on-demand.
-   */
-
-  // Thirty minutes, jittered +/-50% by the scheduler. The wiki rebuilds a few
-  // times a day, so anything tighter buys nothing and multiplies manifest
-  // traffic by every open tab. NB the 30s value used in development must not
-  // ship: across eleven panels that is a manifest request every few seconds.
+  // Automatic updates: a check that finds nothing costs one small manifest
+  // request. Thirty minutes, jittered; the wiki rebuilds a few times a day.
+  // A development value of 30 s must not ship.
   var AUTOUPDATE_MS = 30 * 60 * 1000;
 
   var autoTimer = null;
@@ -1395,31 +1132,19 @@
 
   function autoUpdateTick() {
     if (!autoUpdateOn()) { return; }
-    // A check already running, or a download in progress, owns the panel and
-    // the network until it is done. Overlapping runs would fight over the same
-    // caches and report over each other.
+    // A running check or download owns the panel and the network.
     if (autoBusy || activeDownload) { return; }
     // Nothing saved means nothing to update and no reason to touch the network.
     if (!Object.keys(storedIds).length) { return; }
-    // Deliberately NOT skipped while the tab is hidden. Browsers already
-    // throttle background timers, so a guard buys nothing and costs the common
-    // case: a wiki left open for hours in a background tab is the copy most
-    // likely to be behind. (Measured: with the guard, a mid-session rebuild was
-    // never picked up.)
+    // Not skipped while hidden: browsers throttle background timers already,
+    // and a background tab is the copy most likely to be behind.
 
     autoBusy = true;
     return checkForUpdates(true).then(function () { autoBusy = false; },
                                       function () { autoBusy = false; });
   }
 
-  /*
-   * Spread readers out so a new build is not a stampede. On a fixed interval
-   * every reader polls in lockstep, finds the same new build, and starts
-   * fetching at the same moment - a self-inflicted DoS whenever a layout edit
-   * rewrites every page. So each tick is scheduled independently with +/-50%
-   * jitter, the first one included, smearing the herd across the interval
-   * without changing the average rate.
-   */
+  // Jittered +/-50% so a new build is not a stampede.
   function scheduleNextTick() {
     if (autoTimer) { window.clearTimeout(autoTimer); }
     var jittered = AUTOUPDATE_MS * (0.5 + Math.random());
@@ -1441,13 +1166,7 @@
 
   /* ---------- wiring ---------- */
 
-  /*
-   * The disclosure button, and the versions inside it.
-   *
-   * Delegated like everything else here, because renderWikis() replaces the
-   * whole tbody whenever a download finishes and any handler bound to a row
-   * would go with it.
-   */
+  // Delegated: renderWikis() replaces the tbody, taking row handlers with it.
   document.addEventListener('click', function (e) {
     var btn = e.target.closest && e.target.closest('.apo-param-toggle');
     if (!btn) { return; }
@@ -1459,13 +1178,8 @@
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
 
-  /*
-   * A version chosen from the dropdown becomes a ticked box and stays one.
-   *
-   * Re-rendering only this row, not the table: renderWikis() rebuilds the whole
-   * tbody, which would collapse the disclosure the reader just opened and lose
-   * their place mid-choice.
-   */
+  // A dropdown choice becomes a ticked box. Only this row is re-rendered, so
+  // the disclosure stays open.
   document.addEventListener('change', function (e) {
     if (!e.target.classList.contains('param-more')) { return; }
     var id = e.target.getAttribute('data-wiki');
@@ -1483,8 +1197,6 @@
       fresh.innerHTML = paramRowFor(w);
       var next = fresh.firstChild;
       if (next) {
-        // The disclosure is open, or the reader could not have reached the
-        // dropdown. Keep it open.
         next.removeAttribute('hidden');
         row.parentNode.replaceChild(next, row);
       }
@@ -1508,8 +1220,7 @@
         picksFor(w)[e.target.value] = e.target.checked;
         if (!e.target.checked) { delete picksFor(w)[e.target.value]; }
       }
-      // Picking a version implies wanting the wiki it belongs to; without this
-      // a reader ticks four versions, presses Save, and nothing happens.
+      // Picking a version implies wanting its wiki.
       var box = document.querySelector('.wiki-check[value="' + id + '"]');
       if (box && e.target.checked && !box.checked) {
         box.checked = true;
@@ -1523,8 +1234,6 @@
     if (e.target.classList.contains('wiki-check')) {
       syncSelectAll();
       updateTotal();
-      // Clearing the last tick otherwise left the export buttons enabled
-      // until the next render.
       updateExportState();
       updateSaveState();
     }
@@ -1539,19 +1248,14 @@
   });
 
   document.addEventListener('click', function (e) {
-    // closest(), not e.target, because these buttons have children. Once armed,
-    // Remove all contains its own countdown bar, three pixels tall across the
-    // bottom of the button. A click landing on those three pixels reported the
-    // bar as the target, matched no id, and was swallowed: the reader pressed
-    // the confirm button, in the button, and nothing happened.
+    // closest(): the armed Remove all contains its own countdown bar.
     var hit = e.target && e.target.closest &&
               e.target.closest('#clear-btn, #download-cache-btn, #check-btn, #dl-single');
     if (!hit) { return; }
     if (hit.id === 'clear-btn') { confirmClear(); }
     if (hit.id === 'download-cache-btn') {
-      // Saving is the clearest possible opt-in to offline mode, so it also
-      // turns the service worker on (pwa.js). Without a worker the saved
-      // pages would download, store, and then never be served.
+      // Saving opts in to offline mode (pwa.js); without a worker saved pages
+      // are never served.
       if (window.ApOffline) { window.ApOffline.enable(); }
       saveSelectedReal();
     }
@@ -1566,8 +1270,7 @@
     } catch (err) { /* private browsing */ }
 
     startAutoUpdate();
-    // A tab left open for hours does nothing while it is hidden, so coming
-    // back to it is the moment its copy is most likely to be behind.
+    // Returning to a long-hidden tab is when its copy is most likely behind.
     document.addEventListener('visibilitychange', function () {
       if (!document.hidden) { autoUpdateTick(); }
     });
@@ -1584,15 +1287,11 @@
       return;
     }
 
-    // Draw from the built-in list at once; waiting for the manifest left the
-    // table empty for the length of the request. The numbers are corrected when
-    // it lands. renderStorage's footer reads storedIds, which renderWikis fills,
-    // so it must follow or it briefly says "no wikis saved" on a device with some.
+    // Draw from the built-in list at once; renderStorage reads storedIds, so
+    // it follows renderWikis.
     renderWikis().then(renderStorage);
 
-    // Sizes and page counts change with every build, so they come from
-    // offline-manifest.json; the constants above are only a fallback for a
-    // deployment that has not published one yet.
+    // Sizes and counts come from the manifest; the constants are a fallback.
     fetch('/offline/offline-manifest.json', { cache: 'no-cache' })
       .then(function (r) { return r.ok ? r.json() : null; })
       .catch(function () { return null; })
