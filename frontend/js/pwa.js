@@ -170,9 +170,8 @@
     }
   });
 
-  // Nothing registers until the reader enables offline mode or saves a wiki.
+  // Nothing registers until the reader turns offline mode on or saves a wiki.
   var OFFLINE_KEY = 'ap-offline-enabled';
-  var ENABLE_CONTROL_ID = 'ap-offline-enable';
 
   function offlineEnabled() {
     try {
@@ -189,30 +188,23 @@
       /* private browsing; the registration below still holds for this tab */
     }
     registerServiceWorker();
-    reflectEnableControl();
   }
 
-  // The menu's "Enable offline mode" item is the switch.
-  function reflectEnableControl() {
-    var control = document.getElementById(ENABLE_CONTROL_ID);
-    if (control && offlineEnabled()) {
-      control.textContent = 'Offline mode: on';
+  function disableOffline() {
+    try {
+      window.localStorage.removeItem(OFFLINE_KEY);
+    } catch (err) {
+      /* private browsing */
     }
+    return navigator.serviceWorker.getRegistration().then(function (registration) {
+      return registration ? registration.unregister() : false;
+    }).catch(function () { return false; });
   }
 
-  document.addEventListener('click', function (event) {
-    var control = event.target.closest ?
-        event.target.closest('#' + ENABLE_CONTROL_ID) : null;
-    if (!control) { return; }
-    event.preventDefault();
-    enableOffline();
-  });
-
-  // The offline page's Save button opts in too.
-  window.ApOffline = { enabled: offlineEnabled, enable: enableOffline };
+  // The switch on the offline page, and its Save button, drive these.
+  window.ApOffline = { enabled: offlineEnabled, enable: enableOffline, disable: disableOffline };
 
   function startWhenOptedIn() {
-    reflectEnableControl();
     if (offlineEnabled()) {
       registerServiceWorker();
       return;

@@ -231,6 +231,18 @@ async function runEngine(name, launcher, base) {
     });
     check(name, 'a reader who has not opted in gets no service worker',
           !dormant.registered, JSON.stringify(dormant));
+    const switchOff = await phase(name, 'switch reads off', async () => {
+      await page.goto(base + '/dev/docs/common-offline.html', { waitUntil: 'load' });
+      await page.waitForTimeout(800);
+      return page.evaluate(() => ({
+        present: !!document.getElementById('offline-mode'),
+        checked: !!(document.getElementById('offline-mode') || {}).checked,
+        label: (document.getElementById('offline-mode-state') || {}).textContent,
+      }));
+    });
+    check(name, 'the offline page shows the switch off before opting in',
+          switchOff.present && !switchOff.checked && switchOff.label === 'off',
+          JSON.stringify(switchOff));
 
     const control = await phase(name, 'opt in, register + take control', async () => {
       await page.evaluate(() => {
@@ -335,12 +347,15 @@ async function runEngine(name, launcher, base) {
         await p.goto(base + '/ardupilot/docs/common-offline.html', { waitUntil: 'load' });
         await p.waitForTimeout(3500);
         return await p.evaluate(() => ({
+          switchOn: !!(document.getElementById('offline-mode') || {}).checked,
           vehicles: document.querySelectorAll('.apo-param-toggle').length,
           versions: document.querySelectorAll('.param-check').length,
           ticked: document.querySelectorAll('.param-check:checked').length,
         }));
       } finally { await p.close().catch(() => {}); }
     })();
+    check(name, 'the offline page shows the switch on once opted in',
+          picker.switchOn, JSON.stringify({ switchOn: picker.switchOn }));
     check(name, 'each vehicle offers its parameter versions with one ticked',
           picker.vehicles > 0 && picker.versions > picker.ticked &&
           picker.ticked === picker.vehicles,
