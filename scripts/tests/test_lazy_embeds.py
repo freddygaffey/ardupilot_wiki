@@ -36,8 +36,8 @@ def main():
           make_embeds_lazy(out) == out)
 
     check("an iframe that already sets loading is left alone",
-          make_embeds_lazy('<iframe loading="eager" src="https://www.youtube.com/embed/x">')
-          == '<iframe loading="eager" src="https://www.youtube.com/embed/x">')
+          make_embeds_lazy('<iframe loading="eager" src="https://www.youtube.com/embed/x">') ==
+          '<iframe loading="eager" src="https://www.youtube.com/embed/x">')
 
     other = '<iframe src="https://example.com/thing">'
     check("a non-youtube iframe is untouched", make_embeds_lazy(other) == other)

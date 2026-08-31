@@ -75,8 +75,8 @@ def check_archives_carry_current_static():
     import json
 
     source_dir = REPO / "common" / "source" / "_static"
-    shared = sorted(source_dir.glob("common_offline*.js")) + \
-             sorted(source_dir.glob("common_offline*.css"))
+    shared = (sorted(source_dir.glob("common_offline*.js")) +
+              sorted(source_dir.glob("common_offline*.css")))
     if not shared:
         check("archives carry the current panel scripts", False,
               "no common_offline* assets in common/source/_static")
@@ -158,9 +158,9 @@ def check_no_dangling_assets():
     check("no built page references a script or stylesheet that is missing",
           not ours,
           "; ".join(f"{u} (e.g. {p})" for u, p in list(ours.items())[:3])
-          or f"{checked} references resolve"
-             + (f", plus {len(known)} known upstream "
-                f"(KNOWN_UPSTREAM_ISSUES.md)" if known else ""))
+          or f"{checked} references resolve" +
+             (f", plus {len(known)} known upstream "
+              f"(KNOWN_UPSTREAM_ISSUES.md)" if known else ""))
 
 
 def main():
