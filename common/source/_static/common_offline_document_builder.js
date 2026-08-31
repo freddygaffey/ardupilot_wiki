@@ -203,7 +203,7 @@
     'var sc=document.querySelector(".wy-nav-content-wrap");if(sc)sc.scrollTop=0;}',
 
     // Undo the </script> escaping the page blocks needed.
-    'function unblock(s){return s.split("<\\\\/script>").join("<\\/script>");}',
+    'function unblock(s){return s.replace(/<\\\\\\/(script)/gi,"<\\/$1");}',
 
     'function show(raw){',
     'var path=lookup(raw);',
@@ -820,7 +820,8 @@
 
   /** One page, plus any image it is the first to use. */
   function pageBlock(i, html, fresh) {
-    var body = html.split('</script>').join('<\\/script>');
+    // Any spelling ends the block: </SCRIPT>, </script >, </script/>.
+    var body = html.replace(/<\/(script)/gi, '<\\/$1');
     var blocks = fresh.map(function (f) {
       return '<script type="text/plain" id="i' + f.id + '">' +
              f.uri + '<\/script>';

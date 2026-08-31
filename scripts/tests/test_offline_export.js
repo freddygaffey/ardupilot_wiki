@@ -122,6 +122,8 @@ function paramPageHtml(vehicle, label) {
     '<p>You can change and check the parameters for another version:\n' +
     '  <select class="selectpicker" id="selectPicker"></select>\n</p>\n' +
     '<script type="text/javascript">\n' +
+    // Upper case and a space: the tokenizer ends a block on either.
+    'var closer = "</SCRIPT >";\n' +
     'document.addEventListener("DOMContentLoaded", function() {\n' +
     '  fetch("../_static/parameters-' + vehicle + '.json")\n' +
     '    .then(function(r) { return r.json(); }).then(appendToSelect);\n' +
@@ -285,7 +287,7 @@ function bootShell(D, bodies) {
 
   const blocks = D.pages.map((p, i) =>
     '<script type="text/plain" id="p' + i + '">' +
-    ((bodies && bodies[p.p]) || p.p).split('</script>').join('<\\/script>') +
+    ((bodies && bodies[p.p]) || p.p).replace(/<\/(script)/gi, '<\\/$1') +
     '</script>').join('');
   const dom = new JSDOM(
     '<!DOCTYPE html><html><body class="wy-body-for-nav">' +
