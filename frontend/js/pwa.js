@@ -155,6 +155,10 @@
         event.data.url === window.location.href.split('#')[0]) {
       showUpdateToast();
     }
+    // The kill switch has run; stay off so it is not registered again.
+    if (event.data.type === 'OFFLINE_KILLED') {
+      disableOffline();
+    }
   });
 
 
@@ -172,6 +176,8 @@
 
   // Nothing registers until the reader turns offline mode on or saves a wiki.
   var OFFLINE_KEY = 'ap-offline-enabled';
+  // Shared with common_offline_page.js.
+  var SAVED_IDS_KEY = 'ap-saved-ids';
 
   function offlineEnabled() {
     try {
@@ -190,13 +196,23 @@
     registerServiceWorker();
   }
 
+  // The whole opt-out: flag, saved list, every cache, then the registration.
+  // The switch on the offline page and the kill switch (sw-kill.js) both end here.
   function disableOffline() {
     try {
       window.localStorage.removeItem(OFFLINE_KEY);
+      window.localStorage.removeItem(SAVED_IDS_KEY);
     } catch (err) {
       /* private browsing */
     }
-    return navigator.serviceWorker.getRegistration().then(function (registration) {
+    var wipe = window.caches ? window.caches.keys().then(function (names) {
+      return Promise.all(names.filter(function (name) {
+        return name.indexOf('ardupilot-') === 0;
+      }).map(function (name) { return window.caches.delete(name); }));
+    }) : Promise.resolve();
+    return wipe.catch(function () { /* storage gone already */ }).then(function () {
+      return navigator.serviceWorker.getRegistration();
+    }).then(function (registration) {
       return registration ? registration.unregister() : false;
     }).catch(function () { return false; });
   }

@@ -675,10 +675,7 @@
     }
 
     return Promise.resolve().then(function () {
-      // storage.estimate() counts space freed but not yet reclaimed.
-      var used = [COMMON].concat(WIKIS).reduce(function (n, w) {
-        return storedIds[w.id] ? n + (w.mb || 0) * 1048576 : n;
-      }, 0);
+      var used = heldBytes();
       btn.textContent = used ? 'Delete ' + fmt(used) + '? Press again'
                              : 'Press again to confirm';
       btn.classList.add('apo-btn-armed');
@@ -694,6 +691,13 @@
       clearArmedAt = Date.now();
       clearArmed = setTimeout(function () { disarmClear(btn); }, CONFIRM_MS);
     });
+  }
+
+  // Manifest sizes of what is saved; storage.estimate() lags a deletion.
+  function heldBytes() {
+    return [COMMON].concat(WIKIS).reduce(function (n, w) {
+      return storedIds[w.id] ? n + (w.mb || 0) * 1048576 : n;
+    }, 0);
   }
 
   function clearAll() {
@@ -1230,9 +1234,11 @@
     }
     if (e.target.id === 'select-all') { toggleAll(e.target.checked); }
     if (e.target.id === 'offline-mode' && global.ApOffline) {
-      var turnOn = e.target.checked;
-      Promise.resolve(turnOn ? global.ApOffline.enable() : global.ApOffline.disable())
-        .then(renderOfflineMode, renderOfflineMode);
+      if (e.target.checked) {
+        Promise.resolve(global.ApOffline.enable()).then(renderOfflineMode, renderOfflineMode);
+      } else {
+        offerTurnOff();
+      }
     }
     if (e.target.id === 'autoupdate') {
       try {
@@ -1246,9 +1252,12 @@
   document.addEventListener('click', function (e) {
     // closest(): the armed Remove all contains its own countdown bar.
     var hit = e.target && e.target.closest &&
-              e.target.closest('#clear-btn, #download-cache-btn, #check-btn, #dl-single');
+              e.target.closest('#clear-btn, #download-cache-btn, #check-btn, #dl-single, ' +
+                               '#offline-off-confirm, #offline-off-keep');
     if (!hit) { return; }
     if (hit.id === 'clear-btn') { confirmClear(); }
+    if (hit.id === 'offline-off-confirm') { turnOff(); }
+    if (hit.id === 'offline-off-keep') { hideTurnOff(); renderOfflineMode(); }
     if (hit.id === 'download-cache-btn') {
       // Saving opts in to offline mode (pwa.js).
       if (window.ApOffline) { window.ApOffline.enable(); renderOfflineMode(); }
@@ -1257,6 +1266,33 @@
     if (hit.id === 'check-btn') { checkForUpdates(); }
     if (hit.id === 'dl-single') { e.preventDefault(); exportHtmlFile(); }
   });
+
+  // Off removes everything held, so say how much first, unless it is nothing.
+  function offerTurnOff() {
+    var note = el('offline-off-warning');
+    return storage().then(function (s) {
+      var used = s.estimate.usage || heldBytes();
+      var holding = Object.keys(storedIds).length > 0 || used > 5 * 1048576;
+      if (!note || !holding) { return turnOff(); }
+      renderOfflineMode();
+      el('offline-off-size').textContent = fmt(used);
+      note.hidden = false;
+    });
+  }
+
+  function hideTurnOff() {
+    var note = el('offline-off-warning');
+    if (note) { note.hidden = true; }
+  }
+
+  // pwa.js does the removing; this redraws what is left, which is nothing.
+  function turnOff() {
+    hideTurnOff();
+    return Promise.resolve(global.ApOffline.disable()).then(function () {
+      notifyWorkerCachesChanged();
+      return renderWikis().then(renderStorage);
+    }).then(renderOfflineMode, renderOfflineMode);
+  }
 
   // The switch reflects pwa.js's flag; pwa.js owns the registration itself.
   function renderOfflineMode() {

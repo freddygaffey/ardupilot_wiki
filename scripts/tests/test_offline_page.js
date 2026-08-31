@@ -147,7 +147,7 @@ function panelMarkup() {
 function load({ manifest = null, caches = makeCaches(), persisted = false,
                 usage = 0, quota = 10e9, archives = null,
                 tables = null, served = null, rateLimit = false,
-                loose = null } = {}) {
+                loose = null, offline = false } = {}) {
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => { console.log('    [page error] ' + e.message);
                                if (e.stack) console.log('    ' + e.stack.split('\n')[1]); });
@@ -155,6 +155,18 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
                         { url: 'https://example.test/x/docs/common-offline.html',
                           virtualConsole: vc });
   const w = dom.window;
+  // pwa.js's opt-in as the page sees it; disable() wipes as the real one does.
+  const apOffline = {
+    on: offline, calls: [],
+    enabled() { return this.on; },
+    enable() { this.on = true; this.calls.push('enable'); },
+    disable() {
+      this.on = false; this.calls.push('disable');
+      return caches.keys().then((names) => Promise.all(
+        names.filter((n) => n.startsWith('ardupilot-')).map((n) => caches.delete(n))));
+    },
+  };
+  w.ApOffline = apOffline;
   // jsdom has no matchMedia and init() calls it to detect standalone mode.
   if (!w.matchMedia) { w.matchMedia = () => ({ matches: false, addListener(){}, removeListener(){} }); }
   const fetchCalls = [];
@@ -251,7 +263,7 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
     vm.runInContext(fs.readFileSync(path.join(STATIC, lib), 'utf8'), sandbox);
   });
   vm.runInContext(fs.readFileSync(PAGE, 'utf8'), sandbox);
-  return { dom, w, doc: w.document, sandbox, fetchCalls, fetchOpts, swMessages };
+  return { dom, w, doc: w.document, sandbox, fetchCalls, fetchOpts, swMessages, apOffline };
 }
 
 // The build's file hash: sha256, first eight bytes, hex.
@@ -1576,6 +1588,58 @@ async function main() {
           keys.includes('/_common/_images/shared.png'));
     check('nothing lands under /_common/ardupilot/',
           !keys.some((k) => k.indexOf('/_common/ardupilot/') === 0));
+  }
+
+  console.log('\noffline mode switch: off removes everything, after a warning');
+  {
+    const cachesObj = makeCaches();
+    for (const id of ['common', 'copter']) {
+      (await cachesObj.open('ardupilot-offline-' + id)).put('/__ap_complete__',
+        completeMarker(MANIFEST.generated, id));
+    }
+    const { doc, w, apOffline } = load({ manifest: MANIFEST, caches: cachesObj,
+                                         usage: 1.2e9, offline: true });
+    await settle();
+    const box = doc.getElementById('offline-mode');
+    const note = doc.getElementById('offline-off-warning');
+    const flipOff = () => {
+      box.checked = false;
+      box.dispatchEvent(new w.Event('change', { bubbles: true }));
+    };
+    const click = (id) => doc.getElementById(id)
+      .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+
+    check('the switch starts on for an opted-in reader', box.checked === true);
+    flipOff(); await settle();
+    check('off shows the warning and does nothing yet',
+          !note.hidden && box.checked && apOffline.calls.length === 0,
+          JSON.stringify({ hidden: note.hidden, on: box.checked, calls: apOffline.calls }));
+    const size = doc.getElementById('offline-off-size').textContent;
+    check('the warning quotes what the browser holds, from storage.estimate()',
+          /^\d[\d.]* [GM]B$/.test(size), JSON.stringify(size));
+    click('offline-off-keep'); await settle();
+    check('Keep hides the warning and leaves offline mode on',
+          note.hidden && box.checked && apOffline.calls.length === 0);
+    flipOff(); await settle();
+    click('offline-off-confirm'); await settle(); await settle();
+    check('confirming turns offline mode off through pwa.js',
+          apOffline.calls.join() === 'disable' && !box.checked &&
+          doc.getElementById('offline-mode-state').textContent === 'off',
+          JSON.stringify({ calls: apOffline.calls, on: box.checked }));
+    check('and nothing of the wiki is left in Cache Storage',
+          !(await cachesObj.keys()).some((n) => n.startsWith('ardupilot-')) &&
+          /no wikis saved/.test(doc.getElementById('storage-status').textContent),
+          JSON.stringify(await cachesObj.keys()));
+
+    const b = load({ manifest: MANIFEST, usage: 0, offline: true });
+    await settle();
+    b.doc.getElementById('offline-mode').checked = false;
+    b.doc.getElementById('offline-mode').dispatchEvent(new b.w.Event('change', { bubbles: true }));
+    await settle(); await settle();
+    check('with nothing saved, off needs no confirmation',
+          b.apOffline.calls.join() === 'disable' &&
+          b.doc.getElementById('offline-off-warning').hidden,
+          JSON.stringify(b.apOffline.calls));
   }
 
   console.log('\n' + pass + ' passed, ' + fail + ' failed');

@@ -404,9 +404,13 @@ elsewhere on the site, or usually by restarting the browser. A worker serving
 wrong or stale content will keep doing so.
 
 ``frontend/sw-kill.js`` exists for that case. Deployed in place of ``sw.js``,
-it unregisters the worker and deletes its caches on every device that fetches
-it, returning readers to an ordinary website. It is a one-line deploy and asks
-nothing of readers.
+it is the offline page's opt-out thrown for every reader by us: on each
+device that fetches it, it deletes every ``ardupilot-*`` cache, saved wikis
+included, tells the open pages to clear the opt-in flag so ``pwa.js`` does not
+register it again, and unregisters itself. Readers are back to a browser that
+never opted in, with nothing left behind. Losing the saved wikis is the point:
+the switch is for when this feature has failed, and a reader should not keep
+state produced by it. It is a one-line deploy and asks nothing of readers.
 
 This works only if the browser will collect the replacement, which is why
 ``/sw.js`` must be served ``no-cache``. That header is not a nicety: without

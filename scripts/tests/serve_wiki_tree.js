@@ -84,10 +84,17 @@ function bumpWorker() {
   return workerBuild;
 }
 
+// The kill switch served as /sw.js, as an emergency deploy would.
+let killWorker = false;
+function serveKill(on) {
+  killWorker = on;
+}
+
 function createServer() {
   return http.createServer((req, res) => {
     const urlPath = (req.url || '/').split('?')[0];
-    const file = resolveFile(req.url || '/');
+    const file = urlPath === '/sw.js' && killWorker
+      ? path.join(ROOT, 'frontend', 'sw-kill.js') : resolveFile(req.url || '/');
 
     // As nginx gzip_static does.
     if (urlPath.endsWith('.tar') && fs.existsSync(file + '.gz')) {
@@ -168,7 +175,7 @@ function start(port) {
   });
 }
 
-module.exports = { start, createServer, resolveFile, bumpWorker, WIKIS };
+module.exports = { start, createServer, resolveFile, bumpWorker, serveKill, WIKIS };
 
 if (require.main === module) {
   const port = Number(process.argv[2] || 8000);
