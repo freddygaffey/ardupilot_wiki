@@ -519,7 +519,8 @@ def build(wikis, destdir: Path) -> Path:
         "artifact_base": artifact_base,
         "common": {
             "id": "common",
-            "name": "Common (required)",
+            "name": "Shared images (required)",
+            "images": len(common_names) + len(thumbs),
             "mb": round(common_bytes / 1048576),
             "pages": common_pages,
             "required": True,

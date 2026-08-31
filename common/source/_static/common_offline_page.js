@@ -16,7 +16,7 @@
 
 
   // Fallback rows until the manifest arrives.
-  var COMMON = { id: 'common', name: 'Common (required)', mb: 442, pages: 28, required: true };
+  var COMMON = { id: 'common', name: 'Shared images (required)', mb: 442, images: 2398, pages: 28, required: true };
   var WIKIS = [
     { id: 'copter', name: 'Copter', mb: 74, pages: 860 },
     { id: 'dev', name: 'Developer', mb: 52, pages: 313 },
@@ -486,6 +486,12 @@
     }, Promise.resolve()).then(function () { return stored; });
   }
 
+  // Common is images, plus the pages of any wiki folded into it.
+  function countCell(w) {
+    if (!w.images) { return w.pages || ''; }
+    return w.images + ' images' + (w.pages ? ', ' + w.pages + ' pages' : '');
+  }
+
   function renderWikis(afterSync) {
     return storedWikis().then(function (stored) {
       storedIds = stored;
@@ -514,7 +520,7 @@
                      : '') +
                  '</td>' +
                  '<td class="apo-num">' + w.mb + ' MB</td>' +
-                 '<td class="apo-num apo-pages">' + (w.pages || '') + '</td>' +
+                 '<td class="apo-num apo-pages">' + countCell(w) + '</td>' +
                  // From state: this tbody is rebuilt when a download finishes.
                  '<td class="apo-num"><div class="apo-progress"' +
                    (isStored ? '' : ' hidden') + '>' +
