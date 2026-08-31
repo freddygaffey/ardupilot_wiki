@@ -1279,8 +1279,12 @@ class WikiUpdater:
             info(f"offline artefacts skipped: --site {self.args.site} builds "
                  "one wiki, and the archives describe all of them")
         else:
-            from scripts.build_offline_artifacts import build as build_offline
-            build_offline(ALL_WIKIS, Path(self.args.destdir or "."))
+            # Optional output: a failure here must not stop the wiki publishing.
+            try:
+                from scripts.build_offline_artifacts import build as build_offline
+                build_offline(ALL_WIKIS, Path(self.args.destdir or "."))
+            except Exception as ex:
+                error(f"offline artefacts failed, publishing without them: {ex}")
 
         if self.args.enablebackups:
             make_backup(building_time, self.args.site, self.args.destdir, self.args.backupdestdir)
