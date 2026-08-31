@@ -59,6 +59,8 @@
 
     // A PAX or GNU long-name header names the NEXT entry.
     var override = null;
+    // Set by the zero blocks that close a tar; a stream ending without them was cut short.
+    var sawEnd = false;
 
     // "path=<value>" from a PAX extended header body.
     function paxPath(body) {
@@ -70,10 +72,13 @@
 
     function step() {
       return need(512).then(function (ok) {
-        if (!ok) { return; }
+        if (!ok) {
+          if (buf.length || !sawEnd) { throw new Error('archive truncated'); }
+          return;
+        }
         var header = take(512);
         var name = textField(header, 0, 100);
-        if (!name) { return step(); }   // zero block: padding between members
+        if (!name) { sawEnd = true; return step(); }   // zero block: end of archive
 
         // ustar prefix field; a PAX/GNU override wins over both.
         var pfx = textField(header, 345, 155);
@@ -84,7 +89,7 @@
         var padded = Math.ceil(size / 512) * 512;
 
         return need(padded).then(function (haveBody) {
-          if (!haveBody) { return; }
+          if (!haveBody) { throw new Error('archive truncated in ' + name); }
           var body = take(padded).slice(0, size);
 
           // Names the NEXT entry: capture it and read on.
@@ -165,8 +170,13 @@
     );
   }
 
-  // Where an entry is stored; shared with the differential update.
+  // Where an entry is stored; shared with the differential update. Names come
+  // off the network, so nothing may climb out of the archive's own tree.
   function cachePathFor(id, name) {
+    if (name.charAt(0) === '/' || name.indexOf('\\') !== -1 ||
+        name.split('/').indexOf('..') !== -1) {
+      throw new Error('unsafe archive path ' + name);
+    }
     if (id === 'common' && name.indexOf('_images/') === 0) {
       return '/_common/' + name;
     }

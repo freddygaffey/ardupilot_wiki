@@ -1590,6 +1590,45 @@ async function main() {
           !keys.some((k) => k.indexOf('/_common/ardupilot/') === 0));
   }
 
+  console.log('\nunpack: a cut-short or hostile archive is refused, so it is never marked complete');
+  {
+    const { sandbox } = load({ manifest: MANIFEST });
+    await settle();
+    const whole = tarBytes({ 'rover/index.html': '<html></html>',
+                             'rover/docs/a.html': 'x'.repeat(2000) });
+    const attempt = async (bytes) => {
+      const cache = await sandbox.caches.open('refuse-' + Math.random());
+      sandbox.fetch = () => Promise.resolve({ ok: true, body: streamOf(bytes) });
+      try {
+        await sandbox.ApUnpack.fetchArchive(
+          { id: 'rover', name: 'Rover', archive: 'rover-offline.tar' },
+          cache, () => {}, { base: '/offline' });
+        return { ok: true, keys: (await cache.keys()).length };
+      } catch (e) {
+        return { ok: false, error: e.message, keys: (await cache.keys()).length };
+      }
+    };
+    // Layout: header, 512 body, header, 2048 body, 1024 of zero blocks.
+    const full = await attempt(whole);
+    check('the whole archive unpacks', full.ok && full.keys === 2, JSON.stringify(full));
+    const midHeader = await attempt(whole.subarray(0, 1024 + 200));
+    check('an archive cut mid-header rejects instead of resolving',
+          !midHeader.ok && /truncated/.test(midHeader.error), JSON.stringify(midHeader));
+    const midBody = await attempt(whole.subarray(0, 1536 + 1000));
+    check('an archive cut mid-body rejects, naming the entry',
+          !midBody.ok && /truncated in rover\/docs\/a\.html/.test(midBody.error),
+          JSON.stringify(midBody));
+    const noEnd = await attempt(whole.subarray(0, whole.length - 1024));
+    check('an archive missing its end blocks rejects',
+          !noEnd.ok && /truncated/.test(noEnd.error), JSON.stringify(noEnd));
+    const climb = await attempt(tarBytes({ '../../sw.js': 'evil', 'rover/index.html': 'ok' }));
+    check('an entry that climbs out of the tree rejects the archive',
+          !climb.ok && /unsafe archive path/.test(climb.error), JSON.stringify(climb));
+    const abs = await attempt(tarBytes({ '/sw.js': 'evil' }));
+    check('an absolute entry name rejects the archive',
+          !abs.ok && /unsafe archive path/.test(abs.error), JSON.stringify(abs));
+  }
+
   console.log('\noffline mode switch: off removes everything, after a warning');
   {
     const cachesObj = makeCaches();
