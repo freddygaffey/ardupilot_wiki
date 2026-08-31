@@ -49,8 +49,7 @@ function check(name, ok, detail) {
 
 /* ---------------------------------------------------------- cache shim ---- */
 
-/** Bodies are kept as bytes, so a test can compare what was written with what
- *  the server sent. */
+/** Bodies are kept as bytes. */
 class FakeResponse {
   constructor(body) {
     this._b = typeof body === 'string' ? body
@@ -89,8 +88,7 @@ function makeCaches() {
   };
 }
 
-/** A real tar, not gzipped: the browser decompresses the content coding before
- *  the client sees a byte. */
+/** A real tar, not gzipped, as the client receives it. */
 function tarBytes(files) {
   const blocks = [];
   const record = (name, body, type) => {
@@ -133,8 +131,7 @@ function streamOf(buf) {
 /** The panel's real markup, out of the .rst. */
 function panelMarkup() {
   const rst = fs.readFileSync(RST, 'utf8');
-  // Start at whichever of the panel's blocks comes first: the warning sits
-  // above the panel, and slicing from the panel alone would silently drop it.
+  // The warning sits above the panel.
   const panel = rst.indexOf('<div class="apo">');
   const warn = rst.indexOf('<div id="storage-warning">');
   const start = warn !== -1 && warn < panel ? warn : panel;
@@ -146,8 +143,7 @@ function panelMarkup() {
   return html + '<div id="ap-install-app"></div><span id="install-state"></span>';
 }
 
-/** A site serving file tables (`tables`) and files (`served`); anything else
- *  404s, which exercises the shared-image fallback. */
+/** A site serving file tables (`tables`) and files (`served`); anything else 404s. */
 function load({ manifest = null, caches = makeCaches(), persisted = false,
                 usage = 0, quota = 10e9, archives = null,
                 tables = null, served = null, rateLimit = false,
@@ -174,8 +170,7 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
         persisted: () => Promise.resolve(persisted),
         persist: () => Promise.resolve(persisted)
       },
-      // Records what the panel tells the worker, so the CACHES_CHANGED
-      // invalidations (a wiki saved/updated/removed) can be asserted.
+      // Records what the panel tells the worker.
       serviceWorker: {
         controller: { postMessage: (m) => { swMessages.push(m); } }
       }
@@ -208,8 +203,7 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
         return Promise.resolve({ ok: false, status: 429,
                                  blob: () => Promise.reject(new Error('429')) });
       }
-      // The rewritten copies the build publishes under <base>/files/<name>.
-      // The client tries these first for a changed file.
+      // The loose copies under <base>/files/<name>, tried first.
       if (loose) {
         const m = String(u).split('?')[0].match(/\/files\/(.+)$/);
         if (m && Object.prototype.hasOwnProperty.call(loose, m[1])) {
@@ -238,8 +232,7 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
           });
         }
         if (String(u).indexOf('.tar') === -1) {
-          // 404, not a rejection: this is a wiki that does not hold the file,
-          // which the shared-image fallback must walk past rather than abort on.
+          // 404, not a rejection: a wiki that does not hold the file.
           return Promise.resolve({ ok: false, blob: () => Promise.reject(new Error('404')) });
         }
       }
@@ -250,8 +243,7 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
       return Promise.reject(new Error('archive fetch blocked by harness'));
     }
   };
-  // The page guards on `'caches' in window`, so the shim has to be on the
-  // window object and not only on the sandbox global.
+  // The page guards on `'caches' in window`.
   sandbox.window.caches = caches;
   sandbox.window.fetch = sandbox.fetch;
   vm.createContext(sandbox);
@@ -359,8 +351,7 @@ async function main() {
   console.log('\ninterrupted download');
   {
     const caches = makeCaches();
-    // Entries present but no completion marker: this is what an aborted
-    // download leaves behind and it must not count as a usable copy.
+    // Entries but no completion marker: an aborted download.
     const c = await caches.open('ardupilot-offline-copter');
     await c.put('/copter/index.html', new FakeResponse('<html>'));
     const { doc } = load({ manifest: MANIFEST, caches });
@@ -501,8 +492,7 @@ async function main() {
   {
     const caches = makeCaches();
     (await caches.open('ardupilot-offline-common')).put('/__ap_complete__', completeMarker(MANIFEST.generated, 'common'));
-    // A marker naming no wiki: the cache name still says which it is, and a
-    // wiki that cannot be named can never be updated.
+    // A marker naming no wiki: the cache name still says which it is.
     (await caches.open('ardupilot-offline-copter')).put('/__ap_complete__',
       new FakeResponse(JSON.stringify({ build: '2020-01-01T00:00:00Z', saved: 1 })));
     const { doc, fetchCalls } = load({ manifest: MANIFEST, caches });
@@ -523,8 +513,7 @@ async function main() {
     await settle();
     const m = fetchOpts.filter(f => f.url.indexOf('offline-manifest.json') !== -1);
     check('the manifest is requested', m.length > 0);
-    // Everything downstream is derived from the manifest, so a cached manifest
-    // means a frozen build id, a frozen tag, and archives that never refresh.
+    // A cached manifest would freeze the build id.
     check('the manifest is never served from cache',
           m.every(f => f.opts && f.opts.cache === 'no-cache'),
           JSON.stringify(m.map(f => f.opts && f.opts.cache)));
@@ -662,8 +651,7 @@ async function main() {
 
   const TABLE_KEY = '/__ap_files__';
 
-  /** What a finished download leaves behind: files, table and completion
-   *  marker. `files` maps archive path to [hash, body]. */
+  /** A finished download: files, table and marker. `files`: path -> [hash, body]. */
   async function seedSaved(cachesObj, id, build, files) {
     const c = await cachesObj.open('ardupilot-offline-' + id);
     const table = {};
@@ -784,8 +772,7 @@ async function main() {
   {
     // The archive fallback is the most expensive action here; never unattended.
     const cachesObj = makeCaches();
-    // A wiki saved before tables existed: updateStored() resolves null, which
-    // is the fallback trigger.
+    // Saved before tables existed: updateStored() resolves null.
     const c = await cachesObj.open('ardupilot-offline-dev');
     await c.put('/dev/index.html', new FakeResponse('<html>'));
     await c.put('/__ap_complete__', completeMarker(OLD_BUILD, 'dev'));
@@ -859,8 +846,7 @@ async function main() {
           gaps.length + ' gaps, median ' + median + ' ms, need >= ' + Math.round(floor));
   }
   {
-    // A shared file, deliberately: it has several sources, so ignoring a 429
-    // would mean four more requests to a struggling server.
+    // A shared file, which has several sources.
     const cachesObj = makeCaches();
     await seedSaved(cachesObj, 'common', OLD_BUILD, {
       '_images/shared.png': ['c1', 'old'],
@@ -920,8 +906,7 @@ async function main() {
     for (let i = 0; i < 400; i++) { many['dev/docs/p' + i + '.html'] = ['h' + i, 'old ' + i]; }
     await seedSaved(cachesObj, 'dev', OLD_BUILD, many);
 
-    // Every changed file is fetchable with the right hash, so only the cap can
-    // stop the one-by-one path.
+    // Every file fetchable, so only the cap can stop the one-by-one path.
     const published = {};
     const loose = {};
     for (const k of Object.keys(many)) {
@@ -948,8 +933,7 @@ async function main() {
           JSON.stringify(fetchCalls.filter(u => u.indexOf('.tar') !== -1)));
   }
   {
-    // The ordinary case must be untouched: a handful of changed files still
-    // takes the cheap path, or the whole feature is pointless.
+    // A handful of changed files still takes the cheap path.
     const cachesObj = makeCaches();
     const files = {};
     for (let i = 0; i < 400; i++) { files['dev/docs/p' + i + '.html'] = ['h' + i, 'old ' + i]; }
@@ -1161,8 +1145,7 @@ async function main() {
 
   console.log('\ndownload order: the chosen wiki before common');
   {
-    // The wiki's own archive makes it readable; common is 440 MB of shared
-    // images that should backfill afterwards, not block the start.
+    // Common backfills after the wiki is readable.
     const cachesObj = makeCaches();
     const { doc, fetchCalls } = load({
       manifest: MANIFEST, caches: cachesObj,
@@ -1280,8 +1263,7 @@ async function main() {
 
   console.log('\nregression: the footer waits for the wiki list (B10)');
   {
-    // renderStorage's footer reads storedIds, which renderWikis populates. Run
-    // in parallel it briefly said "no wikis saved" on a device that had some.
+    // renderStorage reads storedIds, which renderWikis populates.
     const cachesObj = makeCaches();
     for (const id of ['common', 'copter', 'rover']) {
       (await cachesObj.open('ardupilot-offline-' + id)).put('/__ap_complete__',
@@ -1334,8 +1316,7 @@ async function main() {
 
   console.log('\nB14 + B2: a saved point release is never hidden in the dropdown');
   {
-    // A saved point release is not the newest of any series and must still be
-    // a tick: what you have is always visible.
+    // A saved point release must still be a tick.
     const mk = (ver) => ({
       file: `docs/parameters-Copter-stable-V${ver}.html`, channel: 'stable',
       version: ver, label: ver, bytes: 4e6,
@@ -1367,15 +1348,13 @@ async function main() {
 
   console.log('\nRemove all quotes what it removes, not what the origin is charged');
   {
-    // The button quotes the table's sizes, not storage.estimate().usage, which
-    // counts space freed but not yet reclaimed.
+    // The button quotes the table's sizes, not storage.estimate().usage.
     const cachesObj = makeCaches();
     for (const id of ['common', 'copter', 'rover']) {
       (await cachesObj.open('ardupilot-offline-' + id)).put('/__ap_complete__',
         completeMarker(MANIFEST.generated, id));
     }
-    // A quota reading wildly above the real content, as a real browser gives
-    // after repeated download-and-delete cycles.
+    // A usage figure far above the real content, as browsers report.
     const { doc } = load({ manifest: MANIFEST, caches: cachesObj, usage: 1.6e9 });
     await settle();
 
@@ -1535,8 +1514,7 @@ async function main() {
 
   console.log('\nregression: an unsaved wiki still defaults to the newest stable');
   {
-    // The other half. With nothing stored there is nothing to read, so the
-    // manifest's default is the only sensible answer and must survive.
+    // With nothing stored the manifest's default must survive.
     const man = JSON.parse(JSON.stringify(MANIFEST));
     man.wikis.find((w) => w.id === 'copter').param_versions = [
       { file: 'docs/parameters-Copter-stable-V4.7.0.html', label: '4.7.0',
@@ -1556,8 +1534,7 @@ async function main() {
 
   console.log('\nregression: a wiki folded into common keeps its own URLs');
   {
-    // Shared images go under /_common/; a folded wiki's pages keep their own
-    // URLs. Only asking for a page by its real URL catches a wrong prefix.
+    // Only asking for a page by its real URL catches a wrong prefix.
     const { sandbox } = load({ manifest: MANIFEST });
     await settle();
     const cache = await sandbox.caches.open('fold-test');

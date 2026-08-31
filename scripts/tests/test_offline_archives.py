@@ -45,8 +45,7 @@ def html_members(archive: Path, limit=None):
 
 
 def check_assets_follow_pages():
-    """Wherever the offline page went, its assets must have gone too: a .js
-    without its own copywiki marker reaches only DEFAULT_COPY_WIKIS."""
+    """Wherever the offline page went, its assets must have gone too."""
     ASSETS = ["common_offline.css", "common_offline_page.js",
               "common_offline_export.js", "common_offline_document_builder.js",
               "common_offline_unpack.js",
@@ -69,10 +68,8 @@ def check_assets_follow_pages():
 
 
 def check_archives_carry_current_static():
-    """Every archive must hold the CURRENT panel scripts. Two checks: archive
-    against built tree (packed before the build finished), and built tree
-    against source (edited but not built). The copywiki marker is normalised
-    because copy_common_source_files strips it."""
+    """Archives hold the current panel scripts: archive vs built tree, built
+    tree vs source."""
     sys.path.insert(0, str(REPO / "scripts"))
     from build_offline_artifacts import content_hash
     import json
@@ -129,12 +126,9 @@ def check_archives_carry_current_static():
 
 
 def check_no_dangling_assets():
-    """No built page may reference a local script or stylesheet that is not
-    there. The frozen parameter pages in ../old_params_mversion are outside
-    the repo, so a stray tag there survives any revert."""
+    """No built page references a local script or stylesheet that is not there."""
     ref = re.compile(rb'(?:src|href)="([^"]+\.(?:js|css))"')
-    # The theme's IE conditional comments reference a file it does not ship;
-    # no browser loads them.
+    # No browser loads the theme's IE conditional comments.
     ie_only = re.compile(rb"<!--\[if[^>]*>.*?<!\[endif\]-->", re.S)
     missing, checked = {}, 0
     for wiki in WIKIS:
@@ -145,8 +139,7 @@ def check_no_dangling_assets():
         for page in root.rglob("*.html"):
             for m in ref.finditer(ie_only.sub(b"", page.read_bytes())):
                 url = m.group(1).decode("utf-8", "replace")
-                # Local references only. Absolute and cross-origin ones are
-                # somebody else's to serve.
+                # Local references only.
                 if url.startswith(("http://", "https://", "//", "data:")):
                     continue
                 seen.add((url.split("?")[0], page))
@@ -158,8 +151,7 @@ def check_no_dangling_assets():
             if not target.exists():
                 missing.setdefault(url, page.relative_to(REPO).as_posix())
 
-    # Pre-existing wiki faults, recorded in KNOWN_UPSTREAM_ISSUES.md: allowed,
-    # but still reported so they cannot quietly become permanent.
+    # Known upstream faults (KNOWN_UPSTREAM_ISSUES.md), allowed but reported.
     known = {u for u in missing if u.endswith("useralerts.js")}   # issue 9
     ours = {u: p for u, p in missing.items() if u not in known}
 
@@ -184,8 +176,7 @@ def main():
         remote_donate = []
         local_donate = 0
         pages = 0
-        # A sample rather than every page: the donate control is in the sidebar
-        # of all of them, so a few hundred is conclusive and stays quick.
+        # A sample: the control is in every sidebar.
         for name, html in html_members(archive, limit=200):
             pages += 1
             if "paypalobjects" in html:

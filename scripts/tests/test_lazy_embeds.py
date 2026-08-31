@@ -47,8 +47,7 @@ def main():
           'loading="lazy"' in make_embeds_lazy(
               '<iframe src="https://www.youtube-nocookie.com/embed/x">'))
 
-    # The whole-tree pass, including that it writes atomically and leaves no
-    # temp files behind.
+    # The whole-tree pass leaves no temp files behind.
     with tempfile.TemporaryDirectory() as d:
         root = Path(d)
         page = root / "wikix" / "build" / "html" / "docs" / "p.html"

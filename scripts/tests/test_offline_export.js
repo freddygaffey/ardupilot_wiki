@@ -12,11 +12,9 @@ const vm = require('vm');
 const REPO = path.resolve(__dirname, '..', '..');
 const ARGS = process.argv.slice(2);
 const FULL = ARGS.includes('--full');
-// --full loads every wiki with no page cap, to measure a real export rather
-// than a sample. Slow and memory-hungry; the default stays small.
+// --full: every wiki, no page cap. Slow.
 
-// The sidebar, page index and image index are shared across wikis, so a
-// single-wiki run exercises none of them. Two small wikis take seconds.
+// Two wikis, so the cross-wiki sidebar and indexes are exercised.
 const WIKIS_ARG = ARGS.filter((a) => !a.startsWith('--'));
 const WIKI = WIKIS_ARG[0] || 'rover';
 const ALL_WIKIS = ['copter', 'plane', 'rover', 'sub', 'blimp', 'dev',
@@ -114,8 +112,7 @@ function loadWiki(wiki, limit) {
   return { pages, images, css };
 }
 
-/* A versioned parameter page, in the site's own markup; local builds do not
- * produce them. */
+/* A versioned parameter page in the site's markup; local builds have none. */
 function paramPageHtml(vehicle, label) {
   return '<!DOCTYPE html><html><head><title>Complete Parameter List &mdash; ' +
     vehicle + ' documentation</title></head><body>' +
@@ -150,8 +147,7 @@ function loadParameterVersions(wiki, vehicle, versions) {
 /* --------------------------------------------------------- module load ---- */
 
 function loadExporter() {
-  // The modules the page loads, in its order; the real ApUnpack, because a
-  // stub could not produce the mojibake a raw gzipped read would.
+  // The modules the page loads, in its order.
   const src = [DOCUMENT, UNPACK, EXPORTER]
     .map((f) => fs.readFileSync(f, 'utf8')).join('\n');
   const sandbox = {
@@ -246,8 +242,7 @@ let stemWord = (w) => w, STOPWORDS = [];
   if (ctx.stopwords) { STOPWORDS = ctx.stopwords; }
 })();
 
-/** Lift named functions out of a shipped script; a copy here could agree with
- *  itself while the shipped code is wrong. */
+/** Lift named functions out of a shipped script. */
 function liftFunctions(names, file) {
   const src = fs.readFileSync(file || EXPORTER, 'utf8');
   let out = '';
@@ -281,8 +276,7 @@ function shellSource() {
   } catch (err) { return null; }
 }
 
-/** The whole shell running in a DOM over the payload the export wrote, since
- *  the sidebar and footer buttons are behaviour, not markup. */
+/** The exported shell running in a DOM over the payload the export wrote. */
 function bootShell(D, bodies) {
   let JSDOM;
   try { ({ JSDOM } = require('jsdom')); } catch (e) { return null; }
@@ -357,8 +351,6 @@ async function main() {
   const paramVehicle = paramWiki.charAt(0).toUpperCase() + paramWiki.slice(1);
   const paramPages = loadParameterVersions(
     paramWiki, paramVehicle, PARAM_KEPT.concat(PARAM_DROPPED));
-  // Only the kept ones are expected in the file, so the page count asserts the
-  // window on its own.
   totals.pages += PARAM_KEPT.length;
   const paramBodies = {};
   paramPages.forEach((p) => { paramBodies[p.path] = p.body; });
@@ -375,8 +367,7 @@ async function main() {
   const t0 = Date.now();
   const htmlRes = await api.exportHtml(wikis, 'test.html', null, fileSink(htmlPath));
   console.log('  generated in ' + ((Date.now() - t0) / 1000).toFixed(0) + 's');
-  // A full export exceeds V8's maximum string length, so scan it in chunks
-  // rather than reading it into one string.
+  // A full export exceeds V8's maximum string length.
   const scan = scanFile(htmlPath, [
     /id="i\d+"/g, /data-ap-img=/g, /data:image\//g, /@font-face/g,
     /<img[^>]{0,200}src="\.\.\//g
@@ -386,8 +377,6 @@ async function main() {
       'go.target="_blank"',
       // A single backslash in a SHELL_JS literal vanishes from the built file.
       '.replace(/\\s+/g," ")',
-      // The theme's own element, carried through as markup rather than
-      // rebuilt, so the switcher is the site's switcher.
       'id="selectPicker"']);
 
   const html = { includes: (s) => scan.found[s] };
@@ -414,16 +403,13 @@ async function main() {
         html.includes('go.target="_blank"'));
   check('a doubled backslash survives into the built file',
         html.includes('.replace(/\\s+/g," ")'));
-  // The switcher is the page's own control, carried through as markup. The
-  // shell fills it; it does not build one.
   check('the parameter switcher reaches the file as the theme wrote it',
         html.includes('id="selectPicker"'));
   check('path anchors', html.includes('#/' + wikis[0] + '/'));
   check('no unresolved relative image srcs', scan.counts[4] === 0,
         scan.counts[4] + ' left');
 
-  // The sidebar is one element built from every wiki's toctree, so a fragment
-  // that does not close its own tags nests each wiki inside the last.
+  // An unclosed fragment nests each wiki inside the last.
   const D = readIndexPayload(htmlPath);
   check('routing index readable', D !== null && Array.isArray(D.pages));
   if (D) {
@@ -435,8 +421,7 @@ async function main() {
           indexed.join(', '));
     check('sidebar sections are siblings, not nested',
           !/<div/i.test(D.nav) && !/<form/i.test(D.nav));
-    // Under a page cap, only the anchor's shape can be asserted: a cross-wiki
-    // link must not get this wiki prefixed onto it.
+    // Under a page cap only the anchor's shape can be asserted.
     const anchors = (D.nav.match(/href="#([^"]+)"/g) || [])
       .map((h) => h.slice(7, -1)).filter((p) => p.charAt(0) === '/');
     const malformed = anchors.filter(
@@ -471,8 +456,7 @@ async function main() {
           want.every((p) => carried.has(p)));
   }
 
-  // Root-relative cross-wiki links exist only in archives, so drive the nav
-  // rewriting with that shape directly.
+  // Root-relative cross-wiki links exist only in archives.
   const navFns = liftFunctions(
     ['resolvePath', 'innerOf', 'topLevelLists', 'textOf', 'navHref', 'prune',
      'parseToc', 'navNodes', 'mergeToc'], DOCUMENT);
@@ -549,8 +533,7 @@ async function main() {
           merged[1].children.length + ' under the expanded one');
   }
 
-  // Every internal anchor the sidebar renders is in that wiki's reading order,
-  // in the same sequence.
+  // The sidebar and the reading order must agree.
   if (D) {
     const order = D.order || [];
     check('a reading order was published', order.length > 0,
@@ -579,8 +562,6 @@ async function main() {
     check('the reading order runs down the sidebar, not past it', sorted,
           inOrder.length + ' compared');
 
-    // A flat list is what this used to render, and it is the failure that
-    // hides best: the sidebar still works, it just shows a tenth of the wiki.
     const depth = (n) => (D.nav.match(
       new RegExp('class="toctree-l' + n + '"', 'g')) || []).length;
     check('the sidebar has nested levels, not one flat list',
@@ -637,8 +618,6 @@ async function main() {
             !!next && next.className === 'btn btn-neutral float-right' &&
             !!prev && prev.className === 'btn btn-neutral float-left',
             next ? next.className : '');
-      // The ordering bug this is here for: a "next" taken from the page list
-      // rather than the toctree skips whatever the sidebar shows in between.
       check('next is the page the sidebar shows next',
             !!next && next.getAttribute('href') === '#' + reachable[at + 1],
             (next ? next.getAttribute('href') : 'none') +
@@ -647,8 +626,7 @@ async function main() {
             !!prev && prev.getAttribute('href') === '#' + reachable[at - 1],
             (prev ? prev.getAttribute('href') : 'none') +
             ' wanted #' + reachable[at - 1]);
-      // The live wiki stops at its own last page rather than handing the
-      // reader to a different vehicle, and so does this.
+      // As the live wiki does.
       if (wikis.length > 1) {
         shellGo(win, reachable[reachable.length - 1]);
         check('the last page of a wiki offers no next',
@@ -657,8 +635,7 @@ async function main() {
         shellGo(win, target);
       }
 
-      // The theme drives the whole tree off one class: an <li> is open when it
-      // carries "current", and theme.css hides every other list.
+      // An <li> is open when it carries "current".
       const here = [].slice.call(nav.querySelectorAll('a[href^="#/"]'))
         .filter((a) => a.getAttribute('href') === '#' + target)[0];
       check('the sidebar marks the page being read',
@@ -673,8 +650,6 @@ async function main() {
               all > 0 && open === all, open + ' of ' + all + ' ancestors');
       }
 
-      // Every other branch stays shut, which is the point of the dropdowns:
-      // several thousand entries expanded at once is not navigation.
       const branches = [].slice.call(nav.querySelectorAll('button.toctree-expand'))
         .map((b) => b.closest('li'));
       const shut = branches.filter((li) => !li.classList.contains('current'));
@@ -716,8 +691,7 @@ async function main() {
               versions.map((v) => v.n).join(),
               [].map.call(sel.options, (o) => o.textContent).join(' '));
 
-        // Elements, not text: a page swallowed into an unclosed script still
-        // contains the words; what is lost is that they are a paragraph.
+        // Elements, not text: a swallowed page still contains the words.
         const paras = [].map.call(doc.querySelectorAll('#ap-doc p'),
                                   (el) => el.textContent);
         check('the page below its own inline script survives',
@@ -731,8 +705,6 @@ async function main() {
               win.location.hash === '#' + versions[0].p, win.location.hash);
       }
 
-      // A wiki with nothing to switch to still has the theme's markup on the
-      // page, promising a choice in the sentence beside the empty control.
       const bare = bootShell(Object.assign({}, D, { params: {} }), paramBodies);
       if (bare) {
         shellGo(bare, versions[1].p);
@@ -761,8 +733,7 @@ async function main() {
           probe('vehicle zzzznotaword') === bare,
           probe('vehicle zzzznotaword') + ' vs ' + bare);
 
-    // The real report: "industrial-grade" arrived as "rial-grade", which
-    // matches other pages by one edit and the intended page not at all.
+    // A real pasted selection, first word clipped.
     const CLIPPED = 'rial-grade, dual-band GNSS module designed and ' +
       'manufactured in India by TeraVolt Labs. It is specifically engineered ' +
       'to support the NavIC (IRNSS) constellation, making it fully compliant ' +
