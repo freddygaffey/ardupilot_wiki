@@ -1,98 +1,61 @@
 /*
- * Service worker for the ArduPilot wiki. Caching policy:
- *
- *   pages   stale-while-revalidate - render the cached copy at once, refresh
- *           behind, and tell the page if the refreshed copy differs so an editor
- *           sees the change without every reader paying a round trip first.
- *   images  cache first - large and effectively immutable.
- *   static  stale-while-revalidate - few, small, must track the theme.
- *
- * At most one request per resource per navigation, as an ordinary browser does;
- * nothing here crawls or polls. The bulk download is a separate opt-in action.
+ * Service worker for the ArduPilot wiki. Pages: stale-while-revalidate, telling
+ * the page when the refreshed copy differs. Images and fingerprinted static
+ * assets: cache first. Saved wikis (ardupilot-offline-*) are served from their
+ * own caches. One request per resource per navigation; nothing crawls.
  */
 
-/*
- * Bump when the CONTENT of a cache can no longer be trusted, NOT on every edit.
- * The activate handler only deletes caches whose NAME is stale, so a bad entry
- * in a still-current cache lives until this changes - but a bump also empties
- * every runtime cache, making the next load slow. Change a strategy or find
- * poisoned entries: bump. Fix how a response is stored: usually not.
- *
- * Not hypothetical: a debugging session once wrote 17-byte placeholders over the
- * theme's cache-first (never-revalidated) stylesheets under their current
- * fingerprints, so no later build could replace them and every page rendered
- * unstyled for weeks. One bump here would have cleared it. Downloaded wikis are
- * unaffected: ardupilot-offline-* is unversioned and activate skips it.
- */
+// Bump when cached CONTENT can no longer be trusted, not on every edit: activate
+// deletes caches by name, so a poisoned entry in a current cache lives until
+// this changes. Saved wikis are unversioned and unaffected.
 const CACHE_VERSION = 'v11';
 const PAGE_CACHE = `ardupilot-pages-${CACHE_VERSION}`;
 const IMAGE_CACHE = `ardupilot-images-${CACHE_VERSION}`;
 const STATIC_CACHE = `ardupilot-static-${CACHE_VERSION}`;
-// Cross-origin assets that never change and so can be served from cache after
-// the first visit. Anything whose freshness matters stays off this list.
+// Cross-origin assets that never change.
 const THIRD_PARTY_CACHE = `ardupilot-thirdparty-${CACHE_VERSION}`;
 const THIRD_PARTY_STATIC =
   /^https:\/\/(i\.creativecommons\.org\/|licensebuttons\.net\/|www\.paypalobjects\.com\/)/;
-// User alerts warn about a bad release, so they must not go stale silently;
-// they get the same contract as a page - serve what we have, refresh behind,
-// next navigation shows the newer copy.
-// The offline page and the assets that drive it. Network-only because the
-// markup and its panel script are one unit - a cached script against fresh
-// markup renders as garbage. pwa.js is deliberately excluded: it pairs with
-// nothing and is on every page, and network-only cost 15ms/navigation for a
-// file that rarely changes, so it gets stale-while-revalidate below instead.
+// The offline page and its scripts: network-only, because a cached script
+// against fresh markup renders as garbage. pwa.js pairs with nothing and is
+// stale-while-revalidate below.
 const APP_ASSET =
   /(^\/sw\.js$|common_offline(\.css|_page\.js|_export\.js|_document_builder\.js|_unpack\.js|_update\.js)$|common-offline(\.html)?$)/;
-// Marks a request as part of a differential update, which must not be served
-// from the very cache it is refreshing.
+// Marks a differential-update request, which must not be answered from cache.
 const UPDATE_PARAM = 'ap-update';
 const THIRD_PARTY_FRESH = /^https:\/\/firmware\.ardupilot\.org\/useralerts\//;
 const CURRENT_CACHES = [PAGE_CACHE, IMAGE_CACHE, STATIC_CACHE, THIRD_PARTY_CACHE];
-// Downloaded wikis, deliberately unversioned so they outlive worker updates.
+// Saved wikis, unversioned so they outlive worker updates.
 const OFFLINE_CACHE_PREFIX = 'ardupilot-offline-';
 
-// Kept deliberately short. Anything else is cached as it is visited, so a fresh
-// install does not pull down a pile of files somebody may never look at.
+// Deliberately short; everything else is cached as it is visited.
 const SHELL = [
   '/',
   '/offline-fallback.html',
   '/manifest.json',
   '/android-icon-192x192.png',
   '/icon-512x512.png',
-  // pwa.js only: layout.html loads it on every page, so it is genuinely
-  // site-wide rather than part of any one wiki. The offline panel's own
-  // script and stylesheet are static assets under each wiki's _static, so
-  // they travel in that wiki's archive and need no special case here.
   '/js/pwa.js',
 ];
 
-// How long a navigation waits for the network before falling back to cache,
-// for pages that are not cached yet.
+// Network wait for a page that is not cached yet.
 const NETWORK_TIMEOUT_MS = 5000;
 
 self.addEventListener('install', (event) => {
-  // Take over as soon as the new worker is ready rather than waiting for every
-  // tab to close. A stuck old worker is the main reason a bad service worker
-  // becomes hard to displace, and this site serves documents, not a stateful
-  // app, so an immediate swap is harmless.
+  // Static documents, so swapping workers immediately is harmless and keeps a
+  // bad worker easy to displace.
   self.skipWaiting();
 
   event.waitUntil((async () => {
     const cache = await caches.open(STATIC_CACHE);
-    // Added one at a time: cache.addAll() rejects the whole batch if a single
-    // entry 404s, which would leave the worker permanently uninstallable.
+    // One at a time: addAll() rejects the batch on a single 404.
     await Promise.all(SHELL.map((url) =>
       cache.add(url).catch((err) => console.warn('[sw] shell precache failed', url, err))
     ));
   })());
 });
 
-/*
- * Warm the theme's shared assets after activation. Every page loads the same
- * dozen files (jQuery, theme script and stylesheet, fonts); fetched lazily, the
- * first page paid for all of them. They are small, shared, and content-hashed,
- * so fetching them once up front is cheap and never wrong. 404s are ignored.
- */
+// Theme assets every page loads, warmed once after activation.
 const WARM_PER_WIKI = [
   '_static/css/theme.css',
   '_static/js/theme.js',
@@ -102,13 +65,7 @@ const WARM_PER_WIKI = [
   '_static/common_theme_override.css',
 ];
 
-/*
- * Third-party furniture on every page that never changes: the donate button
- * (paypalobjects.com) and licence badge (creativecommons.org). Cache-first
- * makes them cost the same as our own images (the donate button alone was
- * 138 ms on the first page). Fetched no-cors - a cross-origin image is opaque,
- * fine for an <img>. Failures ignored; this is decoration.
- */
+// Third-party decoration on every page; the donate button alone was 138 ms.
 const WARM_THIRD_PARTY = [
   'https://www.paypalobjects.com/en_US/i/btn/btn_donate_LG.gif',
   'https://i.creativecommons.org/l/by-sa/3.0/88x31.png',
@@ -140,10 +97,7 @@ async function warmTheme() {
       return;
     }
     const held = await heldOffline(new Request(url));
-    // Guarded like every other write into the versioned cache: a saved wiki is
-    // a source of bytes, not a trusted one, and a bad body here outlives the
-    // wiki it came from until CACHE_VERSION bumps. This is the same path that
-    // once poisoned the stylesheets.
+    // A saved wiki is a source of bytes, not a trusted one.
     if (held && plausibleBody(new Request(url), held)) {
       await cache.put(url, held.clone());
     }
@@ -153,10 +107,7 @@ async function warmTheme() {
 self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
-    // Only the versioned shell caches are disposable. Downloaded wikis live in
-    // ardupilot-offline-* and must survive a version bump: those are hundreds
-    // of megabytes the reader chose to store, and deleting them because the
-    // service worker changed would be indefensible.
+    // Only the versioned caches are disposable; saved wikis survive a bump.
     await Promise.all(
       names
         .filter((name) => name.startsWith('ardupilot-') &&
@@ -165,26 +116,16 @@ self.addEventListener('activate', (event) => {
         .map((name) => caches.delete(name))
     );
     await self.clients.claim();
-    // After claiming, so it never delays taking control.
     await warmTheme().catch(() => undefined);
     await warmThirdParty().catch(() => undefined);
   })());
 });
 
-/*
- * Streaming downloads.
- *
- * The export is built from what is already in Cache Storage into one
- * self-contained HTML file, which runs to hundreds of megabytes. Assembling
- * that in a Blob would need it all in memory at once, which is exactly the
- * thing to avoid. Instead the page hands us a ReadableStream, we answer a
- * request for /__export__/<id> with it, and the browser writes it to disk as an ordinary
- * download while the page is still generating it.
- */
+// Streaming exports: the page hands over a ReadableStream, we answer
+// /__export__/<id> with it, and the browser writes the file as it is generated
+// instead of holding hundreds of megabytes in a Blob.
 const EXPORTS = new Map();
 
-// How long an export may sit uncollected before its stream is dropped and
-// the worker is released.
 const EXPORT_TIMEOUT_MS = 60000;
 
 self.addEventListener('message', (event) => {
@@ -203,20 +144,9 @@ self.addEventListener('message', (event) => {
     return;
   }
   if (data.type === 'EXPORT_START') {
-    // Hold this worker alive until the download is collected.
-    //
-    // EXPORTS lives in the worker's memory, and a worker with nothing left to
-    // do is terminated within milliseconds. The page posts the stream here and
-    // then builds an iframe to fetch it, and that gap was enough: the worker
-    // died, a fresh instance answered the fetch with an empty map, and the
-    // reply was 410. Nobody then read the stream, so the page's first write
-    // blocked once the queue filled and the export hung with no error at all.
-    // Measured: fetching in the same tick returned 200, fetching 300ms later
-    // returned 410.
-    //
-    // waitUntil keeps the instance that holds the stream alive until the
-    // download starts, with a cap so a save that is cancelled before it is
-    // collected cannot pin a worker indefinitely.
+    // EXPORTS is in-memory, and an idle worker is terminated within
+    // milliseconds, so hold this instance alive until the download is
+    // collected, with a cap for a cancelled save.
     let collected;
     const untilCollected = new Promise((resolve) => { collected = resolve; });
     EXPORTS.set(data.id, {
@@ -235,25 +165,12 @@ function isImage(url) {
          /\.(png|jpe?g|gif|webp|svg|ico)$/i.test(url.pathname);
 }
 
-// Named extensions rather than "looks like it has one": pages here are called
-// things like common-msp-osd-overview-4.2, and treating that trailing .2 as an
-// extension is how the first attempt at this still missed them.
+// Named extensions: page names like common-msp-osd-overview-4.2 end in ".2".
 const ASSET_EXT_RE =
   /\.(html?|css|m?js|json|xml|txt|map|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf|eot|pdf|zip|gz|tgz|tar|mp4|webm)$/i;
 
-/*
- * Every shape one URL can have been stored under.
- *
- * Two separate things used to be true at once. A page could be addressed
- * without its extension, because a host that canonicalises URLs leaves the
- * reader on /rover/docs/foo while the archive stored /rover/docs/foo.html.
- * And an image shared by several wikis is stored once, under /_common/, while
- * every page still asks for it by that page's own wiki.
- *
- * Both are the same question: where else might this be? Answering it in one
- * place is the point. When they were separate lookups they drifted, and the
- * image path never consulted the download at all.
- */
+// Every shape one URL can have been stored under: with and without .html or
+// index.html, and shared images once under /_common/.
 function storedShapes(url) {
   const path = url.pathname;
   const out = [path];
@@ -264,9 +181,6 @@ function storedShapes(url) {
     out.push(path + '.html', path + '/index.html');
   }
 
-  // Shared images live once under /_common/_images/, however many wikis use
-  // them; the shared set is hundreds of megabytes and nearly every wiki
-  // references most of it.
   const shared = path.replace(/^\/[^/]+\/_images\//, '/_common/_images/');
   if (shared !== path) {
     out.push(shared);
@@ -275,16 +189,10 @@ function storedShapes(url) {
 }
 
 
-/*
- * The one cache that can hold a given path. caches.match() with no name walks
- * every cache (692ms across fourteen downloads vs 89ms asking the single cache
- * that can hold it). The path says which - /sub/docs/x.html is only in the sub
- * download - so ask it directly, exhaustive search as fallback.
- */
-// Wikis with no archive of their own, whose files travel inside common. Kept
-// in step with FOLD_INTO_COMMON in scripts/build_offline_artifacts.py. Getting
-// this wrong costs speed and not correctness - the exhaustive fallback below
-// still finds the page - but that is the 692ms path on every About request.
+// The one cache that can hold a path: caches.match() across fourteen saved
+// wikis was 692 ms against 89 ms asking the right cache directly.
+// Kept in step with FOLD_INTO_COMMON in scripts/build_offline_artifacts.py;
+// drift costs speed, not correctness.
 const FOLDED_INTO_COMMON = new Set(['ardupilot']);
 
 function likelyCacheName(path) {
@@ -298,30 +206,13 @@ function likelyCacheName(path) {
   return OFFLINE_CACHE_PREFIX + (FOLDED_INTO_COMMON.has(first) ? 'common' : first);
 }
 
-// Memoised for this worker's lifetime. caches.open() CREATES a cache that does
-// not exist, which would litter storage with empty ones, so the real names are
-// checked first. A wiki downloaded after this was filled is simply missed here
-// and found by the exhaustive fallback, so the memo can never cause a wrong
-// answer, only a slower one.
+// caches.open() creates a missing cache, so real names are checked first. A
+// stale memo costs a slower lookup, never a wrong one.
 let knownCacheNames = null;
 const openedCaches = new Map();
 
-/*
- * The panel writes /__ap_complete__ only after every file of a download is in
- * place, and its whole accounting is built on it: entries without the marker
- * are an aborted or quota-killed download, not a copy anyone can rely on.
- *
- * This worker used to ignore the marker entirely and go by cache NAME alone,
- * which split the feature into two halves that disagreed about what "saved"
- * means. Observed directly: a half-written cache served its fragment of a page
- * in preference to the network, while the panel - which does check - read
- * "no wikis saved" and offered no way to see or remove what was being served.
- *
- * So an offline cache is consulted only once its marker has been seen. The
- * check runs once per cache name and the verdict is remembered; a download
- * completing in the meantime is picked up when the panel's COMPLETE message
- * resets this state, as it already resets knownCacheNames.
- */
+// A saved wiki is consulted only once its /__ap_complete__ marker exists;
+// without it the cache is an aborted download. Reset by CACHES_CHANGED.
 const markerChecked = new Map();
 
 async function isComplete(name) {
@@ -354,26 +245,9 @@ async function offlineCacheFor(path) {
   return openedCaches.get(name);
 }
 
-/*
- * Inflate an entry the unpacker stored compressed.
- *
- * Cache Storage holds what it is given, so the archives' text goes in gzipped
- * and comes back out through here: 454.8 MB of html, js, css and search
- * indexes across the twelve archives becomes 57.1 MB stored, which is what
- * keeps the whole set inside the 1.0 GB WebKit reports as its quota.
- *
- * It has to be done here rather than by declaring Content-Encoding on the
- * response. Every engine was asked directly: Chromium, Firefox and WebKit all
- * render the raw gzip bytes when a worker hands back a body labelled that way.
- * The header is stripped once, when the bytes are first fetched, and is not
- * honoured a second time.
- *
- * The cost, measured on the biggest page on the site (parameters.html, 5.9 MB
- * falling to 441 KB): 3.6 ms in Chromium, 3 ms in WebKit, and in Firefox 7 ms
- * against 14 ms for reading the uncompressed copy, because 441 KB off disk
- * beats 6 MB off disk by more than the inflate costs. An ordinary page is
- * under a millisecond either way.
- */
+// The unpacker stores text gzipped (455 MB -> 57 MB, inside WebKit's 1 GB
+// quota). Inflated here: no engine honours Content-Encoding on a body a worker
+// hands back. Under 1 ms for an ordinary page.
 const AP_ENCODED = 'x-ap-encoding';
 
 function inflate(response) {
@@ -381,9 +255,6 @@ function inflate(response) {
       response.headers.get(AP_ENCODED) !== 'gzip') {
     return response;
   }
-  // No DecompressionStream means no way to read what was stored, so the entry
-  // is unreadable rather than merely uncompressed. Nothing that supports
-  // service workers and Cache Storage lacks it, but say so if it happens.
   if (typeof DecompressionStream !== 'function') {
     console.warn('[sw] stored compressed but this browser cannot inflate');
     return undefined;
@@ -396,19 +267,9 @@ function inflate(response) {
   );
 }
 
-/*
- * The one answer to "is this held offline", for every resource. Pages and images
- * having separate lookups once left 123 of rover's 123 images missing offline
- * while every page resolved. Pass a cache to look only there; pass none to search
- * every cache, which finds a downloaded wiki.
- *
- * Exact matches only: ignoring the query string was redundant (no stored key has
- * one: 0 of 1,059) and expensive - it disables the key hash and walks the whole
- * cache. Measured on twelve saved wikis, exact vs ignore-query:
- *   cache.match(path)    0.1-0.3 ms  vs   63-79 ms
- *   caches.match(path)   0.1-0.3 ms  vs  307-325 ms   (the fallback below)
- * The cost grows with wikis saved - instant with one, sluggish with twelve.
- */
+// The one answer to "is this held offline". Pass a cache to look only there,
+// none to search every complete saved wiki. Exact matches: ignoreSearch walks
+// the whole cache (0.2 ms vs 300 ms with twelve wikis saved).
 async function heldOffline(request, cache) {
   const shapes = storedShapes(new URL(request.url));
 
@@ -422,7 +283,6 @@ async function heldOffline(request, cache) {
     return undefined;
   }
 
-  // Ask the one cache that can hold each shape before searching them all.
   for (const path of shapes) {
     const only = await offlineCacheFor(path);
     if (only) {
@@ -433,10 +293,8 @@ async function heldOffline(request, cache) {
     }
   }
 
-  // Fallback: a wiki downloaded since this worker started, or anything stored
-  // somewhere the path does not predict. Searched cache by cache rather than
-  // with the global caches.match, because that would happily answer from a
-  // half-written download the named path above just refused.
+  // Cache by cache, not caches.match(): that would answer from a half-written
+  // download the check above refused.
   const names = await caches.keys();
   for (const name of names) {
     if (name.startsWith(OFFLINE_CACHE_PREFIX) && !(await isComplete(name))) {
@@ -457,39 +315,12 @@ function isPage(url) {
   return /\.html?$/.test(url.pathname) || url.pathname.endsWith('/');
 }
 
-/*
- * The firmware version index behind the dropdown on a parameters page.
- *
- * /copter/_static/parameters-Copter.json, a map of label to filename, which
- * parameters.html and all 66 historical parameter pages fetch to build their
- * <select>. Roughly 971 bytes.
- */
+// The version index behind the dropdown on every parameters page.
 const PARAM_INDEX = /^\/([^/]+)\/_static\/parameters-[A-Za-z0-9_]+\.json$/;
 
-/*
- * Answer the version index with the versions this device can actually open.
- *
- * The index names every version the build produced. The archive holds only the
- * ones a reader ticked, because the pages are 4 to 6 MB each and were made
- * opt-in to keep Copter at 74 MB rather than 317 MB. So offline the dropdown
- * offers fifteen doors and one opens: measured on a default save, six followed,
- * five landed on the offline fallback.
- *
- * Filtered here rather than on the page, and that is the whole point. A page
- * script would have to be delivered to every page carrying the dropdown, and 66
- * of them are frozen HTML copied out of ../old_params_mversion that Sphinx
- * never renders, so no template can reach them. They all fetch this one URL.
- * One intercept covers all 72.
- *
- * Nothing filtered is ever stored. Writing a trimmed copy into the cache would
- * put it under the archive's file table, which hashes this path, so the next
- * differential update would fetch the real one back and the dropdown would
- * quietly start lying again. Computing it per request means the answer is
- * always the current contents of the cache.
- *
- * Network first, so being online is never affected: every version really is
- * reachable then, and the reader should see all of them.
- */
+// Offline, answer the version index with only the versions held: historical
+// parameter pages are opt-in, and 66 of the pages are frozen HTML no template
+// can reach, so the filter lives here. Network first; nothing filtered is stored.
 async function paramIndex(request, url) {
   try {
     const fresh = await fetch(request);
@@ -498,7 +329,7 @@ async function paramIndex(request, url) {
       return fresh;
     }
   } catch (err) {
-    // Offline. Fall through to the stored index.
+    // Offline; fall through to the stored index.
   }
 
   const held = await heldOffline(request);
@@ -516,17 +347,14 @@ async function paramIndex(request, url) {
   const wiki = url.pathname.split('/')[1];
   const out = {};
   for (const label of Object.keys(index)) {
-    // Values are bare filenames resolved against the page, which lives in
-    // docs/. The page itself carries no path, so this is where it is built.
+    // Values are bare filenames relative to docs/.
     const target = new URL('/' + wiki + '/docs/' + index[label], url.origin);
     if (await heldOffline(new Request(target.href))) {
       out[label] = index[label];
     }
   }
 
-  // An empty dropdown is worse than an over-full one, and it should not be
-  // reachable: a reader looking at a parameters page offline necessarily has
-  // that page, so its own entry survives the filter. Belt and braces.
+  // An empty dropdown is worse than an over-full one.
   if (!Object.keys(out).length) {
     return held;
   }
@@ -539,8 +367,6 @@ async function paramIndex(request, url) {
 }
 
 function isStatic(url) {
-  // .js and .css are handled earlier, network-first. This covers fonts and the
-  // rest of _static, which are large, change rarely, and are safe from cache.
   return /\/(_static|fonts)\//.test(url.pathname);
 }
 
@@ -551,58 +377,24 @@ async function notifyClients(message) {
 }
 
 /**
- * Serve the cached copy at once, refresh in the background, and speak up only if
- * the refreshed copy differs. `event` is required, not optional: the browser
- * kills a worker once its last respondWith settles, so without event.waitUntil
- * the unawaited revalidation was abandoned every time and the page cache never
- * filled (measured: one entry, /sw.js, after a whole session - every page came
- * from the saved wiki, so content stayed hours stale and PAGE_UPDATED never fired).
+ * Serve the cached copy at once, refresh behind, and announce a difference.
+ * `event` is required: without waitUntil the browser kills the worker before
+ * the refresh lands and the page cache never fills.
  */
 async function staleWhileRevalidate(request, cacheName, announceChanges, event) {
   const cache = await caches.open(cacheName);
-  // Serve what this page cached while reading, else what a downloaded wiki holds.
-  // The two sources are split on purpose: a PAGE_CACHE copy came from the
-  // network, so comparing it to a fresh fetch tells you if the page changed. The
-  // OFFLINE copy is the archive's REWRITTEN page (donate button a link, videos
-  // stills), so it never matches the original and would report "changed" on
-  // every page a saved wiki holds - the false toast. Only page-cache is announceable.
+  // Only a PAGE_CACHE copy is comparable to the network: a saved wiki's page is
+  // the archive's rewritten version and would always read as "changed".
   const fromPageCache = await heldOffline(request, cache);
   const cached = fromPageCache || (await heldOffline(request));
 
-  // Clone NOW, while the body is certainly untouched.
-  //
-  // The comparison below runs inside the background fetch, which settles long
-  // after this function has handed `cached` back to the browser. By then the
-  // browser has read it to render the page, so cloning it there threw
-  // "Response body is already used", the whole revalidation rejected, and the
-  // put that follows never ran. The page cache therefore never filled: on the
-  // mirror it held one entry after a session of browsing, and it was /sw.js.
-  //
-  // The effect was that a saved wiki shadowed the live site permanently. Pages
-  // stayed hours stale against a server rebuilt repeatedly, video stills never
-  // gave way to real embeds, and PAGE_UPDATED never fired once. The old comment
-  // here claimed the comparison happened "before either body is consumed",
-  // which was the intent and not what the code did.
+  // Clone now: by the time the refresh settles the browser has consumed the
+  // body that was handed back.
   const cachedForCompare = (announceChanges && fromPageCache) ? fromPageCache.clone() : null;
 
-  /*
-   * The refresh has to reach the server.
-   *
-   * A fetch made inside the worker does not re-enter this handler, but it does
-   * go through the browser's HTTP cache, and the wiki's HTML carries no
-   * Cache-Control at all: only an ETag and a Last-Modified. So the browser
-   * caches it heuristically and answered the refresh from its own stale copy,
-   * which was then written into the page cache. The revalidation ran, stored
-   * something, and left the reader exactly as behind as before.
-   *
-   * 'no-cache' means revalidate, not bypass: the ETag still goes up and an
-   * unchanged page still comes back as a 304, so this costs a conditional
-   * request rather than a download.
-   *
-   * Only when there is a cached copy to refresh. With nothing stored, the
-   * response below is what the reader gets, and a navigation request is passed
-   * through untouched for the reasons networkOnly explains.
-   */
+  // 'no-cache' so the refresh revalidates with the server instead of the HTTP
+  // cache (the wiki's HTML has no Cache-Control). Navigations with nothing
+  // stored pass through untouched, see networkOnly.
   const refresh = cached
     ? new Request(request.url, { cache: 'no-cache', credentials: 'same-origin' })
     : request;
@@ -625,23 +417,16 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
     }
     return response;
   }).catch((err) => {
-    // Swallowing this silently is how a broken revalidation stayed invisible:
-    // the page still rendered, from the copy we already had, so nothing looked
-    // wrong while the cache quietly never filled.
     console.warn('[sw] revalidate failed for', request.url, err && err.message);
     return undefined;
   });
 
-  // Without this the browser may terminate the worker the moment the cached
-  // copy is handed back, and the fetch above is dropped on the floor.
   keepAlive(event, network, request.url);
 
   if (cached) {
     return cached;
   }
 
-  // Nothing in the page cache, so try the network - but not forever on a bad
-  // link.
   const timeout = new Promise((resolve) => setTimeout(resolve, NETWORK_TIMEOUT_MS));
   const response = await Promise.race([network, timeout]);
   if (response) {
@@ -655,12 +440,8 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
          });
 }
 
-/*
- * The browser rejects a redirected response for a navigation ("a redirected
- * response was used..."), leaving the client with no controlling worker. This
- * site redirects (308 /x.html to /x), so rebuild the response to drop the
- * redirected flag while keeping the body, status and headers.
- */
+// A navigation may not be answered with a redirected response, so rebuild it
+// without the flag.
 function unredirect(response) {
   if (!response || !response.redirected) {
     return response;
@@ -675,11 +456,8 @@ function unredirect(response) {
 /** Always ask the network; use a cached copy only if there is no network. */
 async function networkOnly(request) {
   try {
-    // fetch(request, init) builds a *new* Request from this one, and
-    // constructing a Request whose mode is 'navigate' throws a TypeError. The
-    // handler then rejects, the browser quietly falls back to its own network
-    // load, and - the part that actually bites - the page ends up with no
-    // controlling service worker at all. Pass the request through untouched.
+    // Untouched: fetch(request, init) rebuilds the Request, and a rebuilt
+    // 'navigate' request throws, which would leave the page uncontrolled.
     const response = await fetch(request);
     if (response && response.ok && plausibleBody(request, response)) {
       await keep(PAGE_CACHE, request, response);
@@ -692,14 +470,8 @@ async function networkOnly(request) {
   }
 }
 
-/*
- * Serve the previous copy at once and fetch a new one behind it.
- *
- * For cross-origin resources whose URL carries a cache-busting query: matching
- * has to ignore the query or every request is a miss by construction, and the
- * copy stored has to be keyed the same way or the cache grows without bound,
- * one entry per page view.
- */
+// Stale-while-revalidate for cross-origin URLs with a cache-busting query,
+// keyed without it so the cache does not grow one entry per page view.
 async function freshBehind(request, cacheName, event) {
   const cache = await caches.open(cacheName);
   const key = new URL(request.url);
@@ -716,8 +488,6 @@ async function freshBehind(request, cacheName, event) {
     })
     .catch(() => undefined);
 
-  // As in staleWhileRevalidate: answered from storage, so nothing awaits the
-  // refresh, so the worker has to be told to stay alive for it.
   keepAlive(event, network, request.url);
 
   if (stored) {
@@ -727,37 +497,18 @@ async function freshBehind(request, cacheName, event) {
 }
 
 async function cacheFirst(request, cacheName) {
-  // Exact match first, by the whole URL.
-  //
-  // heldOffline answers by path shape and deliberately ignores the origin,
-  // because that is what lets /rover/_images/x.png find the shared copy under
-  // /_common/. A cross-origin asset is stored under its full URL, so that
-  // lookup can never match one: the analytics script was re-fetched on every
-  // page, 1.2 to 2.5 seconds each time, while appearing to be cached.
+  // Exact URL first: heldOffline matches by path and cannot find a
+  // cross-origin asset stored under its full URL.
   const named = await caches.open(cacheName);
   const exact = await named.match(request);
   if (exact) {
     return exact;
   }
 
-  // One lookup, every cache, every shape: the runtime image cache and a
-  // downloaded wiki are both just places this might already be.
   const held = await heldOffline(request);
   if (held) {
-    // Promote it. Answering from a downloaded wiki means a shape lookup across
-    // caches on EVERY request, because nothing else ever fills this one:
-    // measured 84ms for jquery.js served that way against 2ms for a stylesheet
-    // already here. Under stale-while-revalidate the background fetch used to
-    // populate it, so switching to cache-first quietly removed the only thing
-    // that did.
-    //
-    // Guarded like every network write, and this one especially: it copies
-    // into the VERSIONED cache, where a wrong body outlives the wiki it came
-    // from and survives until CACHE_VERSION changes. This exact path was used
-    // to poison ardupilot-static with a text/html "stylesheet" while the
-    // guard on the fetch paths stood intact - a saved wiki is one more source
-    // of bytes, not a trusted one. Served either way: a bad decoration
-    // renders wrong once, which is strictly better than permanently.
+    // Promote into the named cache (84 ms per lookup otherwise), guarded like a
+    // network write: a saved wiki is not a trusted source.
     if (plausibleBody(request, held)) {
       await named.put(request, held.clone());
     }
@@ -765,9 +516,7 @@ async function cacheFirst(request, cacheName) {
   }
   try {
     const response = await fetch(request);
-    // An opaque cross-origin response reports ok === false and status 0. It is
-    // still perfectly usable by an <img> or <script>, and storing it is the
-    // whole point here, so accept that shape as well as a real 200.
+    // Opaque cross-origin responses report status 0 and are still usable.
     if (response && (response.ok || response.type === 'opaque') &&
         plausibleBody(request, response)) {
       await named.put(request, response.clone());
@@ -778,34 +527,9 @@ async function cacheFirst(request, cacheName) {
   }
 }
 
-/*
- * Any handler that throws makes respondWith reject. The browser then falls back
- * to its own network load, which looks harmless - the page still appears - but
- * that client ends up with NO controlling service worker, so offline support
- * and streaming downloads silently stop working for it.
- *
- * That is exactly what a single bad fetch() call did here. So every strategy is
- * wrapped: whatever goes wrong, we always resolve to a Response, and a mistake
- * in a caching strategy can never cost us control of the page.
- */
-/*
- * Does this response look like the thing that was asked for?
- *
- * A request for a stylesheet that comes back as text/html is never legitimate,
- * whatever produced it, and storing one is how a cache poisons itself. Because
- * static assets are served cache-first, a single bad answer is kept and served
- * for as long as the cache name stays the same, which is indefinitely.
- *
- * The case this is really aimed at is captive wifi: hotels, airports and
- * conference networks answer every request with their own login page, at 200.
- * A reader who opens the wiki behind one of those would otherwise have their
- * stylesheets and scripts permanently replaced by a login page, and would see
- * an unstyled site long after leaving the building.
- *
- * Deliberately narrow. It rejects only on a positive contradiction: no content
- * type at all proves nothing, an unrecognised extension proves nothing, and an
- * opaque cross-origin response exposes no headers and is stored on purpose.
- */
+// Refuse to store a body that contradicts what was asked for (a stylesheet
+// served as text/html): captive wifi answers everything with a login page at
+// 200, and a cache-first entry would keep it indefinitely. Narrow on purpose.
 const CONTENT_EXPECTATIONS = [
   [/\.css$/i, /^text\/css/],
   [/\.m?js$/i, /^(?:application|text)\/(?:x-)?(?:java|ecma)script/],
@@ -834,22 +558,8 @@ function plausibleBody(request, response) {
   return true;
 }
 
-/*
- * Ask the browser to keep this worker alive for a background refresh, and treat
- * a refusal as the non-event it is.
- *
- * Both callers reach this from inside an async function, so the fetch handler
- * has already returned by the time it runs. The spec permits that while
- * respondWith is still pending, and all three engines accept it today. The
- * guard is here because the cost of being wrong is out of proportion to the
- * benefit: waitUntil is an optimisation, and if one ever threw, the exception
- * would reject the handler, safely() would catch it and go to the network, and
- * stale-while-revalidate would quietly become fetch-twice. Caught, the worst
- * case is the behaviour without waitUntil at all - the refresh may be cut short
- * if the browser stops the worker.
- *
- * Not swallowed silently, so that if it ever does fire it is findable.
- */
+// Keep the worker alive for a background refresh. Called after the handler
+// has returned, which every engine accepts; a refusal only shortens the refresh.
 function keepAlive(event, promise, url) {
   if (!event || typeof event.waitUntil !== 'function') {
     return;
@@ -861,25 +571,8 @@ function keepAlive(event, promise, url) {
   }
 }
 
-/*
- * Store a copy, and never let failing to store change what the reader gets.
- *
- * Every route here fetches, stores, and returns, with the store inside the same
- * try as the fetch. That reads harmlessly and is not: cache.put() throws
- * QuotaExceededError when storage is full, and the throw lands in the catch
- * written for a *network* failure. A request that succeeded on the network is
- * then answered from the offline path - 504, or the offline page - while the
- * reader is online and the response is sitting right there.
- *
- * Whose problem this is, concretely: WebKit reports a 1.0 GB quota against the
- * 697 MB of archives this feature invites people to save. A reader near that
- * line would find search breaking online, and the site telling them they were
- * offline when they were not, on exactly the browser least able to spare the
- * space. Chromium and Firefox report 6.5 GB and 10.7 GB on the same machine,
- * which is why it would never have shown up here.
- *
- * Caching is an optimisation. It fails open.
- */
+// Store a copy without letting a failed store (QuotaExceededError, near
+// WebKit's 1 GB) change what the reader gets. Caching fails open.
 async function keep(cacheName, key, response) {
   try {
     const cache = await caches.open(cacheName);
@@ -890,21 +583,8 @@ async function keep(cacheName, key, response) {
   }
 }
 
-/*
- * Whether the catch-all route may keep a copy.
- *
- * Two things must never be stored here. The archives under /offline/ are the
- * downloads themselves - 439 MB for common alone - and keeping a second copy
- * beside the cache it was unpacked into would double what a reader pays for
- * every wiki they save. And offline-manifest.json is how staleness is
- * detected, which is why it is fetched no-cache; the download code compares
- * the build it names against what is stored, so a copy of it stored here is a
- * copy that can disagree.
- *
- * The size cap is for everything unforeseen. searchindex.js, the file this
- * route exists to keep, is about 1.1 MB per wiki; anything an order of
- * magnitude past that is not a document and should not land here by accident.
- */
+// The catch-all route never stores /offline/ (the archives themselves and the
+// manifest that detects staleness) or anything far larger than a search index.
 const NEVER_STORE = /^\/offline\//;
 const STORE_LIMIT_BYTES = 12 * 1024 * 1024;
 
@@ -943,8 +623,7 @@ self.addEventListener('fetch', (event) => {
     const entry = EXPORTS.get(id);
     if (entry) {
       EXPORTS.delete(id);
-      // The stream is being read now, so the waitUntil above can settle; the
-      // response itself keeps the worker alive for as long as it streams.
+      // Collected: the response itself keeps the worker alive while it streams.
       if (entry.collected) { entry.collected(); }
       event.respondWith(new Response(entry.stream, {
         headers: {
@@ -959,18 +638,8 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   if (url.origin !== self.location.origin) {
-    // Third-party assets are the slowest thing on a page. Measured on a real
-    // rover page: the licence badge from creativecommons.org took 509ms and
-    // the analytics script 435ms, on every navigation, because a cross-origin
-    // request was handed straight back to the network.
-    //
-    // Static ones can be served from cache after the first visit. The response
-    // is opaque - status 0, body unreadable - which is fine for an <img> or a
-    // <script>, and is why they are only ever stored, never inspected.
-    //
-    // Deliberately NOT cached: firmware.ardupilot.org/useralerts, which is
-    // fetched with a cache-busting query precisely because an alert has to be
-    // current. Making that stale would be a safety problem, not a speed win.
+    // Static third-party decoration is cached (the licence badge was 509 ms per
+    // page). User alerts must stay current, so they are only refreshed behind.
     if (THIRD_PARTY_STATIC.test(url.href)) {
       event.respondWith(safely(cacheFirst(request, THIRD_PARTY_CACHE), request));
     } else if (THIRD_PARTY_FRESH.test(url.href)) {
@@ -979,54 +648,15 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // The offline manager is an application screen: its markup and its script
-  // have to match, and a cached copy of one paired with a fresh copy of the
-  // other renders as garbage. Those, and the worker itself, take the network
-  // first and fall back to cache only when there is none.
-  //
-  // Scoped to exactly those files, and no longer to every .js and .css on the
-  // site. Applying it site-wide meant about ten network requests per page for
-  // jQuery and the theme, which is most of what made navigation feel slow: one
-  // page measured 1,501ms with no third-party requests at all. Sphinx stamps
-  // its static assets with a content hash (?v=5d32c60e), so a cached copy is
-  // only ever the copy that hash asked for, and serving it from cache cannot
-  // pair the wrong script with the wrong markup.
-  // A differential update has to reach the server. Its whole purpose is to
-  // replace the copy held locally, so answering it from that copy makes the
-  // update a silent no-op: it fetches, stores what it already had, and reports
-  // success while changing nothing. Found exactly that way, by an update that
-  // said "Updated 9 files" and left all nine untouched.
+  // A differential update must reach the server and must not fall back to the
+  // copy it is replacing, so it gets neither the cache nor safely().
   if (url.searchParams.has(UPDATE_PARAM)) {
-    // Deliberately WITHOUT the cache fallback every other route gets. safely()
-    // answers a failed network request from storage, which is right everywhere
-    // else and exactly wrong here: it hands back the stale copy the update is
-    // replacing, the caller stores it over itself, and the update reports
-    // success having changed nothing. Seen intermittently, one file in nine.
-    // Letting it fail is what allows the caller to retry or fall back to the
-    // archive.
     event.respondWith(fetch(request));
     return;
   }
 
-  /*
-   * An asset the theme asks for and does not ship.
-   *
-   * sphinx_rtd_theme's ardupilot.css sets
-   *   background: url(../images/mainnav-sep-2.gif) repeat-y right
-   * and the installed package has no static/images directory at all, so the
-   * file does not exist and never has. It is a decorative separator in the top
-   * menu, and its absence is invisible.
-   *
-   * What is not invisible is the cost. It is requested on every page of every
-   * wiki, and on a page otherwise served entirely from storage it was the only
-   * thing left going to the network: one round trip, measured at 28 ms, to be
-   * told 404. Offline it fails instead, which puts an error in the console that
-   * reads like a fault in the offline feature.
-   *
-   * So answer it here, instantly, with a transparent pixel. Narrow on purpose:
-   * one exact filename, and it goes the moment the theme ships the file.
-   * Recorded in scripts/tests/KNOWN_UPSTREAM_ISSUES.md.
-   */
+  // The theme's stylesheet asks for a separator image the theme does not ship,
+  // on every page. Answer with a transparent pixel; see KNOWN_UPSTREAM_ISSUES.md.
   if (url.pathname.endsWith('/_static/images/mainnav-sep-2.gif')) {
     event.respondWith(new Response(
       Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'),
@@ -1036,9 +666,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Site-wide, on every page, and not paired with any markup. Served from
-  // storage at once and refreshed behind, which took it from 28 ms to the few
-  // milliseconds every other stored asset costs.
   if (url.pathname === '/js/pwa.js') {
     event.respondWith(safely(staleWhileRevalidate(request, STATIC_CACHE, false, event), request));
     return;
@@ -1049,10 +676,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Routed on what the URL is, not only on how it was asked for. A fetch()
-  // from a page presents mode "cors" and an empty destination, so prefetching
-  // matched none of this and was stored nowhere: the whole point of fetching
-  // early is that the click afterwards finds it already here.
+  // Routed on the URL too: a prefetch arrives as mode "cors" with no destination.
   if (request.mode === 'navigate' || request.destination === 'document' ||
       isPage(url)) {
     event.respondWith(safely(staleWhileRevalidate(request, PAGE_CACHE, true, event), request));
@@ -1064,50 +688,23 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Before isStatic, which is cache-first: this one has to try the network
-  // every time so that being online shows every version.
+  // Before isStatic: this one must try the network every time.
   if (PARAM_INDEX.test(url.pathname)) {
     event.respondWith(safely(paramIndex(request, url), request));
     return;
   }
 
   if (isStatic(url)) {
-    // Cache-first, not stale-while-revalidate. Sphinx stamps these with a
-    // content hash (?v=5d32c60e), so the URL changes whenever the bytes do and
-    // a stored copy can never be the wrong one. Revalidating anyway meant a
-    // background request for every stylesheet, script and font on every page,
-    // roughly twenty per navigation, that could not by construction find
-    // anything new.
+    // Fingerprinted (?v=5d32c60e), so a stored copy is never the wrong one.
     event.respondWith(safely(cacheFirst(request, STATIC_CACHE), request));
     return;
   }
 
-  /*
-   * Anything else a saved wiki holds.
-   *
-   * searchindex.js and objects.inv sit at a wiki's root, so they match none of
-   * the routes above: not a page, not an image, not under _static. They were
-   * therefore never served from storage, and with no network the browser's own
-   * load simply failed. Offline search was broken the whole time, silently, by
-   * a file that was sitting in the archive the entire time.
-   *
-   * Network first, so nothing about the online path changes: this only decides
-   * what happens when the fetch fails.
-   */
+  // Everything else, notably searchindex.js and objects.inv at a wiki's root.
+  // Network first; storage only decides what happens when the fetch fails.
   event.respondWith((async () => {
     try {
       const response = await fetch(request);
-      /*
-       * Store what came back, or this route can only ever answer from a
-       * downloaded archive.
-       *
-       * search.html calls Search.loadIndex("searchindex.js") and nothing else
-       * on the site requests that file, so it reached this route, went to the
-       * network, and was put nowhere. A reader who searched while online and
-       * then lost the connection lost search with it - the pages were all in
-       * the page cache, and the index that makes them findable was not.
-       * Caching as you read is supposed to mean everything you read.
-       */
       if (response && response.ok && storable(url, response) &&
           plausibleBody(request, response)) {
         await keep(STATIC_CACHE, request, response);
