@@ -329,8 +329,8 @@ def param_version_of(rel: Path):
         "file": rel.as_posix(),
         "channel": m.group("channel"),
         "version": m.group("version"),
-        "label": f"{m.group('version')}"
-                 + ("" if m.group("channel") == "stable" else f" {m.group('channel')}"),
+        "label": f"{m.group('version')}" +
+                 ("" if m.group("channel") == "stable" else f" {m.group('channel')}"),
     }
 
 
