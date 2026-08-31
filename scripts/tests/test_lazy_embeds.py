@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Tests for scripts/lazy_embeds.py: touch only YouTube iframes, be idempotent,
 never leave a page half-written.
 

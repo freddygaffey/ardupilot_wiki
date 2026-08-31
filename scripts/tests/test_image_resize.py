@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Tests for the optional archive image downsizing in build_offline_artifacts.
 
     python3 scripts/tests/test_image_resize.py

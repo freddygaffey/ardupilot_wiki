@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Recompress the PNGs in the built output losslessly, after Sphinx.
 
 Each PNG is re-encoded at maximum deflate effort, decoded again and kept only

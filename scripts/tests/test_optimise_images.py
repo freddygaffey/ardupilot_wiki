@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Tests for scripts/optimise_images.
 
     python3 scripts/tests/test_optimise_images.py
