@@ -1,7 +1,7 @@
 {
-  "name": "ardupilot-wiki-offline-tests",
+  "name": "ardupilot-wiki",
   "private": true,
-  "description": "Test-only manifest for the offline reading feature. The wiki itself is built by update.py and needs none of this.",
+  "description": "Test suites for the offline reading feature (service worker, offline page, exporter). The wiki is built by update.py; npm is needed only to run these tests.",
   "scripts": {
     "test": "node scripts/tests/test_offline_page.js && node scripts/tests/test_offline_worker.js rover && node scripts/tests/test_offline_export.js rover && python3 scripts/tests/test_offline_archives.py && python3 scripts/tests/test_lazy_embeds.py && python3 scripts/tests/test_image_resize.py && python3 scripts/tests/test_optimise_images.py",
     "test:worker": "node scripts/tests/test_offline_worker.js",
