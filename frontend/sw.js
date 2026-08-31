@@ -633,6 +633,15 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // A wiki root without its slash: send it to the slash form, as the server
+  // does, or every relative link on the page resolves one level up.
+  if (request.mode === 'navigate' && /^\/[a-z0-9]+$/.test(url.pathname)) {
+    event.respondWith(new Response(null, {
+      status: 301, headers: { Location: url.pathname + '/' + url.search }
+    }));
+    return;
+  }
+
   // Routed on the URL too: a prefetch arrives as mode "cors" with no destination.
   if (request.mode === 'navigate' || request.destination === 'document' ||
       isPage(url)) {
