@@ -15,6 +15,7 @@ const { execFileSync } = require('child_process');
 const REPO = path.resolve(__dirname, '..', '..');
 const WIKI = process.argv[2] || 'rover';
 const WORKER = path.join(REPO, 'frontend', 'sw.js');
+const KILL = path.join(REPO, 'frontend', 'sw-kill.js');
 
 let failures = 0;
 function check(name, ok, detail) {
@@ -214,7 +215,8 @@ function bodyAwareResponse(text) {
 
 function bootWorker({ networkFails = false, serve = null,
                      existingCaches = [], offlineCopy = null,
-                     holdNetwork = false, putFails = false } = {}) {
+                     holdNetwork = false, putFails = false,
+                     file = WORKER } = {}) {
   const seen = { fetches: [], cacheReads: [], puts: [], deleted: [], posted: [] };
   let cacheNames = existingCaches.slice();
   // A completed download: named cache plus completion marker.
@@ -264,7 +266,7 @@ function bootWorker({ networkFails = false, serve = null,
       skipWaiting() {}, clients: { claim() {},
         matchAll: async () => [{ postMessage: (m) => { seen.posted.push(m); } }] },
       location: { origin: 'https://example.test' },
-      registration: {},
+      registration: { unregister: async () => { seen.unregistered = true; return true; } },
     },
     caches: {
       match: async (r) => {
@@ -315,7 +317,7 @@ function bootWorker({ networkFails = false, serve = null,
     URL, setTimeout, clearTimeout, Map, Set, Promise, JSON, Math, Date, RegExp,
   };
   vm.createContext(ctx);
-  vm.runInContext(fs.readFileSync(WORKER, 'utf8'), ctx);
+  vm.runInContext(fs.readFileSync(file, 'utf8'), ctx);
 
   /** Dispatch one request and return what the worker answered with, if it did. */
   const ask = (path, req = {}) => {
@@ -688,6 +690,29 @@ async function checkVersionBump() {
         left.includes('something-else-entirely'), JSON.stringify(left));
 }
 
+// The kill switch: the opt-out, done to every reader.
+async function checkKillSwitch() {
+  console.log('\nservice worker: the kill switch\n');
+
+  const w = bootWorker({ file: KILL, existingCaches: [
+    'ardupilot-pages-v11', 'ardupilot-static-v11', 'ardupilot-images-v11',
+    'ardupilot-offline-dev', 'ardupilot-offline-common',
+    'something-else-entirely',
+  ] });
+  const left = await w.activate();
+
+  check('every ardupilot cache goes, saved wikis included',
+        !left.some((n) => n.startsWith('ardupilot-')), JSON.stringify(w.seen.deleted));
+  check('caches belonging to something else are left alone',
+        left.includes('something-else-entirely'), JSON.stringify(left));
+  check('every open page is told offline mode is off',
+        w.seen.posted.some((m) => m && m.type === 'OFFLINE_KILLED'),
+        JSON.stringify(w.seen.posted));
+  check('the worker unregisters itself', w.seen.unregistered === true);
+  check('requests pass straight through meanwhile',
+        w.handled && w.ask('/dev/index.html') === undefined);
+}
+
 function seenDeleted(w, name) { return w.seen.deleted.includes(name); }
 
 /** A Request or string, as the path the caches are keyed by. */
@@ -781,6 +806,7 @@ async function main() {
     await checkDirectoryRedirect();
     await checkNoFalseUpdateToast();
   await checkFullStorageFailsOpen();
+    await checkKillSwitch();
     console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                          : '\nall checks passed\n');
     process.exit(failures ? 1 : 0);
@@ -898,6 +924,7 @@ async function main() {
   await checkDirectoryRedirect();
   await checkNoFalseUpdateToast();
   await checkFullStorageFailsOpen();
+  await checkKillSwitch();
   await checkParamIndexFiltered();
 
   console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'

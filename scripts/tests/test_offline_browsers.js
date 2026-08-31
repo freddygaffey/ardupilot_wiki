@@ -10,7 +10,7 @@
 'use strict';
 
 const path = require('path');
-const { start, bumpWorker } = require('./serve_wiki_tree');
+const { start, bumpWorker, serveKill } = require('./serve_wiki_tree');
 
 const REPO = path.resolve(__dirname, '..', '..');
 
@@ -193,6 +193,114 @@ async function checkUpdateWindow(name, browser, base) {
           ', with ' + seeded + ' entries saved');
   } finally {
     await context.close().catch(() => {});
+  }
+}
+
+/* Two ways out, one end state: the switch, and the kill switch served as /sw.js. */
+
+const OFFLINE_PAGE = '/dev/docs/common-offline.html';
+const CLEAN = JSON.stringify({ registered: false, flag: null, saved: null, caches: [] });
+
+// An opted-in reader on the offline page, holding two saved wikis.
+async function optedInPage(browser, base) {
+  const context = await browser.newContext({ serviceWorkers: 'allow' });
+  const page = await context.newPage();
+  await page.goto(base + OFFLINE_PAGE, { waitUntil: 'load' });
+  await page.evaluate(async () => {
+    window.localStorage.setItem('ap-offline-enabled', '1');
+    window.localStorage.setItem('ap-saved-ids', JSON.stringify(['common', 'copter']));
+    // Markers as the download writes them, and enough bytes to register as held.
+    const build = (await (await fetch('/offline/offline-manifest.json')).json()).generated;
+    for (const w of ['common', 'copter']) {
+      const cache = await caches.open('ardupilot-offline-' + w);
+      await cache.put('/__ap_complete__',
+        new Response(JSON.stringify({ build, saved: Date.now(), id: w })));
+      await cache.put('/' + w + '/docs/seed.html',
+        new Response('<html>' + 'x'.repeat(3 << 20) + '</html>',
+          { headers: { 'Content-Type': 'text/html' } }));
+    }
+  });
+  await page.reload({ waitUntil: 'load' });
+  const control = await waitForControl(page);
+  return { context, page, controlled: control.controlled };
+}
+
+function optOutState(page) {
+  return page.evaluate(async () => {
+    const reg = await navigator.serviceWorker.getRegistration();
+    const names = (await caches.keys()).filter((n) => n.startsWith('ardupilot-'));
+    return { registered: !!reg,
+             flag: window.localStorage.getItem('ap-offline-enabled'),
+             saved: window.localStorage.getItem('ap-saved-ids'),
+             caches: names };
+  });
+}
+
+async function waitForClean(page, timeout = 10000) {
+  const started = Date.now();
+  let state = await optOutState(page);
+  while (JSON.stringify(state) !== CLEAN && Date.now() - started < timeout) {
+    await page.waitForTimeout(150);
+    state = await optOutState(page);
+  }
+  return state;
+}
+
+async function checkOptOut(name, browser, base) {
+  let ctx = await optedInPage(browser, base);
+  try {
+    if (!ctx.controlled) {
+      check(name, 'switch off leaves a never-opted-in browser', false, 'never took control');
+    } else {
+      const { page } = ctx;
+      await page.click('.apo-switch');
+      // The warning waits on storage.estimate(), which WebKit answers slowly.
+      await page.waitForSelector('#offline-off-warning:not([hidden])', { timeout: 5000 })
+        .catch(() => {});
+      const warned = await page.evaluate(() => ({
+        shown: !document.getElementById('offline-off-warning').hidden,
+        stillOn: document.getElementById('offline-mode').checked,
+        size: document.getElementById('offline-off-size').textContent,
+      }));
+      check(name, 'switch off warns first and stays on until confirmed',
+            warned.shown && warned.stillOn && /\d/.test(warned.size), JSON.stringify(warned));
+      await page.click('#offline-off-confirm');
+      const state = await waitForClean(page);
+      check(name, 'switch off leaves a never-opted-in browser',
+            JSON.stringify(state) === CLEAN, JSON.stringify(state));
+    }
+  } finally {
+    await ctx.context.close().catch(() => {});
+  }
+
+  ctx = await optedInPage(browser, base);
+  try {
+    if (!ctx.controlled) {
+      check(name, 'the kill switch leaves the same never-opted-in browser', false,
+            'never took control');
+    } else {
+      const { page } = ctx;
+      let loads = 0;
+      page.on('load', () => { loads += 1; });
+      serveKill(true);
+      await page.evaluate(async () => {
+        const reg = await navigator.serviceWorker.getRegistration();
+        await reg.update();
+      });
+      const state = await waitForClean(page);
+      check(name, 'the kill switch leaves the same never-opted-in browser',
+            JSON.stringify(state) === CLEAN, JSON.stringify(state));
+      const spontaneous = loads;
+      await page.reload({ waitUntil: 'load' });
+      await page.waitForTimeout(1500);
+      const after = await optOutState(page);
+      check(name, 'the next visit after a kill registers nothing, and nothing reloaded by itself',
+            JSON.stringify(after) === CLEAN && spontaneous === 0,
+            JSON.stringify(after) + ', ' + spontaneous + ' spontaneous load(s)');
+    }
+  } finally {
+    serveKill(false);
+    await ctx.context.close().catch(() => {});
   }
 }
 
@@ -499,6 +607,8 @@ async function runEngine(name, launcher, base) {
     // Last, and in a context of its own: see checkUpdateWindow.
     await phase(name, 'deploy check (seeds 8,811 entries)',
                 () => checkUpdateWindow(name, browser, base));
+    await phase(name, 'opt-out paths (switch, kill switch)',
+                () => checkOptOut(name, browser, base));
   } catch (err) {
     check(name, 'engine run completed', false, String(err.message));
   } finally {

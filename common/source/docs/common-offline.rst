@@ -72,9 +72,19 @@ developer documentation.
          <strong>Offline mode: <span id="offline-mode-state">off</span></strong>
          <div class="apo-hint">Runs a service worker in this browser so the pages
            you have read, and the wikis you save, open with no connection.
-           Saving a wiki turns it on. Off, the site behaves as it always has.</div>
+           Saving a wiki turns it on. Turning it off removes everything saved
+           in this browser.</div>
        </div>
      </div>
+     <p id="offline-off-warning" class="apo-note apo-note-warn apo-off-warning" hidden>
+       Turning offline mode off removes everything this site has saved in this
+       browser (<span id="offline-off-size"></span>). Files you saved to disk
+       with Save as .html are not affected.
+       <span class="apo-off-actions">
+         <button id="offline-off-confirm" class="apo-btn apo-btn-danger">Turn off and remove</button>
+         <button id="offline-off-keep" class="apo-btn apo-btn-ghost">Keep</button>
+       </span>
+     </p>
 
      <div class="apo-head">
        <p class="apo-title">Save Documentation for Offline Use</p>
@@ -164,8 +174,10 @@ changed pages while it is open.
 
 Offline mode is off until you turn it on with the switch at the top of this
 page; saving a wiki turns it on too. Off, the site behaves exactly as it
-always has and nothing runs in the background. Turning it off keeps your
-saved wikis stored, but they cannot be read offline until it is on again.
+always has and nothing runs in the background. Turning it off removes the
+saved wikis and every cached page from this browser and returns the site to
+how it was; you are asked first, and told how much will go. Files you saved
+with **Save as .html** are not affected.
 
 Install as an App
 =================
