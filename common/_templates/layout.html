@@ -1,7 +1,4 @@
-{# PWA hooks on every page, through the theme's extrahead block: the manifest
-   link and pwa.js. Absolute paths because the worker is served from the site
-   root. Void elements are self-closed: the epub builder parses this as XML.
-   Copied into each wiki by update.py; edit here, not the copies. #}
+{# PWA hooks. Self-closed void elements: the epub builder parses this as XML. #}
 {% extends "!layout.html" %}
 
 {% block extrahead %}
@@ -10,22 +7,19 @@
   <meta name="theme-color" content="#2980b9" />
   <link rel="apple-touch-icon" href="/apple-icon.png" />
   <script src="/js/pwa.js" defer="defer"></script>
-  {# The generated reference pages are huge (5.8 MB, 215,470 elements, 33 s of
-     layout); content-visibility lets the browser skip off-screen sections. #}
+  {# The 5.8 MB parameter pages: let the browser skip off-screen sections. #}
   {%- if pagename.startswith('docs/parameters') or
          pagename.startswith('docs/binary-features') or
          pagename.startswith('docs/logmessages') %}
   <style>
-    /* One group per parameter prefix, about 16 KB each. The estimate must be
-       near the truth or the scrollbar re-anchors continuously. */
+    /* One group per parameter prefix; a wrong estimate makes the scrollbar jump. */
     .rst-content section > section > section {
       content-visibility: auto;
       contain-intrinsic-size: auto 2400px;
     }
   </style>
   <script>
-    /* Scroll to the anchor as soon as it exists rather than after 5.8 MB has
-       parsed. Inline and blocking on purpose. */
+    /* Scroll to the anchor as soon as it exists, not after 5.8 MB has parsed. */
     (function () {
       if (!location.hash || location.hash.length < 2) { return; }
       var id;
@@ -58,8 +52,6 @@
     })();
   </script>
   {%- endif %}
-  {# The offline page's stylesheet belongs in <head>, or the panel paints
-     unstyled and then jumps. #}
   {%- if pagename == 'docs/common-offline' %}
   <link rel="stylesheet" href="{{ pathto('_static/common_offline.css', 1) }}" />
   {%- endif %}

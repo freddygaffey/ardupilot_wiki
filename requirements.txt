@@ -10,9 +10,7 @@ requests>=2.31.0
 # lxml for parameter parsing:
 lxml
 
-# Pillow re-deflates the built PNGs losslessly (scripts/optimise_images.py).
-# Without it that pass returns every image untouched, so the build still
-# succeeds and simply saves nothing.
+# Video stills and the lossless PNG pass; both are no-ops without it.
 Pillow
 
 # Install sphinx theme from ArduPilot repository

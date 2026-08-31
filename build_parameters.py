@@ -56,15 +56,8 @@ COMMITFILE = "git-version.txt"
 BASEURL = "https://firmware.ardupilot.org/"
 ALLVEHICLES = ["AntennaTracker", "Copter", "Plane", "Rover", "Sub", "Blimp"]
 VEHICLES = ALLVEHICLES
-# Filter out versions below this semantic version threshold.
-#
-# Settable, because the count is a judgement rather than a constant: every
-# version kept is another copy of a parameter list that already runs to 5.8MB
-# and 215,470 DOM elements per vehicle, and readers overwhelmingly want the
-# last few releases. Default unchanged, so an ordinary build behaves exactly as
-# before.
-#
-#   ARDUPILOT_PARAM_MIN_VERSION=4.5.0 python3 build_parameters.py
+# Filter out versions below this semantic version threshold (each kept version
+# is another 5.8 MB parameter page per vehicle).
 PARAM_PARSE_MINIMUM_VERSION = tuple(
     int(part) for part in
     os.environ.get("ARDUPILOT_PARAM_MIN_VERSION", "3.9.0").split(".")
@@ -344,13 +337,7 @@ def setup():
         run_git("git reset --hard HEAD", cwd=repo_path)
         run_git("git clean -f -d", cwd=repo_path)
         run_git("git checkout -f master", cwd=repo_path)
-        # Every ref, not just master. The versions to build come from
-        # firmware.ardupilot.org and are checked out by commit hash, and those
-        # commits live on release branches and tags rather than on master. With
-        # only master fetched the checkout fails with "unable to read tree" and
-        # the run produces empty vehicle directories and no parameter files at
-        # all, which reads like a permissions problem rather than a missing
-        # object.
+        # Release commits live on branches and tags, not master.
         run_git("git fetch origin master", cwd=repo_path)
         run_git("git fetch origin --tags --force "
                 "'+refs/heads/*:refs/remotes/origin/*'", cwd=repo_path,
