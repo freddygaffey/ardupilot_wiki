@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Check what a reader receives, by reading the built archives themselves.
 
     python3 scripts/tests/test_offline_archives.py [wiki ...]
@@ -70,9 +69,9 @@ def check_assets_follow_pages():
 def check_archives_carry_current_static():
     """Archives hold the current panel scripts: archive vs built tree, built
     tree vs source."""
+    import json
     sys.path.insert(0, str(REPO / "scripts"))
     from build_offline_artifacts import content_hash
-    import json
 
     source_dir = REPO / "common" / "source" / "_static"
     shared = (sorted(source_dir.glob("common_offline*.js")) +
@@ -129,7 +128,7 @@ def check_no_dangling_assets():
     """No built page references a local script or stylesheet that is not there."""
     ref = re.compile(rb'(?:src|href)="([^"]+\.(?:js|css))"')
     # No browser loads the theme's IE conditional comments.
-    ie_only = re.compile(rb"<!--\[if[^>]*>.*?<!\[endif\]-->", re.S)
+    ie_only = re.compile(rb"<!--\[if[^>]*>.*?<!\[endif\]-->", re.DOTALL)
     missing, checked = {}, 0
     for wiki in WIKIS:
         root = REPO / wiki / "build" / "html"
@@ -159,8 +158,8 @@ def check_no_dangling_assets():
           not ours,
           "; ".join(f"{u} (e.g. {p})" for u, p in list(ours.items())[:3]) or
           f"{checked} references resolve" +
-             (f", plus {len(known)} known upstream "
-              f"(KNOWN_UPSTREAM_ISSUES.md)" if known else ""))
+          (f", plus {len(known)} known upstream "
+           f"(KNOWN_UPSTREAM_ISSUES.md)" if known else ""))
 
 
 def main():
