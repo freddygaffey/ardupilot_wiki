@@ -1,27 +1,10 @@
 /*
  * [copywiki destination="copter,plane,rover,sub,blimp,antennatracker,dev,planner,planner2,ardupilot,mavproxy"]
  *
- * Unpacking a downloaded wiki: a streaming tar reader and the archive fetch.
- *
- * This is a small, self-contained library. It knows how to turn one .tar.gz
- * download into cache entries and nothing else: no UI, no state, no knowledge
- * of which wikis exist. The panel (common_offline_page.js) calls it and passes
- * in everything it needs. Split out of the panel so each file stays short
- * enough to skim.
- *
- * Exposes window.ApUnpack:
- *   mimeFor(name)                     -> a Content-Type for a filename
- *   untarToCache(stream, cache, prefix, onEntry)  -> unpack a tar stream
- *                                     prefix may be a string, or a
- *                                     function of the entry name for an
- *                                     archive whose entries do not all
- *                                     belong in the same place
- *   fetchArchive(entry, cache, onBytes, opts)     -> download + unpack one wiki
- *
- * The archive is served as a gzip content coding (nginx gzip_static pairs
- * <name>.tar with <name>.tar.gz), so the browser decompresses before we see a
- * byte and no DecompressionStream is needed - which is what keeps this working
- * on Safari and Firefox versions that lack that API.
+ * Unpack a downloaded wiki into Cache Storage: a streaming tar reader and the
+ * archive fetch. No UI or state; the panel drives it. Exposes window.ApUnpack.
+ * The archive arrives as a gzip content coding, so the browser decompresses it
+ * and no DecompressionStream is needed.
  */
 (function (global) {
   'use strict';
@@ -48,13 +31,7 @@
     return out;
   }
 
-  /*
-   * Minimal tar reader over a stream.
-   *
-   * tar is 512-byte headers followed by file data padded to 512, which is
-   * simple enough to walk directly - and doing so avoids shipping an archive
-   * library to every reader just to unpack one download.
-   */
+  // Minimal tar reader: 512-byte headers, data padded to 512.
   function untarToCache(stream, cache, prefix, onEntry) {
     var reader = stream.getReader();
     var buf = new Uint8Array(0);
@@ -80,17 +57,11 @@
       return out;
     }
 
-    // A name carried over from a PAX or GNU long-name header, applied to the
-    // very next file entry. Python's tarfile defaults to PAX, which stores any
-    // name longer than the 100-byte header field in a preceding ././@PaxHeader
-    // record (type 'x') and truncates the field itself. Reading only the field
-    // stored those pages under a chopped key, unreachable offline and never
-    // repaired because the file table still held the full name. Measured: one
-    // page per wiki (the longest title) was lost this way.
+    // A PAX or GNU long-name header names the NEXT entry; Python's tarfile
+    // emits one for any name over 100 bytes.
     var override = null;
 
-    // Pull "path=<value>" out of a PAX extended header body. Records are
-    // "<length> key=value\n"; only path matters here.
+    // "path=<value>" from a PAX extended header body.
     function paxPath(body) {
       var text = '';
       for (var i = 0; i < body.length; i++) { text += String.fromCharCode(body[i]); }
@@ -105,8 +76,7 @@
         var name = textField(header, 0, 100);
         if (!name) { return step(); }   // zero block: padding between members
 
-        // ustar stores an extra 155-byte prefix; a full path is prefix + '/' +
-        // name when the prefix is set. PAX/GNU overrides win over both.
+        // ustar prefix field; a PAX/GNU override wins over both.
         var pfx = textField(header, 345, 155);
         if (pfx) { name = pfx + '/' + name; }
 
@@ -118,8 +88,7 @@
           if (!haveBody) { return; }
           var body = take(padded).slice(0, size);
 
-          // A PAX extended header ('x'/'g') or GNU long name ('L') names the
-          // NEXT entry. Capture it and read on rather than storing anything.
+          // Names the NEXT entry: capture it and read on.
           if (type === 'x' || type === 'g') {
             var p = paxPath(body);
             if (p) { override = p; }
@@ -149,26 +118,9 @@
   }
 
 
-  /*
-   * Cache Storage holds what you put in it, uncompressed.
-   *
-   * The archives arrive as .tar.gz, so the DOWNLOAD was never the problem;
-   * unpacking is what costs. Measured across all twelve archives: 454.8 MB of
-   * html, js, css and search indexes against 711.5 MB of images that are
-   * already jpeg and png and cannot be squeezed further. Stored as they came
-   * out of the tar that is 1,166 MB, which is past the 1.0 GB WebKit reports
-   * as its quota. Gzipping just the text takes it to 769 MB.
-   *
-   * So text goes in compressed and the service worker inflates it on the way
-   * out. Images go in untouched, because spending CPU on both ends to save
-   * nothing would be worse than doing nothing.
-   *
-   * AP_ENCODED marks the ones that need inflating. A header rather than a
-   * naming convention, because the key has to stay the real page URL for the
-   * worker to find it, and rather than "compress anything that looks like
-   * text" because the reader of a cache entry should not have to guess what
-   * the writer decided.
-   */
+  // Text is stored gzipped (455 MB -> 57 MB, which keeps a full set inside
+  // WebKit's 1 GB quota) and inflated by the worker on the way out; images go
+  // in untouched. AP_ENCODED marks the entries that need inflating.
   var AP_ENCODED = 'x-ap-encoding';
   var COMPRESSIBLE = /\.(html?|js|mjs|css|json|svg|xml|txt|inv|map)$/i;
 
@@ -182,15 +134,8 @@
     return new Response(stream).arrayBuffer();
   }
 
-  /**
-   * Write one entry, compressed when that is worth doing.
-   *
-   * Falls back to storing the bytes as they are whenever anything is not
-   * right: no CompressionStream (nothing shipping supports service workers
-   * and not this, but the check is free), or the compressed form came out no
-   * smaller. A reader must never end up with an entry that cannot be read
-   * back, so every failure path here stores the plain bytes.
-   */
+  /** Write one entry, gzipped when that helps; every failure path stores the
+   *  plain bytes. */
   function storeEntry(cache, path, entryName, body) {
     var type = mimeFor(entryName);
     var plain = function () {
@@ -209,15 +154,8 @@
   }
 
 
-  /*
-   * Read an entry back, inflating it if it was stored compressed.
-   *
-   * Everything that reads these caches has to come through here or through the
-   * service worker's copy of it. The exporter reads them directly to build the
-   * single-file HTML, and a gzip body handed to .text() produces mojibake
-   * rather than an error, so a missed call site would corrupt an export
-   * silently rather than fail.
-   */
+  // Read an entry back, inflating if it was stored compressed. Every reader of
+  // these caches comes through here: gzip handed to .text() is silent mojibake.
   function inflate(response) {
     if (!response || !response.headers ||
         response.headers.get(AP_ENCODED) !== 'gzip') {
@@ -232,31 +170,9 @@
     );
   }
 
-  /*
-   * Where an archive entry is stored, given the archive it came from.
-   *
-   * The one rule, used by the unpacker below and by the differential update in
-   * common_offline_update.js. Both carried their own copy of it and both would
-   * have been wrong about the same thing, so it lives here and is exported.
-   *
-   * A wiki archive's entries already carry the wiki's name, so they go at the
-   * root and are stored at exactly the URL the site serves them at.
-   *
-   * The common archive holds two different kinds of thing:
-   *
-   *   _images/...   shared images, stored once under /_common/, a path the site
-   *                 never serves. The service worker redirects every wiki's
-   *                 image requests there.
-   *   <wiki>/...    a whole wiki too small to be worth an archive and a row of
-   *                 its own (FOLD_INTO_COMMON in build_offline_artifacts.py).
-   *                 It is already qualified by its own name and belongs at the
-   *                 root like any other wiki: a reader's URL must not change
-   *                 because of which archive the bytes travelled in.
-   *
-   * Treating the whole common archive as shared images put all 28 About pages
-   * under /_common/ardupilot/..., which nothing ever asks for. Every step
-   * reported success and the wiki read as unsaved.
-   */
+  // The one rule for where an entry is stored, shared with the differential
+  // update: common's shared images under /_common/, everything else (a folded
+  // wiki's pages included) at the URL the site serves.
   function cachePathFor(id, name) {
     if (id === 'common' && name.indexOf('_images/') === 0) {
       return '/_common/' + name;
@@ -269,24 +185,10 @@
     return cache.match(path).then(inflate);
   }
 
-  /**
-   * Fetch one archive and unpack it into `cache`, reporting bytes received.
-   *
-   * opts.base   where the archives are served from (ARTIFACT_BASE)
-   * opts.build  the manifest's build id, tagged onto the URL
-   * opts.signal an AbortSignal so a download can be cancelled
-   *
-   * Common images are written under /_common/ so they are stored once; the
-   * service worker redirects per-wiki image requests there.
-   */
+  /** Fetch one archive and unpack it into `cache`. opts: base, build, signal. */
   function fetchArchive(entry, cache, onBytes, opts) {
     opts = opts || {};
-    // Tagged with the build the manifest describes, so a reader always gets
-    // the archive that goes with it. Object storage keeps the same filename
-    // every build, and replacing an object does not invalidate the CDN cache
-    // in front of it, so without this a new build can be published and readers
-    // keep receiving the previous one until the edge decides otherwise. The
-    // tag also keeps each build cacheable rather than defeating caching.
+    // Tagged with the build id so a CDN never serves the previous build.
     var url = opts.base + '/' + (entry.archive || entry.id + '-offline.tar.gz') +
               (opts.build ? '?v=' + encodeURIComponent(opts.build) : '');
     return fetch(url, { mode: 'cors', signal: opts.signal }).then(function (response) {
@@ -304,21 +206,10 @@
         }
       });
 
-      // No DecompressionStream. The archive is served as a content coding
-      // (nginx gzip_static pairs <name>.tar with <name>.tar.gz), so the
-      // browser has already decompressed by the time we see the body. That
-      // drops a dependency which excluded Safari below 16.4 and Firefox below
-      // 113, and removes a pipe stage.
-      //
-      // The bytes counted here are therefore DECOMPRESSED, which is why the
-      // manifest carries raw_bytes alongside the compressed size: measuring
-      // progress against Content-Length would read over 200% on the
-      // text-heavy wikis.
+      // The browser has already decompressed the content coding, so the bytes
+      // counted are raw; the manifest carries raw_bytes for progress.
       var stream = response.body.pipeThrough(counter);
 
-      // One rule for where an entry belongs, shared with the differential
-      // update; untarToCache wants the prefix, so hand back everything
-      // cachePathFor put in front of the name.
       return untarToCache(stream, cache, function (entryName) {
         var full = cachePathFor(entry.id, entryName);
         return full.slice(0, full.length - entryName.length);
