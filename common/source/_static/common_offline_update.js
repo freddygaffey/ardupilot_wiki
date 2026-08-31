@@ -1,11 +1,11 @@
 /*
  * [copywiki destination="copter,plane,rover,sub,blimp,antennatracker,dev,planner,planner2,ardupilot,mavproxy"]
  *
- * Differential updates: compare a saved wiki's stored file table with the
- * published one and fetch only what changed. Every fetched body is hashed
- * against the table before it is stored. Exposes window.ApUpdate; the panel
- * passes cfg = { base, build, wikis, here, offlinePrefix, completeMarker,
- * mimeFor, getSignal }.
+ * Updates a saved wiki in place. The build publishes a table of path -> hash
+ * per archive; the stored table is compared with the published one and only
+ * the changed files are fetched, each verified against its hash before it is
+ * written. Too large a difference returns null and the panel re-downloads the
+ * archive. Exposes window.ApUpdate.
  */
 (function (global) {
   'use strict';
@@ -15,8 +15,7 @@
   // Paced so an update reads as a browser, not a crawler.
   var MIN_REQUEST_GAP_MS = 250;
 
-  // Above these, re-download the archive: a stylesheet edit changes every page
-  // (5,169 requests from one browser, once).
+  // Above these, re-download the archive instead.
   var MAX_DIFF_FILES = 300;
   var MAX_DIFF_FRACTION = 0.2;
   // Below this a proportion says nothing; only the absolute cap applies.
@@ -66,9 +65,7 @@
   // The unpacker's rule, imported rather than restated.
   var cacheKeyFor = ApUnpack.cachePathFor;
 
-  // Sources for a changed file, best first: the loose copy under <base>/files/
-  // (the exact bytes the table hashes), then the live path, and for a shared
-  // image each wiki that uses it.
+  // Sources for a changed file, best first.
   function sourcesFor(id, name, cfg) {
     var out = [cfg.base + '/files/' + name];
     if (id !== 'common' || name.indexOf('_images/') !== 0) {
@@ -131,9 +128,7 @@
     return attempt(0);
   }
 
-  /** Apply the difference between the stored and published tables. Null when
-   *  there is no stored table or too much changed; the caller re-fetches the
-   *  archive. */
+  /** Apply the table difference; null means the caller re-fetches the archive. */
   function updateStored(entry, cfg, onProgress) {
     var cacheName = cfg.offlinePrefix + entry.id;
     return caches.open(cacheName).then(function (cache) {
@@ -165,8 +160,7 @@
           return null;
         }
 
-        // Paced from the START of each request, so only a fast connection is
-        // held back.
+        // Paced from the start of each request.
         var done = 0;
         function next(i) {
           if (i >= changed.length) { return Promise.resolve(); }

@@ -1,11 +1,13 @@
 /*
  * [copywiki destination="copter,plane,rover,sub,blimp,antennatracker,dev,planner,planner2,ardupilot,mavproxy"]
  *
- * What the exported .html file is: its shell, sidebar and reading order
- * (common_offline_export.js streams the bytes). buildNav derives the sidebar
- * and the next/previous order from one merged toctree so they cannot drift.
- * SHELL_JS is assembled from single-quoted literals: every backslash in it
- * must be doubled.
+ * Generates the single-file offline export. The file is one HTML document:
+ * a shell (the theme's layout, a sidebar and a search box), every page stored
+ * as an inert <script type="text/plain"> block, every image stored once, and
+ * an embedded script (SHELL_JS) that routes between pages by URL hash, builds
+ * the sidebar tree from the pages' own toctrees and searches Sphinx's index.
+ * common_offline_export.js reads the cache and streams what this produces.
+ * SHELL_JS is assembled from single-quoted literals: double every backslash.
  */
 (function (global) {
   'use strict';
@@ -87,8 +89,7 @@
     'return undefined;}',
 
     /* ----------------------------------------- the sidebar, as the theme has it */
-    // The theme drives the tree off one class: a branch is open when its <li>
-    // is "current".
+    // A branch is open when its <li> is "current".
     'function ancestors(el){var out=[];',
     'while(el&&el!==nav){if(el.tagName==="LI")out.push(el);el=el.parentNode;}',
     'return out;}',
@@ -124,7 +125,6 @@
     'li.setAttribute("aria-expanded",open?"true":"false");}',
 
     /* ------------------------------------------------ next / previous buttons */
-    // The theme's own markup and classes.
     'function clearFooter(){if(foot)foot.innerHTML="";}',
     // Skip pages not in the file, and stop at the wiki boundary.
     'function nearby(i,dir,w){',
@@ -152,8 +152,7 @@
     '+\'</div>\':"";}',
 
     /* ---------------------------------------- the parameter version switcher */
-    // The wiki's switcher fetches JSON and navigates by URL; offline there is
-    // neither, so fill the theme's own <select> from what this file holds.
+    // Fill the theme's own <select> from what this file holds.
     'function fillVersions(path){',
     'var sel=doc.querySelector("#selectPicker");if(!sel)return;',
     'var box=sel.parentNode;',
@@ -203,8 +202,7 @@
     'clearFooter();',
     'var sc=document.querySelector(".wy-nav-content-wrap");if(sc)sc.scrollTop=0;}',
 
-    // Pages sit inside inert <script> blocks, so their own </script> tags were
-    // escaped on the way in; undo it, or the rest of the page is swallowed.
+    // Undo the </script> escaping the page blocks needed.
     'function unblock(s){return s.split("<\\\\/script>").join("<\\/script>");}',
 
     'function show(raw){',
@@ -245,8 +243,7 @@
     // An anchor parses the host; a regex here would need doubled backslashes.
     'function hostOf(u){var a=document.createElement("a");a.href=u;',
     'return a.hostname||u;}',
-    // A link to another host leaves the file and needs a connection: say so
-    // and let the reader choose, instead of navigating.
+    // A link to another host leaves the file: say so and let the reader choose.
     'var toastTimer=null;',
     'function toast(href){',
     'var t=document.getElementById("ap-toast");',
@@ -303,8 +300,7 @@
     'var frag="";var h=href;var hi=h.indexOf("#");',
     'if(hi>=0){frag=h.slice(hi);h=h.slice(0,hi);}',
     'var target=resolve(current(),h);',
-    // A relative link must never leave the file: outside it there is nothing
-    // to resolve against.
+    // A relative link must never leave the file.
     'e.preventDefault();',
     'var found=lookup(target);',
     'if(found!==undefined){go(target);',
@@ -315,8 +311,7 @@
     'if(iid!==undefined&&iid!==null){',
     'var blk=document.getElementById("i"+iid);',
     'if(blk){lightbox(blk.textContent);return;}}',
-    // A scaled image links an original no page displays; the thumbnail is the
-    // same picture.
+    // A scaled image links an original no page displays; show the thumbnail.
     'var inner=a.querySelector?a.querySelector("[data-ap-img]"):null;',
     'if(inner){',
     'var ib=document.getElementById("i"+inner.getAttribute("data-ap-img"));',
@@ -385,8 +380,7 @@
     'Object.keys(cover).forEach(function(n){',
     'if(cover[n]>best)best=cover[n];',
     'all.push({p:"/"+w+"/"+d.docnames[n],c:cover[n],s:score[n]});});});',
-    // The best-covered tier rather than every word: a pasted sentence with one
-    // clipped word otherwise finds nothing.
+    // The best-covered tier, so one clipped word does not empty the results.
     'all.forEach(function(r){',
     'if(r.c<best)return;',
     'out[r.p]=Math.max(out[r.p]||0,r.s);});',
@@ -484,8 +478,7 @@
 
   /* ------------------------------------------------------------ path rules */
 
-  /** Resolve a relative href against a page path, as a browser would. Shared
-   *  with the exporter. */
+  /** Resolve a relative href against a page path, as a browser would. */
   function resolvePath(basePath, href) {
     var parts = basePath.split('/');
     parts.pop();                       // drop the page's own filename
@@ -552,8 +545,7 @@
     return { href: path.replace(/\.html?$/, ''), external: false };
   }
 
-  /** Parse a sidebar fragment into nested nodes. A tokeniser: the markup is
-   *  machine-written and regular. */
+  /** Parse a sidebar fragment into nested nodes. */
   function parseToc(fragment, pagePath) {
     var root = { children: [] };
     var parents = [root];    // where the next <li> attaches
@@ -616,9 +608,7 @@
 
   /* ------------------------------------------------- merging the toctrees */
 
-  /** Fold one page's sidebar into the tree. With collapse_navigation no single
-   *  page carries the whole tree, but the union over every page does, in a
-   *  consistent order. */
+  /** Fold one page's sidebar into the tree; no single page carries all of it. */
   function mergeToc(into, incoming) {
     incoming.forEach(function (n) {
       var found = null;
@@ -671,8 +661,7 @@
     }).map(function (p) { return p.path.replace(/\.html?$/, ''); });
   }
 
-  /** The theme's own markup, expand button included, so it survives the
-   *  sidebar being swapped for search results. */
+  /** The theme's own markup, expand button included. */
   function renderNodes(nodes, level) {
     var out = '<ul>';
     nodes.forEach(function (n) {
@@ -687,8 +676,7 @@
     return out + '</ul>';
   }
 
-  /** The sidebar and the reading order from one tree, so "next" never skips a
-   *  page the sidebar shows. */
+  /** The sidebar and the reading order, from one tree so they agree. */
   function buildNav(state, wikis, pages) {
     var html = '', order = [], seen = {};
 
@@ -705,8 +693,7 @@
       html += renderNodes(tree, 1);
       (function walk(nodes) {
         nodes.forEach(function (n) {
-          // Cross-wiki entries belong to their own wiki's order; a page listed
-          // twice is read at its first position.
+          // Cross-wiki entries belong to their own wiki's order.
           if (!n.external && n.href.charAt(0) === '/' &&
               n.href.split('/')[1] === wiki && !seen[n.href]) {
             seen[n.href] = 1;
@@ -722,8 +709,7 @@
 
   /* -------------------------------------- versioned parameter pages */
 
-  // How much parameter-list history to carry: SERIES major.minor lines,
-  // PER_SERIES releases within each.
+  // Parameter-list history to carry: SERIES major.minor lines, PER_SERIES each.
   var PARAM_SERIES = 3;
   var PARAM_PER_SERIES = 1;
 
@@ -808,8 +794,7 @@
 
   /* ------------------------------------------------------ the file, in parts */
 
-  // Pages are inert <script type="text/plain"> blocks: parsed as text, never
-  // laid out, materialised only when navigated to.
+  // Pages are inert <script type="text/plain"> blocks, materialised on navigation.
   function head(wikis, themeCss) {
     return '<!DOCTYPE html><html lang="en" class="writer-html5"><head>' +
       '<meta charset="utf-8">' +

@@ -1,10 +1,10 @@
 /*
  * [copywiki destination="copter,plane,rover,sub,blimp,antennatracker,dev,planner,planner2,ardupilot,mavproxy"]
  *
- * Unpack a downloaded wiki into Cache Storage: a streaming tar reader and the
- * archive fetch. No UI or state; the panel drives it. Exposes window.ApUnpack.
- * The archive arrives as a gzip content coding, so the browser decompresses it
- * and no DecompressionStream is needed.
+ * Downloads one wiki archive and unpacks it into Cache Storage. The archive is
+ * a tar served as a gzip content coding, so the browser decompresses it; the
+ * tar is walked as a stream and each entry is stored under the URL the site
+ * serves it at, text entries gzipped. Exposes window.ApUnpack.
  */
 (function (global) {
   'use strict';
@@ -57,8 +57,7 @@
       return out;
     }
 
-    // A PAX or GNU long-name header names the NEXT entry; Python's tarfile
-    // emits one for any name over 100 bytes.
+    // A PAX or GNU long-name header names the NEXT entry.
     var override = null;
 
     // "path=<value>" from a PAX extended header body.
@@ -118,9 +117,7 @@
   }
 
 
-  // Text is stored gzipped (455 MB -> 57 MB, which keeps a full set inside
-  // WebKit's 1 GB quota) and inflated by the worker on the way out; images go
-  // in untouched. AP_ENCODED marks the entries that need inflating.
+  // Text is stored gzipped (455 MB -> 57 MB); AP_ENCODED marks those entries.
   var AP_ENCODED = 'x-ap-encoding';
   var COMPRESSIBLE = /\.(html?|js|mjs|css|json|svg|xml|txt|inv|map)$/i;
 
@@ -134,8 +131,7 @@
     return new Response(stream).arrayBuffer();
   }
 
-  /** Write one entry, gzipped when that helps; every failure path stores the
-   *  plain bytes. */
+  /** Write one entry, gzipped when that helps; any failure stores plain bytes. */
   function storeEntry(cache, path, entryName, body) {
     var type = mimeFor(entryName);
     var plain = function () {
@@ -154,8 +150,7 @@
   }
 
 
-  // Read an entry back, inflating if it was stored compressed. Every reader of
-  // these caches comes through here: gzip handed to .text() is silent mojibake.
+  // Every reader of these caches comes through here: raw gzip is silent mojibake.
   function inflate(response) {
     if (!response || !response.headers ||
         response.headers.get(AP_ENCODED) !== 'gzip') {
@@ -170,9 +165,7 @@
     );
   }
 
-  // The one rule for where an entry is stored, shared with the differential
-  // update: common's shared images under /_common/, everything else (a folded
-  // wiki's pages included) at the URL the site serves.
+  // Where an entry is stored; shared with the differential update.
   function cachePathFor(id, name) {
     if (id === 'common' && name.indexOf('_images/') === 0) {
       return '/_common/' + name;
@@ -206,8 +199,7 @@
         }
       });
 
-      // The browser has already decompressed the content coding, so the bytes
-      // counted are raw; the manifest carries raw_bytes for progress.
+      // Counted after the browser decompressed, so compare with raw_bytes.
       var stream = response.body.pipeThrough(counter);
 
       return untarToCache(stream, cache, function (entryName) {

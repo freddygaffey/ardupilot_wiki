@@ -1,9 +1,4 @@
-"""Add loading="lazy" to the YouTube iframes in the built HTML.
-
-An embed is a cross-origin connection and about a megabyte of YouTube's code,
-started during initial load (511 ms against 4 ms for the page). The extension
-that emits them is third-party, so this is a pass over the output. Idempotent.
-"""
+"""Add loading="lazy" to YouTube iframes in the built HTML, after Sphinx."""
 
 import os
 import re
@@ -41,8 +36,7 @@ def run(wikis, root: Path = Path(".")) -> int:
 
 
 def _write_atomic(page: Path, text: str) -> None:
-    """Write a sibling temp file and rename it over the page, so an interrupted
-    build never leaves a truncated page to be packed and served."""
+    """Write a temp file and rename it over the page, so it is never half-written."""
     tmp = page.with_name(page.name + ".lazytmp")
     tmp.write_text(text, encoding="utf-8")
     os.replace(tmp, page)

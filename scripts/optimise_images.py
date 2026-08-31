@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Losslessly re-deflate the PNGs in the built wiki output.
+"""Recompress the PNGs in the built output losslessly, after Sphinx.
 
-Run from update.py after Sphinx. Pixels are unchanged; only the deflate stream
-is redone. Results are cached by content hash so repeat builds are cheap.
+Each PNG is re-encoded at maximum deflate effort, decoded again and kept only
+if pixel-identical and smaller. Results are cached by content hash in
+.image-cache/ so later builds only touch new images.
 """
 
 import hashlib
@@ -35,8 +36,7 @@ def shrink_png(data):
         if len(shrunk) >= len(data):
             return data
 
-        # This rewrites images every reader sees, so prove the pixels survived
-        # rather than trusting the encoder.
+        # Prove the pixels survived rather than trusting the encoder.
         with Image.open(io.BytesIO(shrunk)) as check:
             check.load()
             if (check.mode, check.size) != (mode, size) or check.tobytes() != pixels:
@@ -44,8 +44,7 @@ def shrink_png(data):
 
         return shrunk
     except Exception:
-        # Truncated files, unsupported formats, decompression-bomb limits. None
-        # of them should stop a build.
+        # Nothing about one image should stop a build.
         return data
 
 

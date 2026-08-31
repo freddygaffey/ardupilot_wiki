@@ -1,8 +1,12 @@
-"""Pack each built wiki into a tar.gz for offline reading, plus a manifest.
+"""Build the offline archives after Sphinx has run.
 
-Run from update.py after Sphinx, writing into <destdir>/offline/. Images shared
-by two or more wikis go into common-offline.tar.gz once (about 455 MB); each
-wiki's own pages and images go into <wiki>-offline.tar.gz.
+For each wiki, packs build/html into <destdir>/offline/<wiki>-offline.tar.gz
+and writes <wiki>-files.json (path -> content hash) for differential updates.
+Images used by two or more wikis go once into common-offline.tar.gz. Pages are
+rewritten on the way in so they work offline (video embeds become stills, the
+donate image becomes a link); rewritten files are also published loose under
+offline/files/. offline-manifest.json lists every archive with its size, page
+count and build id, and is written last.
 """
 
 import gzip
@@ -23,12 +27,10 @@ from pathlib import Path
 # The payload is mostly PNG and JPEG; higher levels buy a percent or two.
 GZIP_LEVEL = 1
 
-# Where the archives are served from, written into the manifest. Unset means
-# this site's own /offline/.
+# Written into the manifest; unset means this site's own /offline/.
 ARTIFACT_BASE_ENV = "ARDUPILOT_OFFLINE_BASE"
 
-# Long-side pixel cap for images in the archives, 0 = off. Off by default:
-# saved images are served cache-first, so this changes what a reader sees online.
+# Long-side pixel cap for archive images, 0 = off.
 IMAGE_MAX_DIM = int(os.environ.get("ARDUPILOT_OFFLINE_MAX_IMAGE_DIM", "0"))
 
 # Capitalising the directory name gave "Dev" and "Ardupilot".
@@ -48,8 +50,7 @@ DISPLAY_NAMES = {
 
 
 def _normalise(info: tarfile.TarInfo) -> tarfile.TarInfo:
-    """Zero what varies between builds, so an unchanged wiki gives an identical
-    archive and rsync skips it."""
+    """Zero what varies between builds, so unchanged archives are byte-identical."""
     info.mtime = 0
     info.uid = info.gid = 0
     info.uname = info.gname = ""
@@ -60,7 +61,6 @@ def _normalise(info: tarfile.TarInfo) -> tarfile.TarInfo:
 @contextmanager
 def reproducible_tar(path: Path):
     """tar.gz writer whose output depends only on the files' contents."""
-    # gzip stores a timestamp in its header too, hence mtime=0 here as well.
     with open(path, "wb") as raw:
         with gzip.GzipFile(fileobj=raw, mode="wb",
                            compresslevel=GZIP_LEVEL, mtime=0) as gz:
@@ -114,8 +114,7 @@ def video_ids(wikis):
 
 
 def fetch_thumbnails(ids, cache: Path):
-    """A still per video, cached across builds. An embed cannot play offline or
-    from file://; a missing still is not fatal, the card is still a link."""
+    """A still per video, cached across builds; a missing one is not fatal."""
     cache.mkdir(parents=True, exist_ok=True)
     have, failed = {}, []
     for vid in sorted(ids):
@@ -141,14 +140,11 @@ def fetch_thumbnails(ids, cache: Path):
 
 
 def video_card(vid: str, wiki: str, has_thumb: bool) -> str:
-    """A still linking to the video. Inline styles: this markup is read under
-    both the wiki's stylesheet and the single-file export's."""
+    """A still linking to the video, styled inline for the export's sake."""
     link = f"https://www.youtube.com/watch?v={vid}"
     label = ("&#9654; Watch on YouTube "
              '<span style="opacity:.8">(needs a connection)</span>')
 
-    # The placeholder sits under the still and shows if there is none or it
-    # fails to load.
     still = ''
     if has_thumb:
         still = (f'<img src="/{wiki}/_images/yt-{vid}.jpg" alt="" '
@@ -176,8 +172,7 @@ def rewrite_embeds(html: str, wiki: str, thumbs) -> str:
         lambda m: video_card(m.group(1), wiki, m.group(1) in thumbs), html)
 
 
-# The theme's donate control is a paypalobjects.com <input type="image">,
-# which renders as a grey box offline.
+# The theme's donate control is a remote <input type="image">, a grey box offline.
 DONATE_RE = re.compile(
     r'<input[^>]*paypalobjects\.com[^>]*>',
     re.IGNORECASE)
@@ -202,11 +197,7 @@ SITE_LINK_RE = re.compile(
 
 
 def rewrite_site_links(html: str, wikis) -> str:
-    """Make absolute ardupilot.org links root-relative, for the wikis we ship.
-
-    Only matters off ardupilot.org, where those links leave the origin and the
-    service worker never sees them. Harmless on the real site.
-    """
+    """Make absolute ardupilot.org links root-relative; only matters on a mirror."""
     def swap(m):
         attr, path = m.group(1), m.group(2)
         first = path.lstrip('/').split('/')[0]
@@ -218,8 +209,7 @@ def rewrite_site_links(html: str, wikis) -> str:
 
 
 def downsize_image(data: bytes, name: str) -> "bytes | None":
-    """Resize an image over IMAGE_MAX_DIM, or None. PNG stays PNG so screenshot
-    text keeps its edges; any failure is None, never a build error."""
+    """Resize an image over IMAGE_MAX_DIM, or None; never raises."""
     if not IMAGE_MAX_DIM:
         return None
     ext = name.rsplit(".", 1)[-1].lower() if "." in name else ""
@@ -246,8 +236,7 @@ def downsize_image(data: bytes, name: str) -> "bytes | None":
 
 
 def add_image(tar, path, arcname: str, files, loose_dir):
-    """Add an image, downsized if enabled. A downsized copy differs from the
-    live path, so like rewritten HTML it is also published loose."""
+    """Add an image, downsized if enabled; a downsized copy is published loose."""
     data = path.read_bytes()
     smaller = downsize_image(data, arcname)
     if smaller is not None:
@@ -259,33 +248,26 @@ def add_image(tar, path, arcname: str, files, loose_dir):
 
 
 def add_bytes(tar, arcname: str, data: bytes, files=None, loose_dir=None):
-    """Add generated bytes; with loose_dir, publish the same bytes there too.
-
-    Rewritten pages and stills exist nowhere on the live site, so a differential
-    update has to fetch them from /offline/files/ for the hash to verify.
-    """
+    """Add generated bytes; with loose_dir, publish them there for updates too."""
     info = tarfile.TarInfo(arcname)
     info.size = len(data)
     tar.addfile(_normalise(info), io.BytesIO(data))
     if files is not None:
         files[arcname] = content_hash(data)
     if loose_dir is not None:
-        # Stored as <arcname>.gz: gzip_static serves it with Content-Encoding,
-        # so the client receives the bytes the table hashes. 450 MB -> 90 MB.
+        # Stored as <arcname>.gz for gzip_static.
         dest = Path(loose_dir) / (arcname + ".gz")
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(gzip.compress(data, compresslevel=9, mtime=0))
 
 
 def content_hash(data: bytes) -> str:
-    """Freshness check, not a security boundary. sha256 because the browser
-    verifies fetched files with crypto.subtle, which has no blake2b."""
+    """Freshness check, not a security boundary; must match hashBytes in the client."""
     return hashlib.sha256(data).hexdigest()[:16]
 
 
 def raw_size(path: Path) -> int:
-    """Uncompressed size from the gzip trailer (exact below 4 GiB). The browser
-    decompresses the stream, so Content-Length alone gives progress over 100%."""
+    """Uncompressed size from the gzip trailer, exact below 4 GiB."""
     with open(path, "rb") as f:
         f.seek(-4, os.SEEK_END)
         return int.from_bytes(f.read(4), "little")
@@ -299,15 +281,13 @@ def build_id() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
 
 
-# Wikis packed into the common archive instead of one of their own. About is
-# 3 MB and 28 pages, not worth a row in the panel. Its URLs do not change.
+# Wikis packed into the common archive instead of one of their own.
 FOLD_INTO_COMMON = {"ardupilot"}
 
 
 def write_common_archive(wikis, common_names, out_dir: Path, thumbs,
                          files=None, folded=(), per_wiki=None) -> int:
-    """The shared images plus any folded wiki: about 480 MB, nearly all of it
-    images."""
+    """The shared images plus any folded wiki."""
     archive = out_dir / "common-offline.tar.gz"
     seen = set()
     with reproducible_tar(archive) as tar:
@@ -331,9 +311,7 @@ def write_common_archive(wikis, common_names, out_dir: Path, thumbs,
     return archive.stat().st_size
 
 
-# Historical parameter pages (parameters-<Vehicle>-stable-V4.5.0.html) are
-# 4 to 6 MB each and near-identical: 243 MB across five vehicles. They stay out
-# of the archives and are offered individually. parameters.html stays in.
+# Historical parameter pages are 4 to 6 MB each; they are offered individually.
 PARAM_VERSION_RE = re.compile(
     r"^parameters-(?P<vehicle>[A-Za-z]+)-(?P<channel>stable|beta|latest)-"
     r"V?(?P<version>[0-9][0-9A-Za-z.\-]*)\.html$"
@@ -385,8 +363,7 @@ def param_versions_for(html_root: Path) -> list:
 
 def add_wiki_tree(tar, wiki: str, exclusive: set, out_dir: Path, thumbs,
                   wikis, files=None) -> None:
-    """One wiki's pages, assets and unique images, into an open tar. Shared
-    with the folded path so both write identical entries."""
+    """One wiki's pages, assets and unique images, into an open tar."""
     html_root = Path(wiki) / "build" / "html"
     for path in sorted(html_root.rglob("*")):
         if not path.is_file():
@@ -430,8 +407,7 @@ def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path, thumbs,
 
 
 def write_file_table(out_dir: Path, name: str, files: dict) -> Path:
-    """Archive path -> content hash, so an update fetches only what changed
-    (69 KB gzipped for Copter) instead of the archive (724 MB for everything)."""
+    """Archive path -> content hash, so an update fetches only what changed."""
     path = out_dir / f"{name}-files.json"
     path.write_text(json.dumps(files, separators=(",", ":"), sort_keys=True),
                     encoding="utf-8")
@@ -439,11 +415,7 @@ def write_file_table(out_dir: Path, name: str, files: dict) -> Path:
 
 
 def refresh_static(wikis) -> int:
-    """Copy source/_static over build/html/_static where they differ.
-
-    Under --fast Sphinx skips a wiki with no .rst changes and leaves its
-    _static stale, so the archives would pack the previous panel scripts.
-    """
+    """Copy source/_static over build/html/_static; --fast leaves it stale."""
     copied = 0
     for wiki in wikis:
         src = Path(wiki) / "source" / "_static"

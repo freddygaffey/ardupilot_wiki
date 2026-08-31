@@ -1,6 +1,8 @@
 /*
- * PWA glue: opt-in service worker registration, the install button, and the
- * page-updated toast. Loaded on every page; the button may be absent.
+ * Loaded on every page. Registers the service worker once the reader has opted
+ * in (menu switch or saving a wiki), drives the install-as-app button, shows
+ * the page-updated toast, and carries a few page-speed helpers: link
+ * prefetching, anchor landing on huge pages, and live video embeds.
  */
 (function () {
   'use strict';
@@ -117,8 +119,6 @@
     });
   });
 
-  // Offer a reload when the background refresh found a newer page, rather than
-  // swapping it under the reader.
   function showUpdateToast() {
     if (document.getElementById('ap-update-toast')) {
       return;
@@ -163,16 +163,14 @@
            window.navigator.standalone === true;
   }
 
-  // Installable last visit: show the button at once; the click handler
-  // corrects a wrong guess.
+  // Installable last visit: show the button at once.
   document.addEventListener('DOMContentLoaded', function () {
     if (!isStandalone() && wasInstallable()) {
       showInstallButton();
     }
   });
 
-  // Opt-in: nothing registers until the reader enables offline mode from the
-  // menu or saves a wiki. Everyone else browses with no worker at all.
+  // Nothing registers until the reader enables offline mode or saves a wiki.
   var OFFLINE_KEY = 'ap-offline-enabled';
   var ENABLE_CONTROL_ID = 'ap-offline-enable';
 
@@ -219,8 +217,7 @@
       registerServiceWorker();
       return;
     }
-    // An existing registration without the flag (cleared storage, or a build
-    // from before opt-in) is honoured and the flag restored.
+    // An existing registration without the flag is honoured.
     navigator.serviceWorker.getRegistration().then(function (registration) {
       if (registration) { enableOffline(); }
     }).catch(function () { /* nothing registered, nothing to honour */ });
@@ -234,8 +231,7 @@
 
   function registerServiceWorker() {
     navigator.serviceWorker.register('/sw.js', { scope: '/' }).then(function (registration) {
-      // Explicit check so a fixed worker, or the kill switch, arrives on the
-      // next visit. It cannot succeed offline, and that is not an error.
+      // Cannot succeed offline, and that is not an error.
       registration.update().catch(function (err) {
         console.debug('[pwa] worker update check skipped', err && err.name);
       });
@@ -250,11 +246,7 @@
   }
 })();
 
-/*
- * TODO(mirror): delete when served from ardupilot.org. Absolute ardupilot.org
- * links leave a mirror's origin, and a worker never sees a cross-origin
- * navigation, so they are rewritten at click time.
- */
+// TODO(mirror): delete when served from ardupilot.org; keeps absolute links on the mirror.
 (function () {
   'use strict';
 
@@ -281,10 +273,7 @@
 })();
 
 
-/*
- * Prefetch the page the pointer is heading for: position, velocity, and
- * deceleration toward a link, so an idle pointer costs nothing.
- */
+// Prefetch the page the pointer is heading for.
 (function () {
   'use strict';
 
@@ -431,8 +420,7 @@
       if (score > bestScore) { bestScore = score; best = item.href; }
     });
 
-    // Proximity alone never reaches 3: the path must land on a link, or the
-    // pointer be slowing into one.
+    // Proximity alone never reaches 3.
     if (best && bestScore >= 3) { prefetch(best); }
   }
 
@@ -449,8 +437,7 @@
     if (href) { prefetch(href); }
   }, { passive: true });
 
-  // Resting on a link is intent the trajectory cannot see (the sidebar); 65 ms
-  // keeps a pointer crossing the menu from prefetching everything.
+  // 65 ms keeps a pointer crossing the menu from prefetching everything.
   var hoverTimer = null;
   document.addEventListener('mouseover', function (e) {
     var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
@@ -490,10 +477,7 @@
 })();
 
 
-/*
- * Land on the anchor: a section under content-visibility has no layout yet, so
- * reveal the target's ancestors before scrolling.
- */
+// A section under content-visibility has no layout yet; reveal it before scrolling.
 (function () {
   'use strict';
 
@@ -526,10 +510,7 @@
   window.addEventListener('hashchange', reveal);
 })();
 
-/*
- * Replace a saved wiki's video stills with the real player when online, once
- * the card nears the viewport or the pointer enters it. Nothing autoplays.
- */
+// Replace a saved wiki's video stills with the real player when online.
 (function () {
   'use strict';
 
@@ -579,8 +560,7 @@
     if (a.parentNode) { a.parentNode.replaceChild(box, a); }
   }
 
-  // After load and idle: an embed is about 1 MB of YouTube code and was the
-  // slowest thing on the page.
+  // An embed is about 1 MB of YouTube code.
   function whenIdle(fn) {
     if (document.readyState !== 'complete') {
       window.addEventListener('load', function () { whenIdle(fn); }, { once: true });
