@@ -58,14 +58,27 @@ def _normalise(info: tarfile.TarInfo) -> tarfile.TarInfo:
     return info
 
 
+def publish(path: Path, data: bytes) -> None:
+    """Write beside the target and rename, so a reader never gets a partial file."""
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_bytes(data)
+    os.replace(tmp, path)
+
+
 @contextmanager
 def reproducible_tar(path: Path):
-    """tar.gz writer whose output depends only on the files' contents."""
-    with open(path, "wb") as raw:
-        with gzip.GzipFile(fileobj=raw, mode="wb",
-                           compresslevel=GZIP_LEVEL, mtime=0) as gz:
-            with tarfile.open(fileobj=gz, mode="w") as tar:
-                yield tar
+    """tar.gz writer whose output depends only on the files' contents, published by rename."""
+    tmp = path.with_name(path.name + ".tmp")
+    try:
+        with open(tmp, "wb") as raw:
+            with gzip.GzipFile(fileobj=raw, mode="wb",
+                               compresslevel=GZIP_LEVEL, mtime=0) as gz:
+                with tarfile.open(fileobj=gz, mode="w") as tar:
+                    yield tar
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+    os.replace(tmp, path)
 
 
 def log(msg):
@@ -258,7 +271,7 @@ def add_bytes(tar, arcname: str, data: bytes, files=None, loose_dir=None):
         # Stored as <arcname>.gz for gzip_static.
         dest = Path(loose_dir) / (arcname + ".gz")
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_bytes(gzip.compress(data, compresslevel=9, mtime=0))
+        publish(dest, gzip.compress(data, compresslevel=9, mtime=0))
 
 
 def content_hash(data: bytes) -> str:
@@ -409,8 +422,7 @@ def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path, thumbs,
 def write_file_table(out_dir: Path, name: str, files: dict) -> Path:
     """Archive path -> content hash, so an update fetches only what changed."""
     path = out_dir / f"{name}-files.json"
-    path.write_text(json.dumps(files, separators=(",", ":"), sort_keys=True),
-                    encoding="utf-8")
+    publish(path, json.dumps(files, separators=(",", ":"), sort_keys=True).encode("utf-8"))
     return path
 
 
@@ -533,7 +545,7 @@ def build(wikis, destdir: Path) -> Path:
     }
 
     manifest_path = out_dir / "offline-manifest.json"
-    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    publish(manifest_path, json.dumps(manifest, indent=2).encode("utf-8"))
     log(f"wrote {manifest_path}")
     return out_dir
 
