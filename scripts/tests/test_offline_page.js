@@ -768,9 +768,8 @@ async function main() {
           JSON.stringify($(doc, 'check-result').textContent));
   }
 
-  console.log('\na quiet update never starts an archive download by itself');
+  console.log('\na quiet update that needs a full download does it, and says when it is done');
   {
-    // The archive fallback is the most expensive action here; never unattended.
     const cachesObj = makeCaches();
     // Saved before tables existed: updateStored() resolves null.
     const c = await cachesObj.open('ardupilot-offline-dev');
@@ -795,19 +794,15 @@ async function main() {
       new sandbox.window.Event('change', { bubbles: true }));
     for (let i = 0; i < 20; i++) { await settle(); }
 
-    check('no archive is fetched by a quiet run',
-          !fetchCalls.some(u => u.indexOf('.tar') !== -1),
-          JSON.stringify(fetchCalls.filter(u => u.indexOf('.tar') !== -1)));
-    check('the reader is told a full download is waiting',
-          ($(doc, 'check-result').textContent || '').indexOf('full download') !== -1,
-          JSON.stringify($(doc, 'check-result').textContent));
-
-    // The same state via the button IS consent, and proceeds.
-    $(doc, 'check-btn').click();
-    for (let i = 0; i < 20; i++) { await settle(); }
-    check('the button press does start it',
+    check('the quiet run fetches the archive',
           fetchCalls.some(u => u.indexOf('.tar') !== -1),
-          JSON.stringify(fetchCalls.filter(u => u.indexOf('.tar') !== -1).slice(0,2)));
+          JSON.stringify(fetchCalls.filter(u => u.indexOf('.tar') !== -1).slice(0, 2)));
+    check('and says when it is done',
+          ($(doc, 'check-result').textContent || '').indexOf('Downloaded again') !== -1,
+          JSON.stringify($(doc, 'check-result').textContent));
+    check('with a toast the reader can see',
+          /Update complete/.test((doc.querySelector('.ap-toast-title') || {}).textContent || ''),
+          JSON.stringify((doc.querySelector('.ap-toast-title') || {}).textContent));
   }
 
   console.log('\nthe update paces itself and backs off when told to');
@@ -1402,9 +1397,8 @@ async function main() {
           JSON.stringify(label) + ' for ' + expected + ' MB saved');
   }
 
-  console.log('\nB8: the toast says why, and offers a button');
+  console.log('\nB8: the toast names what is being downloaded again');
   {
-    // "Cannot be updated in place" is not "a lot has changed".
     const cachesObj = makeCaches();
     const c = await cachesObj.open('ardupilot-offline-dev');
     await c.put('/dev/index.html', new FakeResponse('<html>'));
@@ -1426,20 +1420,13 @@ async function main() {
     for (let i = 0; i < 20; i++) { await settle(); }
 
     const msg = (doc.querySelector('.ap-toast-msg') || {}).textContent || '';
-    const btn = doc.querySelector('.ap-toast-action');
     check('the toast names the wiki rather than sending the reader to look',
           /Developer/.test(msg), JSON.stringify(msg));
-    check('and it offers a button', !!btn && !btn.hidden &&
-          /redownload/i.test(btn.textContent),
-          btn ? JSON.stringify(btn.textContent) : 'NO BUTTON');
-    check('the button has not downloaded anything by merely existing',
-          !fetchCalls.some((u) => u.indexOf('.tar') !== -1));
-
-    btn.click();
-    for (let i = 0; i < 20; i++) { await settle(); }
-    check('pressing it starts the download, which a quiet toast may not do alone',
+    check('the download ran without a button press',
           fetchCalls.some((u) => u.indexOf('.tar') !== -1),
           JSON.stringify(fetchCalls.filter((u) => u.indexOf('.tar') !== -1).slice(0, 2)));
+    check('no button is offered, because nothing is waiting on the reader',
+          !doc.querySelector('.ap-toast-action') || doc.querySelector('.ap-toast-action').hidden);
   }
 
   console.log('\nB14: a shortlist of ticks, and a dropdown for the rest');
