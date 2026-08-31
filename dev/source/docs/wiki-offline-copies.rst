@@ -243,12 +243,13 @@ reader from their second page onwards, whether or not they ever save a wiki.
 Prefetching
 -----------
 
-``pwa.js`` fetches a page shortly before it is likely to be wanted, judging
-from the pointer's position, its velocity projected forward, and whether it is
-slowing down as it approaches a link. A pointer crossing a link at speed
-triggers nothing.
+Once offline mode is on, ``pwa.js`` fetches a page shortly before it is likely
+to be wanted, judging from the pointer's position, its velocity projected
+forward, and whether it is slowing down as it approaches a link. A pointer
+crossing a link at speed triggers nothing, and a reader who has not opted in
+gets no speculative traffic at all.
 
-Speculative traffic is deliberately bounded. At most eight pages are fetched
+Speculative traffic is deliberately bounded. At most five pages are fetched
 per page view, at least 400 ms apart, with only one request in flight at a
 time and each URL fetched at most once. Anything larger than 2 MB is abandoned,
 and requests still in flight are cancelled when you navigate. Pages that are
