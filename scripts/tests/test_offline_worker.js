@@ -569,6 +569,10 @@ async function checkDirectoryRedirect() {
   const page = await w.ask('/rover/docs/thing.html', { mode: 'navigate', destination: 'document' });
   check('a page URL is not redirected', !!page && page.status !== 301,
         JSON.stringify({ status: page && page.status }));
+  // The site's short links (/discord, /donate) are single segments too.
+  const short = await w.ask('/discord', { mode: 'navigate', destination: 'document' });
+  check('a short link that is not a wiki is left to the server',
+        !short || short.status !== 301, JSON.stringify({ status: short && short.status }));
 }
 
 async function checkMarkerRespected() {
