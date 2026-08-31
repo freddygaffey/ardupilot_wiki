@@ -1,55 +1,28 @@
 /*
  * [copywiki destination="copter,plane,rover,sub,blimp,antennatracker,dev,planner,planner2,ardupilot,mavproxy"]
  *
- * Differential updates: refresh a saved wiki by fetching only what changed.
- *
- * The build writes one table per archive mapping every path to a hash of its
- * contents. Saving stores the table alongside the files; an update compares the
- * stored table with the freshly published one and fetches only what moved. This
- * library holds that machinery. The panel (common_offline_page.js) drives it and
- * hands in what it needs - where the artifacts live, the current build id, the
- * list of wikis - rather than this file reaching into the panel.
- *
- * Nothing is hashed to find the difference: the stored table is already an exact
- * record of what was written, so the comparison is table against table. But
- * every fetched body IS hashed against the table before it is stored, so a wrong
- * body (a captive-portal page, an error dressed as 200, a mid-deploy mismatch)
- * is refused rather than written over a healthy file.
- *
- * Exposes window.ApUpdate:
- *   updateStored(entry, cfg, onProgress) -> {changed, removed} | null
- *   tableUrl(entry, base, build)         -> URL of a wiki's published table
- *   storeTable(cache, table)             -> persist a table beside its files
- *   hashBytes(arrayBuffer)               -> the build's file hash (sha256/8 hex)
- *
- * cfg carries the live panel config at call time:
- *   { base, build, wikis, here, offlinePrefix, completeMarker, mimeFor, getSignal }
+ * Differential updates: compare a saved wiki's stored file table with the
+ * published one and fetch only what changed. Every fetched body is hashed
+ * against the table before it is stored. Exposes window.ApUpdate; the panel
+ * passes cfg = { base, build, wikis, here, offlinePrefix, completeMarker,
+ * mimeFor, getSignal }.
  */
 (function (global) {
   'use strict';
 
   var TABLE_KEY = '/__ap_files__';
 
-  // When more than this has changed, re-download the archive instead of
-  // fetching files one by one. A layout or stylesheet edit rewrites every page,
-  // and then the "difference" is the whole wiki, one HTTP request at a time -
-  // measured at 5,169 requests from one browser after such a change. Above the
-  // cap, updateStored returns null and the caller re-fetches one archive.
-  // How closely together an update may ask the server for files. 250 ms is
-  // four a second: brisk enough that a large update finishes while the reader
-  // is still on the page, slow enough that it reads as a browser rather than a
-  // crawler. See the pacing note in updateStored.
+  // Paced so an update reads as a browser, not a crawler.
   var MIN_REQUEST_GAP_MS = 250;
 
+  // Above these, re-download the archive: a stylesheet edit changes every page
+  // (5,169 requests from one browser, once).
   var MAX_DIFF_FILES = 300;
   var MAX_DIFF_FRACTION = 0.2;
-  // Below this, a proportion says nothing: two files out of four is half the
-  // wiki and also two requests. Only the absolute cap applies to small ones.
+  // Below this a proportion says nothing; only the absolute cap applies.
   var DIFF_FRACTION_MIN_FILES = 50;
 
-  // Requests per second one reader makes while updating. Sequential fetches
-  // with no pause ran at ~75 a second from one browser; a hundred readers doing
-  // that after a build is a flood the differential path exists partly to avoid.
+  // Unpaced sequential fetches ran at about 75 a second from one browser.
   var UPDATE_RATE_PER_SEC = 15;
   var lastFetchAt = 0;
 
@@ -61,11 +34,7 @@
                 : Promise.resolve();
   }
 
-  /*
-   * Hash of a body, exactly as the build computes it: sha256, first eight
-   * bytes, hex (scripts/build_offline_artifacts.py, file_hash). The two must
-   * agree byte for byte or every update rejects everything.
-   */
+  // Exactly as the build computes it: sha256, first eight bytes, hex.
   function hashBytes(buf) {
     return crypto.subtle.digest('SHA-256', buf).then(function (d) {
       var v = new Uint8Array(d);
@@ -94,30 +63,14 @@
     });
   }
 
-  // A table key becomes a cache key by exactly the rule the unpacker used to
-  // store it, so the rule is imported rather than restated. Restating it meant
-  // a wiki folded into common (About) got its updates written to
-  // /_common/ardupilot/..., beside the copy actually being read.
+  // The unpacker's rule, imported rather than restated.
   var cacheKeyFor = ApUnpack.cachePathFor;
 
-  /*
-   * Where to fetch a changed file from, best source first.
-   *
-   * The build publishes rewritten HTML and generated stills at <base>/files/,
-   * the exact bytes the table hashes, so an update must prefer them: fetching
-   * the ORIGINAL page from the live path mismatches the table and drops the
-   * whole wiki into a full re-download. Files identical to the live path are not
-   * published there, so their loose URL 404s and the fall-throughs serve them.
-   *
-   * After the loose copy: a wiki entry is served at its own path; a shared image
-   * is stored once under /_common/, a path the site never serves, and published
-   * under each wiki that uses it, so those wikis are tried in turn.
-   */
+  // Sources for a changed file, best first: the loose copy under <base>/files/
+  // (the exact bytes the table hashes), then the live path, and for a shared
+  // image each wiki that uses it.
   function sourcesFor(id, name, cfg) {
     var out = [cfg.base + '/files/' + name];
-    // A shared image is the only entry with no URL of its own. Everything else
-    // - a wiki archive's pages, and the pages of a wiki folded into common -
-    // is served at its own path, so ask for it there.
     if (id !== 'common' || name.indexOf('_images/') !== 0) {
       out.push('/' + name);
       return out;
@@ -131,9 +84,7 @@
   }
 
   function fetchInto(cache, id, name, expected, cfg) {
-    // Tagged so the service worker sends it to the network. Without this the
-    // worker answers from the cache being refreshed, and the update stores what
-    // it already had while reporting that it updated.
+    // Tagged so the worker goes to the network, not the cache being refreshed.
     var tag = 'ap-update=' + encodeURIComponent(cfg.build || '1');
     var urls = sourcesFor(id, name, cfg).map(function (u) {
       return u + (u.indexOf('?') === -1 ? '?' : '&') + tag;
@@ -149,9 +100,7 @@
           signal: cfg.getSignal ? cfg.getSignal() : undefined
         });
       }).then(function (r) {
-        // The server asking us to slow down is not a missing file, and trying
-        // the next wiki for it would be one more request at exactly the wrong
-        // moment. Stop, and let the caller fall back to the archive.
+        // Rate limited: stop rather than try the next source.
         if (r.status === 429 || r.status === 503) {
           var e = new Error('server is rate limiting updates');
           e.name = 'RateLimited';
@@ -159,11 +108,7 @@
         }
         if (!r.ok) { return attempt(i + 1); }
         return r.arrayBuffer().then(function (body) {
-          // Verify against the table's hash before storing. A 200 with the
-          // wrong body was otherwise written verbatim and the table rewritten
-          // to claim health, so no later update could ever detect it. A
-          // mismatch is treated like a failed fetch: try the next source, and
-          // if none is right the update rejects and the archive takes over.
+          // A body that does not hash to the table's value is refused.
           if (!expected) {
             return cache.put(new Request(key), new Response(body, {
               headers: { 'Content-Type': cfg.mimeFor(name) }
@@ -186,13 +131,9 @@
     return attempt(0);
   }
 
-  /*
-   * Compare stored against published and apply the difference.
-   *
-   * Resolves with a summary, or null when this wiki was saved before tables
-   * existed, or when too much has changed to be worth fetching file by file, in
-   * which case the caller falls back to re-fetching the whole archive.
-   */
+  /** Apply the difference between the stored and published tables. Null when
+   *  there is no stored table or too much changed; the caller re-fetches the
+   *  archive. */
   function updateStored(entry, cfg, onProgress) {
     var cacheName = cfg.offlinePrefix + entry.id;
     return caches.open(cacheName).then(function (cache) {
@@ -224,22 +165,8 @@
           return null;
         }
 
-        /*
-         * Paced, not just sequential.
-         *
-         * This already fetched one file at a time, but with no gap: on a fast
-         * connection a 300-file update is 300 requests as quickly as the
-         * server will answer them, from every reader whose browser decides to
-         * check at the same time. ardupilot.org is a documentation site behind
-         * one nginx, and an update that is indistinguishable from a scraper is
-         * a good way to have the feature blocked rather than adopted.
-         *
-         * The gap is measured from the START of each request, so a slow
-         * network costs nothing extra - only a fast one is held back to this
-         * rate. Nothing here is urgent: an update is a background refresh of
-         * pages the reader already has, and taking a minute over it is
-         * invisible.
-         */
+        // Paced from the START of each request, so only a fast connection is
+        // held back.
         var done = 0;
         function next(i) {
           if (i >= changed.length) { return Promise.resolve(); }
@@ -261,22 +188,14 @@
             return cache.delete(new Request(cacheKeyFor(entry.id, k)));
           }));
         }).then(function () {
-          // Written only once every file is in place. An interrupted update
-          // therefore leaves the previous table and the previous build id, so
-          // the wiki still reports itself as the older build rather than as a
-          // mixture of two.
+          // Written last, so an interrupted update leaves the previous build intact.
           return storeTable(cache, published);
         }).then(function () {
           return cache.put(cfg.completeMarker, new Response(JSON.stringify({
             build: cfg.build, saved: Date.now(), id: entry.id
           }), { headers: { 'Content-Type': 'application/json' } }));
         }).then(function () {
-          // `done`, not `changed.length`: the count the reader is shown has to
-          // be writes that completed, not writes that were planned. Today the
-          // two are always equal because a failed fetch rejects the whole
-          // update, so nothing reaches here after a failure - but that is a
-          // property of the current control flow, not a guarantee, and
-          // "Updated 9 files" must never be able to mean "meant to update 9".
+          // `done`, not `changed.length`: completed writes, not planned ones.
           return { id: entry.id, changed: done, removed: removed.length };
         });
       });
