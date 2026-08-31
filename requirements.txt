@@ -10,6 +10,10 @@ requests>=2.31.0
 # lxml for parameter parsing:
 lxml
 
+# Pillow makes the video-card stills for the offline archives
+# (scripts/build_offline_artifacts.py).
+Pillow
+
 # Install sphinx theme from ArduPilot repository
 git+https://github.com/ArduPilot/sphinx_rtd_theme.git
 

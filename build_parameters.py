@@ -67,8 +67,12 @@ COMMITFILE = "git-version.txt"
 BASEURL = "https://firmware.ardupilot.org/"
 ALLVEHICLES = ["AntennaTracker", "Copter", "Plane", "Rover", "Sub", "Blimp"]
 VEHICLES = ALLVEHICLES
-# Filter out versions below this semantic version threshold.
-PARAM_PARSE_MINIMUM_VERSION = (3, 9, 0)
+# Filter out versions below this semantic version threshold (each kept version
+# is another 5.8 MB parameter page per vehicle).
+PARAM_PARSE_MINIMUM_VERSION = tuple(
+    int(part) for part in
+    os.environ.get("ARDUPILOT_PARAM_MIN_VERSION", "3.9.0").split(".")
+)
 
 BASEPATH = ""
 error_count = 0
@@ -434,7 +438,11 @@ def setup():
         run_git("git reset --hard HEAD", cwd=repo_path)
         run_git("git clean -f -d", cwd=repo_path)
         run_git("git checkout -f master", cwd=repo_path)
+        # Release commits live on branches and tags, not master.
         run_git("git fetch origin master", cwd=repo_path)
+        run_git("git fetch origin --tags --force "
+                "'+refs/heads/*:refs/remotes/origin/*'", cwd=repo_path,
+                check=False)
         run_git("git reset --hard origin/master", cwd=repo_path)
         run_git("git pull", cwd=repo_path)
 
