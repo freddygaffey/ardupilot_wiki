@@ -142,6 +142,10 @@ async function looksLikeWikiPage(page) {
 // A deploy with a page open: is the page controlled again after the swap?
 async function checkUpdateWindow(name, browser, base) {
   const context = await browser.newContext({ serviceWorkers: 'allow' });
+  // A reader who has opted in; the worker is dormant otherwise.
+  await context.addInitScript(() => {
+    window.localStorage.setItem('ap-offline-enabled', '1');
+  });
   const page = await context.newPage();
   try {
     await page.goto(base + VISITED, { waitUntil: 'load' });
