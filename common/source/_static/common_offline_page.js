@@ -965,25 +965,13 @@
             return renderWikis();
           }
           // A full download never starts from a timer; a manual press is consent.
-          if (quiet) {
-            var names = full.map(function (id) {
-              return (byId[id] && byId[id].name) || id;
-            });
-            announce('A full download is needed to update ' +
-                     names.join(', ') +
-                     '. Press Check for updates to start it.');
-            toast({ title: 'Update available',
-                    msg: 'These cannot be updated in place, so they need '
-                       + 'downloading again: ' + names.join(', ') + '.',
-                    mode: 'done',
-                    action: 'Redownload',
-                    onAction: function () {
-                      toast({ mode: 'hide' });
-                      var btn = el('check-btn');
-                      if (btn) { btn.click(); }
-                    } });
-            return renderWikis();
-          }
+          // These cannot be updated in place, so they are downloaded again,
+          // on a timer too: an out-of-date saved copy is worse than a download.
+          var nameOf = function (id) { return (byId[id] && byId[id].name) || id; };
+          announce('Downloading again: ' + full.map(nameOf).join(', ') + '\u2026');
+          toast({ title: 'Updating saved wikis',
+                  msg: 'Downloading again: ' + full.map(nameOf).join(', ') + '.',
+                  mode: 'sweep' });
 
           // Re-select what needs a full fetch and reuse the one download path.
           selectable().forEach(function (c) {
@@ -994,7 +982,22 @@
           updateExportState();
           updateSaveState();
           // The one caller allowed to re-fetch what is already stored.
-          return saveSelectedReal(full);
+          return saveSelectedReal(full).then(function () {
+            var missing = full.filter(function (id) { return !storedIds[id]; });
+            if (missing.length) {
+              announce('Could not download again: ' + missing.map(nameOf).join(', ') + '.');
+              toast({ title: 'Update incomplete',
+                      msg: 'Could not download again: ' + missing.map(nameOf).join(', ') +
+                           '. It will be tried again later.',
+                      mode: 'done' });
+              return;
+            }
+            announce('Downloaded again: ' + full.map(nameOf).join(', ') + '.');
+            toast({ title: 'Update complete',
+                    msg: 'Downloaded again: ' + full.map(nameOf).join(', ') + '.',
+                    mode: 'done' });
+            notifyWorkerCachesChanged();
+          });
         });
       })
       .catch(function (err) {
