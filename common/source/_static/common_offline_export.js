@@ -1,11 +1,10 @@
 /*
  * [copywiki destination="copter,plane,rover,sub,blimp,antennatracker,dev,planner,planner2,ardupilot,mavproxy"]
  *
- * Build a single self-contained HTML file from what is in Cache Storage,
- * streamed to disk through the service worker so peak memory is one file, not
- * one archive. What the file says is in common_offline_document_builder.js.
- * The destinations match docs/common-offline.rst; without a marker a .js
- * reaches only DEFAULT_COPY_WIKIS.
+ * Writes the single-file offline export. Reads the saved wikis out of Cache
+ * Storage, inlines images and stylesheets as data URIs, and streams the result
+ * to disk through the service worker so a 900 MB file never sits in memory.
+ * What the file contains is decided by common_offline_document_builder.js.
  */
 (function (global) {
   'use strict';
@@ -35,8 +34,7 @@
 
   /* ------------------------------------------------------ download plumbing */
 
-  /** Open a download the page can write into: streamed through the service
-   *  worker, else the File System Access API, else a memory-bound Blob. */
+  /** A download sink: service worker stream, else File System Access, else a Blob. */
   function openDownload(filename) {
     if (navigator.serviceWorker && navigator.serviceWorker.controller &&
         typeof TransformStream !== 'undefined') {
@@ -103,8 +101,7 @@
               ttf: 'font/ttf' })[ext] || 'application/octet-stream';
   }
 
-  // One resolution rule, shared with the document builder; looked up per call
-  // so the scripts may load in either order.
+  // Looked up per call so the scripts may load in either order.
   function resolvePath(basePath, href) {
     return global.ArduPilotOfflineDocument.resolvePath(basePath, href);
   }
@@ -133,8 +130,7 @@
       .catch(function () { return null; });
   }
 
-  /** Assemble one self-contained HTML file from the cached pages, images
-   *  inlined once each, written page by page to the stream. */
+  /** Write one self-contained HTML file from the cached pages, page by page. */
   function exportHtml(wikiIds, filename, onProgress, sink) {
     var enc = new TextEncoder();
     var DOC = global.ArduPilotOfflineDocument;
@@ -193,8 +189,7 @@
           // Each image is emitted once and referenced by id.
           var imgIds = { __next: 0 };
           var imgPaths = {};
-          // The navigation is the union of every page's expanded sidebar; the
-          // index page alone expands nothing.
+          // The navigation is the union of every page's expanded sidebar.
           var navState = DOC.newNav();
           var write = function (text) { return sink.write(enc.encode(text)); };
 
@@ -261,8 +256,7 @@
     });
   }
 
-  /** The theme's stylesheets with their fonts inlined, so the export renders
-   *  as the site does. */
+  /** The theme's stylesheets with their fonts inlined. */
   function buildThemeCss(styles, assets) {
     var wanted = Object.keys(styles).filter(function (p) {
       return /_static\/css\/(theme|badge_only)\.css$/.test(p) ||
@@ -322,8 +316,7 @@
     return chain;
   }
 
-  /** Point each <img> at a shared image block, so a diagram on forty pages is
-   *  written once. Returns the html and any images seen for the first time. */
+  /** Point each <img> at a shared image block; returns the html and any new images. */
   function referenceImages(html, assets, pagePath, imgIds, imgPaths) {
     var srcs = [];
     html.replace(/<img[^>]+src="([^"]+)"/gi, function (all, src) {

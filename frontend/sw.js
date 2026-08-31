@@ -1,13 +1,12 @@
 /*
- * Service worker for the ArduPilot wiki. Pages: stale-while-revalidate, telling
- * the page when the refreshed copy differs. Images and fingerprinted static
- * assets: cache first. Saved wikis (ardupilot-offline-*) are served from their
- * own caches. One request per resource per navigation; nothing crawls.
+ * The wiki's service worker. Registered by pwa.js once a reader opts in, it
+ * sits between every page and the network: pages are served from cache and
+ * refreshed behind (stale-while-revalidate), images and fingerprinted assets
+ * cache-first, and saved wikis are answered from their ardupilot-offline-*
+ * caches. It also streams single-file exports to disk via /__export__/<id>.
  */
 
-// Bump when cached CONTENT can no longer be trusted, not on every edit: activate
-// deletes caches by name, so a poisoned entry in a current cache lives until
-// this changes. Saved wikis are unversioned and unaffected.
+// Bump when cached content can no longer be trusted; saved wikis are unaffected.
 const CACHE_VERSION = 'v11';
 const PAGE_CACHE = `ardupilot-pages-${CACHE_VERSION}`;
 const IMAGE_CACHE = `ardupilot-images-${CACHE_VERSION}`;
@@ -16,9 +15,7 @@ const STATIC_CACHE = `ardupilot-static-${CACHE_VERSION}`;
 const THIRD_PARTY_CACHE = `ardupilot-thirdparty-${CACHE_VERSION}`;
 const THIRD_PARTY_STATIC =
   /^https:\/\/(i\.creativecommons\.org\/|licensebuttons\.net\/|www\.paypalobjects\.com\/)/;
-// The offline page and its scripts: network-only, because a cached script
-// against fresh markup renders as garbage. pwa.js pairs with nothing and is
-// stale-while-revalidate below.
+// Network-only: the offline page and its scripts must always match each other.
 const APP_ASSET =
   /(^\/sw\.js$|common_offline(\.css|_page\.js|_export\.js|_document_builder\.js|_unpack\.js|_update\.js)$|common-offline(\.html)?$)/;
 // Marks a differential-update request, which must not be answered from cache.
@@ -42,8 +39,6 @@ const SHELL = [
 const NETWORK_TIMEOUT_MS = 5000;
 
 self.addEventListener('install', (event) => {
-  // Static documents, so swapping workers immediately is harmless and keeps a
-  // bad worker easy to displace.
   self.skipWaiting();
 
   event.waitUntil((async () => {
@@ -121,9 +116,7 @@ self.addEventListener('activate', (event) => {
   })());
 });
 
-// Streaming exports: the page hands over a ReadableStream, we answer
-// /__export__/<id> with it, and the browser writes the file as it is generated
-// instead of holding hundreds of megabytes in a Blob.
+// Streaming exports: the page hands over a ReadableStream, answered at /__export__/<id>.
 const EXPORTS = new Map();
 
 const EXPORT_TIMEOUT_MS = 60000;
@@ -144,9 +137,7 @@ self.addEventListener('message', (event) => {
     return;
   }
   if (data.type === 'EXPORT_START') {
-    // EXPORTS is in-memory, and an idle worker is terminated within
-    // milliseconds, so hold this instance alive until the download is
-    // collected, with a cap for a cancelled save.
+    // Hold this instance alive until the download is collected.
     let collected;
     const untilCollected = new Promise((resolve) => { collected = resolve; });
     EXPORTS.set(data.id, {
@@ -169,8 +160,7 @@ function isImage(url) {
 const ASSET_EXT_RE =
   /\.(html?|css|m?js|json|xml|txt|map|png|jpe?g|gif|webp|svg|ico|woff2?|ttf|otf|eot|pdf|zip|gz|tgz|tar|mp4|webm)$/i;
 
-// Every shape one URL can have been stored under: with and without .html or
-// index.html, and shared images once under /_common/.
+// Every shape one URL can have been stored under.
 function storedShapes(url) {
   const path = url.pathname;
   const out = [path];
@@ -189,10 +179,7 @@ function storedShapes(url) {
 }
 
 
-// The one cache that can hold a path: caches.match() across fourteen saved
-// wikis was 692 ms against 89 ms asking the right cache directly.
-// Kept in step with FOLD_INTO_COMMON in scripts/build_offline_artifacts.py;
-// drift costs speed, not correctness.
+// Kept in step with FOLD_INTO_COMMON in scripts/build_offline_artifacts.py.
 const FOLDED_INTO_COMMON = new Set(['ardupilot']);
 
 function likelyCacheName(path) {
@@ -206,13 +193,11 @@ function likelyCacheName(path) {
   return OFFLINE_CACHE_PREFIX + (FOLDED_INTO_COMMON.has(first) ? 'common' : first);
 }
 
-// caches.open() creates a missing cache, so real names are checked first. A
-// stale memo costs a slower lookup, never a wrong one.
+// caches.open() creates a missing cache, so real names are checked first.
 let knownCacheNames = null;
 const openedCaches = new Map();
 
-// A saved wiki is consulted only once its /__ap_complete__ marker exists;
-// without it the cache is an aborted download. Reset by CACHES_CHANGED.
+// A cache without its /__ap_complete__ marker is an aborted download.
 const markerChecked = new Map();
 
 async function isComplete(name) {
@@ -245,9 +230,8 @@ async function offlineCacheFor(path) {
   return openedCaches.get(name);
 }
 
-// The unpacker stores text gzipped (455 MB -> 57 MB, inside WebKit's 1 GB
-// quota). Inflated here: no engine honours Content-Encoding on a body a worker
-// hands back. Under 1 ms for an ordinary page.
+// The unpacker stores text gzipped; no engine honours Content-Encoding on a
+// body a worker hands back, so inflate here.
 const AP_ENCODED = 'x-ap-encoding';
 
 function inflate(response) {
@@ -267,9 +251,7 @@ function inflate(response) {
   );
 }
 
-// The one answer to "is this held offline". Pass a cache to look only there,
-// none to search every complete saved wiki. Exact matches: ignoreSearch walks
-// the whole cache (0.2 ms vs 300 ms with twelve wikis saved).
+// Exact matches only: ignoreSearch walks the whole cache (0.2 ms vs 300 ms).
 async function heldOffline(request, cache) {
   const shapes = storedShapes(new URL(request.url));
 
@@ -293,8 +275,7 @@ async function heldOffline(request, cache) {
     }
   }
 
-  // Cache by cache, not caches.match(): that would answer from a half-written
-  // download the check above refused.
+  // Not caches.match(): it would answer from a half-written download.
   const names = await caches.keys();
   for (const name of names) {
     if (name.startsWith(OFFLINE_CACHE_PREFIX) && !(await isComplete(name))) {
@@ -318,9 +299,7 @@ function isPage(url) {
 // The version index behind the dropdown on every parameters page.
 const PARAM_INDEX = /^\/([^/]+)\/_static\/parameters-[A-Za-z0-9_]+\.json$/;
 
-// Offline, answer the version index with only the versions held: historical
-// parameter pages are opt-in, and 66 of the pages are frozen HTML no template
-// can reach, so the filter lives here. Network first; nothing filtered is stored.
+// Offline, the version index lists only the versions held. Nothing filtered is stored.
 async function paramIndex(request, url) {
   try {
     const fresh = await fetch(request);
@@ -376,25 +355,17 @@ async function notifyClients(message) {
   clients.forEach((client) => client.postMessage(message));
 }
 
-/**
- * Serve the cached copy at once, refresh behind, and announce a difference.
- * `event` is required: without waitUntil the browser kills the worker before
- * the refresh lands and the page cache never fills.
- */
+// Serve the cached copy, refresh behind, announce a difference.
 async function staleWhileRevalidate(request, cacheName, announceChanges, event) {
   const cache = await caches.open(cacheName);
-  // Only a PAGE_CACHE copy is comparable to the network: a saved wiki's page is
-  // the archive's rewritten version and would always read as "changed".
+  // A saved wiki's page is rewritten and would always read as "changed".
   const fromPageCache = await heldOffline(request, cache);
   const cached = fromPageCache || (await heldOffline(request));
 
-  // Clone now: by the time the refresh settles the browser has consumed the
-  // body that was handed back.
+  // Clone before the browser consumes the body.
   const cachedForCompare = (announceChanges && fromPageCache) ? fromPageCache.clone() : null;
 
-  // 'no-cache' so the refresh revalidates with the server instead of the HTTP
-  // cache (the wiki's HTML has no Cache-Control). Navigations with nothing
-  // stored pass through untouched, see networkOnly.
+  // Revalidate with the server, not the HTTP cache; see networkOnly.
   const refresh = cached
     ? new Request(request.url, { cache: 'no-cache', credentials: 'same-origin' })
     : request;
@@ -440,8 +411,7 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
          });
 }
 
-// A navigation may not be answered with a redirected response, so rebuild it
-// without the flag.
+// A navigation may not be answered with a redirected response.
 function unredirect(response) {
   if (!response || !response.redirected) {
     return response;
@@ -456,8 +426,7 @@ function unredirect(response) {
 /** Always ask the network; use a cached copy only if there is no network. */
 async function networkOnly(request) {
   try {
-    // Untouched: fetch(request, init) rebuilds the Request, and a rebuilt
-    // 'navigate' request throws, which would leave the page uncontrolled.
+    // Untouched: a rebuilt 'navigate' Request throws.
     const response = await fetch(request);
     if (response && response.ok && plausibleBody(request, response)) {
       await keep(PAGE_CACHE, request, response);
@@ -470,8 +439,7 @@ async function networkOnly(request) {
   }
 }
 
-// Stale-while-revalidate for cross-origin URLs with a cache-busting query,
-// keyed without it so the cache does not grow one entry per page view.
+// Stale-while-revalidate keyed without the cache-busting query.
 async function freshBehind(request, cacheName, event) {
   const cache = await caches.open(cacheName);
   const key = new URL(request.url);
@@ -497,8 +465,7 @@ async function freshBehind(request, cacheName, event) {
 }
 
 async function cacheFirst(request, cacheName) {
-  // Exact URL first: heldOffline matches by path and cannot find a
-  // cross-origin asset stored under its full URL.
+  // heldOffline matches by path and cannot find a cross-origin URL.
   const named = await caches.open(cacheName);
   const exact = await named.match(request);
   if (exact) {
@@ -507,8 +474,7 @@ async function cacheFirst(request, cacheName) {
 
   const held = await heldOffline(request);
   if (held) {
-    // Promote into the named cache (84 ms per lookup otherwise), guarded like a
-    // network write: a saved wiki is not a trusted source.
+    // Promote into the named cache; a saved wiki is not a trusted source.
     if (plausibleBody(request, held)) {
       await named.put(request, held.clone());
     }
@@ -527,9 +493,7 @@ async function cacheFirst(request, cacheName) {
   }
 }
 
-// Refuse to store a body that contradicts what was asked for (a stylesheet
-// served as text/html): captive wifi answers everything with a login page at
-// 200, and a cache-first entry would keep it indefinitely. Narrow on purpose.
+// Refuse a body that contradicts the request: captive wifi serves login pages at 200.
 const CONTENT_EXPECTATIONS = [
   [/\.css$/i, /^text\/css/],
   [/\.m?js$/i, /^(?:application|text)\/(?:x-)?(?:java|ecma)script/],
@@ -558,8 +522,6 @@ function plausibleBody(request, response) {
   return true;
 }
 
-// Keep the worker alive for a background refresh. Called after the handler
-// has returned, which every engine accepts; a refusal only shortens the refresh.
 function keepAlive(event, promise, url) {
   if (!event || typeof event.waitUntil !== 'function') {
     return;
@@ -571,8 +533,7 @@ function keepAlive(event, promise, url) {
   }
 }
 
-// Store a copy without letting a failed store (QuotaExceededError, near
-// WebKit's 1 GB) change what the reader gets. Caching fails open.
+// A failed store (QuotaExceededError) must not change what the reader gets.
 async function keep(cacheName, key, response) {
   try {
     const cache = await caches.open(cacheName);
@@ -583,8 +544,7 @@ async function keep(cacheName, key, response) {
   }
 }
 
-// The catch-all route never stores /offline/ (the archives themselves and the
-// manifest that detects staleness) or anything far larger than a search index.
+// Never store the archives or the manifest, or anything far larger than a search index.
 const NEVER_STORE = /^\/offline\//;
 const STORE_LIMIT_BYTES = 12 * 1024 * 1024;
 
@@ -638,8 +598,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
   if (url.origin !== self.location.origin) {
-    // Static third-party decoration is cached (the licence badge was 509 ms per
-    // page). User alerts must stay current, so they are only refreshed behind.
+    // User alerts must stay current.
     if (THIRD_PARTY_STATIC.test(url.href)) {
       event.respondWith(safely(cacheFirst(request, THIRD_PARTY_CACHE), request));
     } else if (THIRD_PARTY_FRESH.test(url.href)) {
@@ -648,15 +607,13 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // A differential update must reach the server and must not fall back to the
-  // copy it is replacing, so it gets neither the cache nor safely().
+  // An update must reach the server and never fall back to the copy it replaces.
   if (url.searchParams.has(UPDATE_PARAM)) {
     event.respondWith(fetch(request));
     return;
   }
 
-  // The theme's stylesheet asks for a separator image the theme does not ship,
-  // on every page. Answer with a transparent pixel; see KNOWN_UPSTREAM_ISSUES.md.
+  // The theme requests an image it does not ship; see KNOWN_UPSTREAM_ISSUES.md.
   if (url.pathname.endsWith('/_static/images/mainnav-sep-2.gif')) {
     event.respondWith(new Response(
       Uint8Array.from(atob('R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7'),
@@ -700,8 +657,7 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Everything else, notably searchindex.js and objects.inv at a wiki's root.
-  // Network first; storage only decides what happens when the fetch fails.
+  // Everything else, notably searchindex.js and objects.inv.
   event.respondWith((async () => {
     try {
       const response = await fetch(request);

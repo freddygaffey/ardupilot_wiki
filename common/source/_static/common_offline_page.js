@@ -1,9 +1,11 @@
 /*
  * [copywiki destination="copter,plane,rover,sub,blimp,antennatracker,dev,planner,planner2,ardupilot,mavproxy"]
  *
- * The Offline page: saves wikis from the pre-built archives, checks for
- * updates, exports. State is measured from Cache Storage each time, not
- * remembered, so an evicted copy shows as gone.
+ * The Offline page's panel. Lists the wikis from offline-manifest.json, saves
+ * a wiki by fetching its archive and unpacking it into Cache Storage (one cache
+ * per wiki, completion marker written last), checks for updates by build id,
+ * removes saved copies, and starts the single-file export. State is read from
+ * Cache Storage on every render, never remembered.
  */
 (function (global) {
   'use strict';
@@ -13,8 +15,7 @@
   global.ArduPilotOfflineVersion = VERSION;
 
 
-  // Fallback rows until the manifest arrives; refresh from a real build when
-  // the figures move. About travels inside common (FOLD_INTO_COMMON).
+  // Fallback rows until the manifest arrives.
   var COMMON = { id: 'common', name: 'Common (required)', mb: 442, pages: 28, required: true };
   var WIKIS = [
     { id: 'copter', name: 'Copter', mb: 74, pages: 860 },
@@ -29,8 +30,7 @@
     { id: 'antennatracker', name: 'Antenna Tracker', mb: 4, pages: 55 }
   ];
 
-  // Static files in the built tree, same origin; the manifest's artifact_base
-  // overrides this.
+  // Overridden by the manifest's artifact_base.
   var ARTIFACT_BASE = '/offline';
 
   var PAGE_CACHE_PREFIX = 'ardupilot-pages-';
@@ -128,8 +128,7 @@
       var offline = names.filter(function (n) { return n.indexOf(OFFLINE_CACHE_PREFIX) === 0; });
       return Promise.all(offline.map(function (name) {
         return caches.open(name).then(function (cache) {
-          // Only a cache with the completion marker counts; the rest is an
-          // aborted download.
+          // Without the completion marker it is an aborted download.
           return cache.match(COMPLETE_MARKER).then(function (marker) {
             if (!marker) { return; }
             stored[name.slice(OFFLINE_CACHE_PREFIX.length).split('-')[0]] = true;
@@ -198,8 +197,6 @@
       parts.push('storage ' + (persisted ? 'permanent' : 'temporary'));
       el('storage-status').textContent = parts.join(' · ');
 
-      // No persist button: browsers routinely decline it; installing is what
-      // they act on.
       var evicted = evictedIds();
       var evictNote = evicted.length
         ? '<div class="apo-note apo-note-warn">&#9888; ' +
@@ -261,8 +258,7 @@
 
   var storedIds = {};
 
-  // Saved ids are mirrored to localStorage, so an evicted wiki can be reported
-  // rather than silently read as unsaved.
+  // Mirrored to localStorage so an evicted wiki can be reported.
   var SAVED_IDS_KEY = 'ap-saved-ids';
 
   function savedRecord() {
@@ -300,17 +296,14 @@
   var reclaimTimer = null;
 
 
-  // Historical parameter versions a reader wants, keyed by wiki id, file ->
-  // true. They are not in the archives (14 for Copter at 4 to 6 MB each);
-  // chosen ones are fetched from their live URLs.
+  // Chosen historical parameter versions, by wiki id: file -> true.
   var paramPicks = {};
 
   function paramsOf(w) {
     return (w && w.param_versions) || [];
   }
 
-  // Seeded from the manifest's default, and not before the manifest is here:
-  // memoising an empty selection first left the default unticked.
+  // Seeded from the manifest's default, and not before the manifest is here.
   function picksFor(w) {
     var versions = paramsOf(w);
     if (!versions.length) { return paramPicks[w.id] || {}; }
@@ -324,8 +317,7 @@
     return paramPicks[w.id];
   }
 
-  // Tick what is saved, not what is newest: a reader holding 4.7.0 must not
-  // find 4.7.1 ticked. Wikis with nothing saved keep the default.
+  // Tick what is saved, not what is newest.
   function syncPicksWithCache(stored) {
     var wikis = WIKIS.filter(function (w) {
       return paramsOf(w).length && stored[w.id];
@@ -384,8 +376,7 @@
     return 0;
   }
 
-  // Ticks: the newest stable of each series, anything saved, anything
-  // promoted. The rest is in the dropdown.
+  // Ticks: newest stable of each series, anything saved, anything promoted.
   function shortlistFor(w) {
     var versions = paramsOf(w);
     var picks = picksFor(w);
@@ -421,8 +412,7 @@
     return '/' + w.id + '/' + v.file;
   }
 
-  // The disclosure row under a wiki. Hidden until asked for: fourteen boxes
-  // each would bury the ten rows that matter.
+  // The disclosure row under a wiki.
   function paramRowFor(w) {
     var versions = paramsOf(w);
     if (!versions.length) { return ''; }
@@ -628,9 +618,7 @@
     warnIfOverQuota(b);
   }
 
-  // Warn while choosing, not after Save fails. WebKit reports about 1 GB and
-  // does not refuse a write over quota: it discards the origin, with every
-  // archive still reporting success.
+  // Warn while choosing: WebKit discards the origin on a write over quota.
   var QUOTA_MARGIN = 1.15;
 
   function warnIfOverQuota(b) {
@@ -680,8 +668,7 @@
     }
 
     return Promise.resolve().then(function () {
-      // What this button removes, from the table's sizes: storage.estimate()
-      // counts space freed but not yet reclaimed.
+      // storage.estimate() counts space freed but not yet reclaimed.
       var used = [COMMON].concat(WIKIS).reduce(function (n, w) {
         return storedIds[w.id] ? n + (w.mb || 0) * 1048576 : n;
       }, 0);
@@ -715,8 +702,7 @@
     });
   }
 
-  // Retire a folded wiki's old cache, only once a common download has just
-  // finished: until then it is the reader's only copy.
+  // Retire a folded wiki's old cache once common holds its pages.
   function dropFoldedCaches(entry) {
     if (!entry || entry.id !== 'common') { return Promise.resolve(); }
     return Promise.all(FOLDED_INTO_COMMON.map(function (id) {
@@ -746,8 +732,6 @@
   }
 
   /* ---------- download and unpack ---------- */
-  // Tar reading and the archive fetch: common_offline_unpack.js. Differential
-  // updates: common_offline_update.js, handed the live config on each call.
 
   var mimeFor = ApUnpack.mimeFor;
 
@@ -767,16 +751,14 @@
     if (activeDownload) { activeDownload.abort(); }
   }
 
-  /** Download what is selected and not already held; `refreshIds` re-fetches
-   *  stored wikis (only the update check passes it). */
+  /** Download what is selected and not held; `refreshIds` re-fetches stored wikis. */
   function saveSelectedReal(refreshIds) {
     // The same button becomes Cancel.
     if (activeDownload) { return cancelDownload(); }
 
     var refresh = refreshIds || [];
     var chosen = selected().map(function (c) { return c.value; });
-    // Chosen wikis first, common (440 MB of shared images) last, so a wiki is
-    // readable in seconds while the images backfill.
+    // Chosen wikis first, common last, so a wiki is readable in seconds.
     var queue = WIKIS.filter(function (w) {
       return chosen.indexOf(w.id) !== -1;
     }).concat([COMMON]).filter(function (w) {
@@ -817,8 +799,7 @@
     return persistFirst
       .then(function () { return checkRoom(totalBytes); })
       .then(function () {
-        // Marked complete only at the end, so an interrupted download never
-        // looks usable.
+        // Marked complete only at the end.
         return queue.reduce(function (chain, entry) {
           return chain.then(function () {
             var cacheName = OFFLINE_CACHE_PREFIX + entry.id;
@@ -838,13 +819,10 @@
                 build: CURRENT_BUILD,
                 signal: activeDownload ? activeDownload.signal : undefined
               }).then(function () {
-                // Before the completion marker: the chosen versions are part of
-                // this download.
                 return storeParams(entry, cache, report);
               }).then(function () {
                 rowProgress(entry.id, 100, 'done');
-                // The file table beside the files, for a later differential
-                // update. Not fatal if missing: the next update re-fetches.
+                // The file table for differential updates; not fatal if missing.
                 return fetch(ApUpdate.tableUrl(entry, ARTIFACT_BASE, CURRENT_BUILD), { cache: 'no-cache' })
                   .then(function (r) { return r.ok ? r.json() : null; })
                   .then(function (table) {
@@ -882,8 +860,7 @@
         activeDownload = null;
         button.classList.remove('busy');
         setLabel('Save selected');
-        // Only unfinished bars are cleared, so a cancelled run does not look
-        // successful.
+        // Only unfinished bars are cleared.
         queue.forEach(function (w) {
           if (!storedIds[w.id]) { rowProgress(w.id, null); }
         });
@@ -891,8 +868,7 @@
       });
   }
 
-  /** Compare the server's build with each stored copy and re-fetch what is
-   *  behind. */
+  /** Compare the server's build with each stored copy and update what is behind. */
   function checkForUpdates(quiet) {
     var out = el('check-result');
 
@@ -949,8 +925,7 @@
         toast({ title: 'Updating saved wikis',
                 msg: 'Checking what changed…', mode: 'sweep' });
 
-        // Differential first; anything without a stored table falls back to
-        // the archive.
+        // Differential first; no stored table means the archive.
         var byId = {};
         [COMMON].concat(WIKIS).forEach(function (w) { byId[w.id] = w; });
 
@@ -989,9 +964,7 @@
             }
             return renderWikis();
           }
-          // A full archive download must never start from a timer: it is
-          // hundreds of megabytes and the reader's decision. A manual press is
-          // consent.
+          // A full download never starts from a timer; a manual press is consent.
           if (quiet) {
             var names = full.map(function (id) {
               return (byId[id] && byId[id].name) || id;
@@ -999,8 +972,6 @@
             announce('A full download is needed to update ' +
                      names.join(', ') +
                      '. Press Check for updates to start it.');
-            // Say these need re-downloading, not that a lot changed: a missing
-            // or unfetchable table is the usual reason.
             toast({ title: 'Update available',
                     msg: 'These cannot be updated in place, so they need '
                        + 'downloading again: ' + names.join(', ') + '.',
@@ -1063,8 +1034,7 @@
     return { ids: have, missing: missing, chosen: chosen };
   }
 
-  /** Name an export after its contents and the build date, e.g.
-   *  blimp-copter-rover-2026-08-08.html. */
+  /** e.g. blimp-copter-rover-2026-08-08.html */
   function exportName(ids, extension) {
     var stamp = (CURRENT_BUILD || new Date().toISOString()).slice(0, 10);
     var base;
@@ -1117,9 +1087,7 @@
     });
   }
 
-  // Automatic updates: a check that finds nothing costs one small manifest
-  // request. Thirty minutes, jittered; the wiki rebuilds a few times a day.
-  // A development value of 30 s must not ship.
+  // Thirty minutes, jittered; the wiki rebuilds a few times a day.
   var AUTOUPDATE_MS = 30 * 60 * 1000;
 
   var autoTimer = null;
@@ -1136,8 +1104,7 @@
     if (autoBusy || activeDownload) { return; }
     // Nothing saved means nothing to update and no reason to touch the network.
     if (!Object.keys(storedIds).length) { return; }
-    // Not skipped while hidden: browsers throttle background timers already,
-    // and a background tab is the copy most likely to be behind.
+    // Not skipped while hidden: a background tab is the copy most likely behind.
 
     autoBusy = true;
     return checkForUpdates(true).then(function () { autoBusy = false; },
@@ -1178,8 +1145,7 @@
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
 
-  // A dropdown choice becomes a ticked box. Only this row is re-rendered, so
-  // the disclosure stays open.
+  // A dropdown choice becomes a ticked box; only this row is re-rendered.
   document.addEventListener('change', function (e) {
     if (!e.target.classList.contains('param-more')) { return; }
     var id = e.target.getAttribute('data-wiki');
@@ -1254,8 +1220,7 @@
     if (!hit) { return; }
     if (hit.id === 'clear-btn') { confirmClear(); }
     if (hit.id === 'download-cache-btn') {
-      // Saving opts in to offline mode (pwa.js); without a worker saved pages
-      // are never served.
+      // Saving opts in to offline mode (pwa.js).
       if (window.ApOffline) { window.ApOffline.enable(); }
       saveSelectedReal();
     }
@@ -1287,8 +1252,7 @@
       return;
     }
 
-    // Draw from the built-in list at once; renderStorage reads storedIds, so
-    // it follows renderWikis.
+    // renderStorage reads storedIds, so it follows renderWikis.
     renderWikis().then(renderStorage);
 
     // Sizes and counts come from the manifest; the constants are a fallback.
