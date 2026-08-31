@@ -157,8 +157,8 @@ def check_no_dangling_assets():
 
     check("no built page references a script or stylesheet that is missing",
           not ours,
-          "; ".join(f"{u} (e.g. {p})" for u, p in list(ours.items())[:3])
-          or f"{checked} references resolve" +
+          "; ".join(f"{u} (e.g. {p})" for u, p in list(ours.items())[:3]) or
+          f"{checked} references resolve" +
              (f", plus {len(known)} known upstream "
               f"(KNOWN_UPSTREAM_ISSUES.md)" if known else ""))
 
