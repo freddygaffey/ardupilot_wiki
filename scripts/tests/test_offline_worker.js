@@ -1,17 +1,9 @@
 /*
- * Verification harness for the service worker's offline lookup.
+ * Harness for the service worker: builds caches from the real archive entry
+ * names, asks for the URLs the site serves, and answers with the worker's own
+ * code, lifted or booted from sw.js.
  *
  *   node scripts/tests/test_offline_worker.js [wiki]
- *
- * The archives store what Sphinx built - /rover/docs/foo.html - while
- * Cloudflare Pages canonicalises the site so the address a reader is actually
- * on is /rover/docs/foo. Nothing in the existing tests compared those two, so
- * an exact-match lookup passed every test and failed every reader: pages
- * resolved only while clicking links that still carried the extension, and a
- * reload or a cold open fell through to the offline page.
- *
- * So this builds a cache from the real archive entry names, asks for the URLs
- * the site really serves, and uses the worker's own matching code to answer.
  */
 
 const fs = require('fs');
@@ -32,15 +24,8 @@ function check(name, ok, detail) {
 
 /* ------------------------------------------------------- the worker's code -- */
 
-/**
- * Lift the lookup out of sw.js and run it here.
- *
- * Importing the worker is not possible - it registers event listeners against
- * a ServiceWorkerGlobalScope that does not exist here - so the two functions
- * that decide whether a page is held are taken by name, the same way the
- * export tests take theirs. A copy in this file would be a copy that can agree
- * with itself while the shipped worker is wrong.
- */
+/** Lift the lookup functions out of sw.js by name; a copy here could agree
+ *  with itself while the shipped worker is wrong. */
 function liftLookup(src) {
   let out = '';
   // Module-level state the matcher consults, taken with it.
@@ -59,11 +44,7 @@ function liftLookup(src) {
     const m = src.match(re);
     if (m) { out += m[0] + '\n'; }
   }
-  // Every function heldOffline reaches, including the ones it only calls on
-  // the way out. Missing one is not a quiet degradation: the lifted code throws
-  // ReferenceError mid-run and the suite dies without reporting a single
-  // result, which is exactly what 'inflate' did once it started wrapping every
-  // return value.
+  // Every function heldOffline reaches; a missing one throws mid-run.
   for (const name of ['storedShapes', 'likelyCacheName', 'isComplete',
                       'offlineCacheFor', 'inflate', 'heldOffline', 'cacheFirst',
                       'keep', 'paramIndex',
@@ -115,10 +96,7 @@ function run(workerSrc, label) {
   const wikiArchive = path.join(REPO, 'offline', WIKI + '-offline.tar.gz');
   const commonArchive = path.join(REPO, 'offline', 'common-offline.tar.gz');
   if (!fs.existsSync(wikiArchive) || !fs.existsSync(commonArchive)) {
-    // Exit NON-zero. Returning quietly here used to drop the twelve
-    // extensionless-URL checks this file exists to protect while still
-    // printing "all checks passed": the exact class of silent skip that lets a
-    // real regression through. If the archives are not built, say so and fail.
+    // A suite that cannot run is a failure, not a pass.
     console.error('\nFAILED: this suite needs the built archives.\n' +
                   '  python3 update.py\n');
     process.exit(1);
@@ -134,27 +112,18 @@ function run(workerSrc, label) {
     return u.startsWith('http') ? new URL(u).pathname : u;
   };
 
-  // IMAGE_CACHE starts empty: that is a reader who downloaded a wiki and then
-  // went offline without having browsed it online first, which is the whole
-  // point of downloading.
+  // IMAGE_CACHE starts empty: a reader who saved a wiki and went offline.
   const runtimeCache = new Map();
 
-  // A Response-shaped stub. It returned a bare { url } before, so the moment
-  // the worker did anything a real Response supports - cloning one before
-  // putting it in a cache - the harness threw where the browser would not.
-  // A test that cannot survive correct code is worse than no test.
+  // Response-shaped, so the worker can clone it as it would a real one.
   const asResponse = (path) => ({
     url: path,
     clone() { return asResponse(path); },
     text: async () => '',
   });
 
-  // Where the unpacker really puts a given path. Shared images and the wikis
-  // folded into common (see FOLD_INTO_COMMON in build_offline_artifacts.py) go
-  // to the common cache; everything else to the cache named after its wiki.
-  // The worker's likelyCacheName has to agree with this, and the check below
-  // fails if it stops agreeing - without it a fold would simply demote every
-  // request for that wiki to the exhaustive search, silently.
+  // Where the unpacker puts a path; likelyCacheName must agree, or a fold
+  // silently demotes every request to the exhaustive search.
   const holderOf = (k) => {
     if (k.startsWith('/_common/')) { return 'ardupilot-offline-common'; }
     const first = k.split('/')[1];
@@ -205,24 +174,14 @@ function run(workerSrc, label) {
   return { ctx, store, wikiNames, ask, askImage };
 }
 
-/**
- * The URL Cloudflare Pages serves a built file as. Verified against the live
- * demo: /x.html 308s to /x, and /index.html to the directory.
- */
+/** The URL a canonicalising host serves a built file as. */
 function canonical(p) {
   if (p.endsWith('/index.html')) { return p.slice(0, -'index.html'.length); }
   return p.replace(/\.html$/, '');
 }
 
-/**
- * The worker must actually evaluate, not merely parse.
- *
- * node --check validates syntax and nothing more, so a const used above its
- * own declaration passes it and then fails in the browser with "ServiceWorker
- * script evaluation failed" - which registers as nothing at all: no caching,
- * no offline, no error on the page. That shipped once, from CURRENT_CACHES
- * referencing a cache name declared five lines below it.
- */
+/** The worker must evaluate, not merely parse: a const used above its
+ *  declaration passes node --check and registers as nothing in a browser. */
 function checkWorkerEvaluates() {
   const ctx = {
     self: { addEventListener() {}, skipWaiting() {}, clients: {},
@@ -242,25 +201,10 @@ function checkWorkerEvaluates() {
 
 /* ------------------------------------------------- differential updates -- */
 
-/**
- * Boot the real worker and hand back its fetch listener.
- *
- * The routing under test is inside the fetch handler, so it cannot be lifted
- * out by name the way the lookup is. Instead the whole worker is evaluated
- * against a ServiceWorkerGlobalScope-alike that keeps the listeners it
- * registers, and synthetic events are dispatched at the real one.
- *
- * `networkFails` is the case that matters most: an update whose request fails
- * must fail, not quietly resolve to the stale copy it was sent to replace.
- */
-/**
- * A Response that behaves like a real one about its body.
- *
- * The bug this models: clone() throws once the body has been read. A cached
- * page is handed to the browser and the browser reads it, so anything that
- * clones it afterwards fails. A stub that clones freely cannot catch that, and
- * did not.
- */
+/** Boot the real worker against a ServiceWorkerGlobalScope-alike and hand
+ *  back its fetch listener. */
+/** A Response whose clone() throws once the body has been read, as a real
+ *  one does. */
 function bodyAwareResponse(text) {
   return {
     _used: false,
@@ -282,9 +226,7 @@ function bootWorker({ networkFails = false, serve = null,
                      holdNetwork = false, putFails = false } = {}) {
   const seen = { fetches: [], cacheReads: [], puts: [], deleted: [], posted: [] };
   let cacheNames = existingCaches.slice();
-  // An offlineCopy models a COMPLETED download, so its cache must exist by
-  // name and carry the completion marker the worker now requires before it
-  // will consult any offline cache.
+  // A completed download: named cache plus completion marker.
   const offlineName = offlineCopy
     ? 'ardupilot-offline-' + offlineCopy.path.split('/')[1]
     : null;
@@ -292,10 +234,7 @@ function bootWorker({ networkFails = false, serve = null,
     cacheNames.push(offlineName);
   }
   const listeners = {};
-  // Each cache name gets its own object, because the distinction under test is
-  // exactly which cache holds what: the offline copy lives ONLY in its own
-  // ardupilot-offline-* cache, and a runtime cache that answered for it would
-  // short-circuit the promotion this harness exists to observe.
+  // One object per cache name: which cache holds what is the thing under test.
   const cacheFor = (name) => ({
     match: async (r) => {
       const k = String(r && r.url ? r.url : r);
@@ -364,9 +303,7 @@ function bootWorker({ networkFails = false, serve = null,
       const url = String(req && req.url ? req.url : req);
       seen.fetches.push(url);
       if (networkFails) { throw new TypeError('Failed to fetch'); }
-      // Held open so the test controls when the refresh runs, which is the
-      // only way to reproduce the real ordering: the browser reads the served
-      // copy while the refresh is still in flight.
+      // Held open so the browser reads the served copy before the refresh lands.
       if (holdNetwork) {
         await new Promise((resolve) => { seen.releaseNetwork = resolve; });
       }
@@ -450,10 +387,7 @@ async function checkUpdateRouting() {
   }
 
   {
-    // safely() answers a failed request from storage, which is right everywhere
-    // else and exactly wrong here: the caller would store the stale copy back
-    // over itself and report success. Failing is what lets it retry or fall
-    // back to the archive.
+    // An update must fail, not be answered from the copy it is replacing.
     const w = bootWorker({ networkFails: true });
     const answered = w.ask(PAGE + UPDATE);
     let rejected = false;
@@ -464,9 +398,7 @@ async function checkUpdateRouting() {
   }
 
   {
-    // Whatever the update asks for takes this route: the failure was selective,
-    // hitting HTML while .js and .inv appeared to work, purely because those
-    // reach the network on other routes anyway.
+    // Every file type, not only the ones that reach the network anyway.
     const w = bootWorker();
     for (const p of ['/copter/docs/a.html', '/copter/searchindex.js',
                      '/copter/objects.inv', '/copter/_images/x.png']) {
@@ -480,13 +412,8 @@ async function checkUpdateRouting() {
 }
 
 /*
- * A response that contradicts the request must not be stored.
- *
- * Static assets are served cache-first, so one bad answer is kept and served
- * until the cache name changes. That is not theoretical: placeholders written
- * during a debugging session survived in ardupilot-static-v3 and rendered the
- * site unstyled on every ordinary load. Captive wifi does the same thing to
- * real readers, answering every request with a login page at 200.
+ * A response that contradicts the request (captive wifi's login page as a
+ * stylesheet) must not be stored: cache-first would keep it indefinitely.
  */
 async function checkPoisonGuard() {
   console.log('\nservice worker: refusing an implausible body\n');
@@ -533,10 +460,7 @@ async function checkPoisonGuard() {
   check('an extension with no expectation is left alone',
         seen.puts.length === 1, JSON.stringify(seen.puts));
 
-  // The promotion path: heldOffline() content copied into the versioned
-  // static cache. A saved wiki is one more source of bytes, not a trusted one,
-  // and this path was used to poison the static cache while the fetch-side
-  // guard stood intact.
+  // The promotion path: a saved wiki is not a trusted source either.
   {
     const w = bootWorker({ offlineCopy: {
       path: '/plane/_static/css/theme.css',
@@ -563,18 +487,9 @@ async function checkPoisonGuard() {
         w.seen.puts.length === 1, JSON.stringify(w.seen.puts));
 }
 
-/*
- * Bumping CACHE_VERSION is the only thing that discards what is already stored,
- * so what it discards had better be right. A downloaded wiki is hundreds of
- * megabytes the reader chose to keep, and losing it because the worker changed
- * would be indefensible.
- */
-/*
- * searchindex.js and objects.inv live at a wiki's root, so they match none of
- * the routes: not a page, not an image, not under _static. They were never
- * served from storage, so offline search was broken by a file that was sitting
- * in the archive all along.
- */
+/* A version bump must discard only the versioned caches, never a saved wiki. */
+/* searchindex.js and objects.inv match no other route and must still be
+ * answered from a saved wiki. */
 async function checkArchiveFallback() {
   console.log('\nservice worker: archive files no route claims\n');
 
@@ -599,17 +514,8 @@ async function checkArchiveFallback() {
         answered === w.seen.servedCopy ? 'served the saved copy' : String(answered));
 }
 
-/*
- * A revalidation nobody waits for does not happen.
- *
- * The worker is killed as soon as its last respondWith settles. Both
- * stale-while-revalidate strategies answer from storage and then refresh
- * behind, so unless the browser is told to wait, the refresh is started and
- * abandoned. It was, silently, for the whole life of this feature: measured on
- * the mirror, the page cache held one entry after a browsing session and it was
- * /sw.js. Pages therefore came from the saved wiki for ever, which is why
- * content stayed hours stale against a server that had been rebuilt.
- */
+/* A background refresh nobody waits for is abandoned when the worker is
+ * killed, so both stale-while-revalidate routes must pass it to waitUntil. */
 async function checkRevalidationIsAwaited() {
   console.log('\nservice worker: the refresh behind is actually waited for\n');
 
@@ -622,9 +528,8 @@ async function checkRevalidationIsAwaited() {
   check('and the refreshed copy is then stored',
         w.seen.puts.length === 1, JSON.stringify(w.seen.puts));
 
-  // pwa.js is the only other stale-while-revalidate route. Assets under
-  // _static are deliberately cache-first, because Sphinx fingerprints them, so
-  // they have nothing to revalidate and must NOT be asked to wait for one.
+  // pwa.js is the only other stale-while-revalidate route; _static is
+  // cache-first and must not wait for anything.
   w = bootWorker({ serve: () => ({ ct: 'application/javascript', body: '//' }) });
   a = w.ask('/js/pwa.js');
   if (a) { await a; }
@@ -646,17 +551,8 @@ async function checkRevalidationIsAwaited() {
         'no call site omits it');
 }
 
-/*
- * The refresh must survive the browser reading the copy it was handed.
- *
- * staleWhileRevalidate answers from storage and compares the network copy with
- * it afterwards. It used to clone the stored copy inside that later comparison,
- * by which time the browser had already read it to render the page, so the
- * clone threw, the whole revalidation rejected, and the put that follows never
- * ran. Nothing looked wrong: the page rendered, from the copy we already had.
- * The page cache simply never filled, and a saved wiki shadowed the live site
- * for ever.
- */
+/* The refresh must survive the browser having consumed the body it was
+ * handed: the comparison copy has to be cloned before the response goes out. */
 async function checkRefreshSurvivesAConsumedBody() {
   console.log('\nservice worker: refreshing a page that has been read\n');
 
@@ -683,15 +579,8 @@ async function checkRefreshSurvivesAConsumedBody() {
         !(w.seen.errors || []).length, JSON.stringify(w.seen.errors || []));
 }
 
-/*
- * A half-written download must not be served.
- *
- * The panel writes /__ap_complete__ only when every file is in place; entries
- * without it are an abort or a quota kill. The worker used to go by cache name
- * alone, so it served fragments of a failed download in preference to the
- * network while the panel said nothing was saved and offered no way to remove
- * what was being served.
- */
+/* A cache without the completion marker is an aborted download and must not
+ * be served. */
 async function checkMarkerRespected() {
   console.log('\nservice worker: a download without its marker is not a copy\n');
 
@@ -721,11 +610,8 @@ async function checkMarkerRespected() {
         r3 === w3.seen.servedCopy ? 'served' : String(r3));
 }
 
-/*
- * The offline copy is the archive's REWRITTEN page, so it never matches the
- * original the site serves; comparing them fired the "this page updated" toast
- * on every navigation. Only a page-cache copy (network origin) is comparable.
- */
+/* A saved wiki's page is the archive's rewritten version and must never be
+ * compared with the network copy, or every page reads as "updated". */
 async function checkNoFalseUpdateToast() {
   console.log('\nservice worker: no false "page updated" from the offline copy\n');
 
@@ -744,21 +630,8 @@ async function checkNoFalseUpdateToast() {
         JSON.stringify(w.seen.posted));
 }
 
-/*
- * Storage being full must not make a working request look like a broken one.
- *
- * Every route fetches, stores, then returns, and the store used to sit inside
- * the try written for a network failure. cache.put() rejects with
- * QuotaExceededError when there is no room, the rejection landed in that catch,
- * and a request that had SUCCEEDED on the network was answered from the offline
- * path instead - 504, or the offline page - while the reader was online with
- * the response in hand.
- *
- * WebKit reports a 1.0 GB quota against the 697 MB of archives this feature
- * invites people to save, so it is Safari readers who would have met it, on the
- * browser least able to spare the room. Chromium and Firefox report 6.5 GB and
- * 10.7 GB here, which is why local testing would never have shown it.
- */
+/* A QuotaExceededError on store must not turn a successful network response
+ * into an offline answer. WebKit's quota is about 1 GB. */
 async function checkFullStorageFailsOpen() {
   console.log('\nservice worker: no room to cache, still online\n');
 
@@ -788,9 +661,7 @@ async function checkFullStorageFailsOpen() {
     const w = bootWorker({ networkFails: true,
                            offlineCopy: { path: INDEX, body: 'SAVED' } });
     const res = await w.ask(INDEX);
-    // The harness serves archive hits as Response-shaped objects, so identity
-    // against the copy it handed out is what says "this came from storage"
-    // rather than from a constructed 504.
+    // Identity with the served object says "from storage", not a built 504.
     check('a genuine network failure is still answered from the archive',
           !!res && res === w.seen.servedCopy,
           res ? 'status ' + res.status + (res === w.seen.servedCopy
@@ -845,21 +716,9 @@ function keyOfUrl(r) {
   return u.startsWith('http') ? new URL(u).pathname : u;
 }
 
-/*
- * The firmware version dropdown offers only what this device can open.
- *
- * The index names every version the build produced; the archive holds the ones
- * the reader ticked, because those pages are 4 to 6 MB each. Offline that made
- * the dropdown offer fifteen doors of which one opened.
- *
- * Filtered in the worker rather than on the page, and this is why: 66 of the 72
- * pages carrying that dropdown are frozen HTML copied out of
- * ../old_params_mversion which Sphinx never renders, so no template can reach
- * them. They all fetch this one URL. Nothing filtered is stored either - a
- * trimmed copy written to the cache would sit under the archive's file table,
- * which hashes this path, so the next differential update would fetch the real
- * one back and the dropdown would quietly start lying again.
- */
+/* Offline, the firmware version index offers only the versions held. Filtered
+ * in the worker, since 66 of the pages carrying the dropdown are frozen HTML;
+ * nothing filtered is stored. */
 async function checkParamIndexFiltered() {
   console.log('\nservice worker: the version dropdown offers only what is held');
 
@@ -990,30 +849,22 @@ async function main() {
         !(await ask('/' + WIKI + '/docs/no-such-page-here')));
 
   /* ------------------------------------------------ lookups stay exact ---- */
-  // A request carrying Sphinx's fingerprint must still resolve. The shapes are
-  // built from url.pathname, so the query never reaches the lookup, which is
-  // what makes an exact match sufficient.
+  // Shapes are built from the pathname, so a fingerprint query never reaches
+  // the lookup and an exact match is enough.
   check('a fingerprinted asset URL still resolves',
         !!(await ask('/' + WIKI + '/_static/css/theme.css?v=5d32c60e')) ||
         !!(await ask('/' + WIKI + '/index.html?highlight=motor')),
         'query stripped before lookup');
 
-  // Asking the Cache API to ignore the query disables its hash lookup on the
-  // key and makes it walk the whole cache. Measured on twelve saved wikis:
-  // 0.2 ms exact against 325 ms for the all-caches fallback, paid on every
-  // request for anything not stored. Nothing here needs it, because no stored
-  // key carries a query and no shape does either.
+  // ignoreSearch walks the whole cache: 0.2 ms exact against 325 ms.
   const workerSrc = fs.readFileSync(WORKER, 'utf8');
   check('the offline lookup does not ask the cache to ignore the query',
         !/ignoreSearch\s*:/.test(workerSrc),
         'exact matches only');
 
   /* ------------------------------------------- wikis folded into common --- */
-  // About has no archive of its own; its pages ride inside common and keep
-  // their /ardupilot/... URLs. They resolve either way - the exhaustive search
-  // finds anything - so the thing worth asserting is that they resolve by NAME,
-  // because the difference between the two paths is 0.2 ms and 325 ms on every
-  // request, and nothing else would ever report it.
+  // A folded wiki's pages resolve either way; assert they resolve by NAME,
+  // since the exhaustive fallback is 325 ms against 0.2 ms.
   check('a folded wiki is looked up in the common cache, not its own',
         ctx.likelyCacheName('/ardupilot/docs/about.html') ===
           'ardupilot-offline-common',
@@ -1022,10 +873,8 @@ async function main() {
         ctx.likelyCacheName('/copter/docs/x.html') === 'ardupilot-offline-copter');
 
   /* ---------------------------------------------------------- images ------ */
-  // With the network down and nothing browsed beforehand, every image a
-  // downloaded wiki holds has to come out of the download. Images unique to
-  // one wiki are the ones that were missing: the shared set resolved through
-  // the /_common/ remap, so most pictures appeared and the rest did not.
+  // Every image a saved wiki holds must come out of the download, the
+  // wiki-unique ones included.
   const ownImages = wikiNames
     .filter((n) => /^[^/]+\/_images\/[^/]+$/.test(n))
     .map((n) => '/' + n);

@@ -1,22 +1,12 @@
 /*
- * Serve the locally built wiki the way a deployed mirror does, without copying
- * ten gigabytes into a staging directory first.
- *
- * deploy_mirror.sh lays out `frontend/*` at the web root, each wiki's
- * `build/html` under its own name, and `offline/` alongside. This maps those
- * three sources onto one origin at request time instead:
+ * Serve the locally built wiki as production lays it out, on one origin:
  *
  *   /offline/<f>        -> offline/<f>
  *   /<wiki>/<rest>      -> <wiki>/build/html/<rest>
  *   everything else     -> frontend/<path>
  *
- * localhost is a secure context, so service workers register over plain HTTP
- * and no certificate is needed.
- *
- * Used by test_offline_browsers.js, which stops the server mid-test: killing a
- * local origin is the only way to take *every* engine offline, since
- * Playwright's setOffline does not reach service worker fetches outside
- * Chromium.
+ * Used by test_offline_browsers.js, which stops the server to take every
+ * engine offline.
  */
 'use strict';
 
@@ -76,11 +66,8 @@ function resolveFile(urlPath) {
   return path.join(ROOT, 'frontend', ...parts);
 }
 
-/*
- * The header rules that the offline feature actually depends on, copied from
- * frontend/_headers. A test that serves sw.js cacheable would pass while the
- * real recovery path is broken.
- */
+// The header rules the feature depends on; sw.js served cacheable would break
+// the kill switch.
 function extraHeaders(urlPath) {
   if (urlPath === '/sw.js') {
     return { 'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/' };
@@ -91,13 +78,8 @@ function extraHeaders(urlPath) {
   return {};
 }
 
-/*
- * Deploying a new service worker is the one routine event that takes control
- * away from every tab already on the site, so a test has to be able to cause
- * one. Bumping this appends a changed comment to sw.js, which is all the
- * browser compares - the worker then installs, skipWaiting()s and activates,
- * exactly as a real deploy does.
- */
+// Bumping this appends a changed comment to sw.js, which is all a browser
+// compares, so a test can cause a worker update.
 let workerBuild = 0;
 function bumpWorker() {
   workerBuild += 1;
@@ -109,17 +91,8 @@ function createServer() {
     const urlPath = (req.url || '/').split('?')[0];
     const file = resolveFile(req.url || '/');
 
-    /*
-     * nginx gzip_static, which the mirror relies on and this has to match.
-     *
-     * The manifest deliberately names `<wiki>-offline.tar`, with no .gz: nginx
-     * finds the .gz beside it and serves that with Content-Encoding: gzip, so
-     * the browser inflates the archive natively and the unpacker gets a plain
-     * tar stream. Without this the archives 404 here while working in
-     * production, which is the wrong way round for a test server whose whole
-     * job is to behave like the real one. Verified against the mirror:
-     * requesting the .tar returns 200, Content-Encoding: gzip.
-     */
+    // nginx gzip_static: <name>.tar is answered with <name>.tar.gz and
+    // Content-Encoding: gzip.
     if (urlPath.endsWith('.tar') && fs.existsSync(file + '.gz')) {
       const gz = file + '.gz';
       res.writeHead(200, Object.assign({

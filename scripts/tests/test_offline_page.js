@@ -1,18 +1,10 @@
 /*
- * Harness for common/source/_static/common_offline_page.js, the offline manager panel.
+ * Harness for common_offline_page.js, the offline panel, against a real DOM
+ * (jsdom) and a CacheStorage-alike. The markup comes from common-offline.rst
+ * so the script and its page cannot drift apart unnoticed.
  *
  *   npm install --no-save jsdom
  *   node scripts/tests/test_offline_page.js
- *
- * The exporter has had a harness since early on; the panel had only ever been
- * checked by a person clicking it. This drives it against a real DOM and a
- * CacheStorage-alike, so the states that are tedious to reach by hand - a wiki
- * saved from an older build, a download interrupted halfway, a manifest that
- * fails to load, a completion marker that cannot be read - are asserted rather
- * than eyeballed.
- *
- * The markup comes out of common-offline.rst rather than being copied here, so
- * the script and the page it drives cannot drift apart without this noticing.
  */
 const fs = require('fs');
 const path = require('path');
@@ -22,9 +14,6 @@ let JSDOM, VirtualConsole;
 try {
   ({ JSDOM, VirtualConsole } = require('jsdom'));
 } catch (e) {
-  // Exit NON-zero. This used to exit 0, so `npm test` reported "all checks
-  // passed" while running none of the 99 assertions below - a green suite that
-  // proved nothing, on every machine where jsdom was not already installed.
   // A test run that cannot run is a failure, not a pass.
   console.error('\nFAILED: this harness needs jsdom, which is not installed.\n' +
                 '  npm install --no-save jsdom\n' +
@@ -38,15 +27,10 @@ const STATIC = path.join(REPO, 'common/source/_static');
 const PAGE = path.join(STATIC, 'common_offline_page.js');
 const RST = path.join(REPO, 'common/source/docs/common-offline.rst');
 
-// The panel is loaded on the page after its libraries, which attach namespaces
-// to the global (ApUnpack, ...). The harness loads them in the same order so
-// the panel finds them, exactly as the browser does via the script tags.
+// Loaded in the page's own order, so the panel finds its libraries.
 const PANEL_LIBS = ['common_offline_unpack.js', 'common_offline_update.js'];
 
-// One module-level copy of the unpacker, for helpers that run outside any
-// panel sandbox. Its cachePathFor is the single definition of where an archive
-// entry is stored, and the harness has to seed caches by that same rule or it
-// tests a layout no reader has.
+// Caches are seeded by the shipped cachePathFor rule, not a restatement of it.
 const ApUnpack = (() => {
   const box = { window: null, console, TextDecoder, TextEncoder, URL };
   box.window = box;
@@ -65,15 +49,8 @@ function check(name, ok, detail) {
 
 /* ---------------------------------------------------------- cache shim ---- */
 
-/**
- * Bodies are kept as bytes, not as strings.
- *
- * The differential update fetches a changed file, takes its blob, and puts that
- * blob straight into the cache. Stringifying on the way in would make every
- * such body the literal "{}" and the update tests would then pass while storing
- * nothing recognisable. Keeping a Buffer lets a test read back what was
- * actually written and compare it with what the server sent.
- */
+/** Bodies are kept as bytes, so a test can compare what was written with what
+ *  the server sent. */
 class FakeResponse {
   constructor(body) {
     this._b = typeof body === 'string' ? body
@@ -112,15 +89,8 @@ function makeCaches() {
   };
 }
 
-/**
- * A real tar, NOT gzipped: the archive is served as a content coding now,
- * so the browser decompresses before the client sees a byte. Feeding gzip
- * here would test a pipeline that no longer exists. The download path runs
- * to completion rather than
- * stopping at the fetch. Without this the completion marker is never written
- * and the freshness contract - download, record the build, compare it on the
- * next check - cannot be tested at all.
- */
+/** A real tar, not gzipped: the browser decompresses the content coding before
+ *  the client sees a byte. */
 function tarBytes(files) {
   const blocks = [];
   const record = (name, body, type) => {
@@ -140,9 +110,7 @@ function tarBytes(files) {
     blocks.push(head, data, Buffer.alloc((512 - (data.length % 512)) % 512));
   };
   for (const [name, body] of Object.entries(files)) {
-    // A name longer than the 100-byte field is stored the way Python's tarfile
-    // does by default: a PAX extended header carrying path=, then the file
-    // entry with a truncated name field. The unpacker must honour the header.
+    // Over 100 bytes: a PAX header carrying path=, as Python's tarfile writes.
     if (name.length > 100) {
       const rec = `path=${name}\n`;
       const len = (String(rec.length + 4).length + rec.length + 1);
@@ -162,10 +130,7 @@ function streamOf(buf) {
 
 /* -------------------------------------------------------- page under test - */
 
-/**
- * Build the panel's real markup out of the .rst, so the test breaks if the
- * markup and the script drift apart rather than testing a copy that cannot.
- */
+/** The panel's real markup, out of the .rst. */
 function panelMarkup() {
   const rst = fs.readFileSync(RST, 'utf8');
   // Start at whichever of the panel's blocks comes first: the warning sits
@@ -173,10 +138,7 @@ function panelMarkup() {
   const panel = rst.indexOf('<div class="apo">');
   const warn = rst.indexOf('<div id="storage-warning">');
   const start = warn !== -1 && warn < panel ? warn : panel;
-  // Search forward from the panel, not from the top of the file: the
-  // stylesheet is inlined above the markup now and mentions the install
-  // button by name, so an absolute search matched inside the CSS and cut
-  // the slice to nothing.
+  // Forward from the panel: the CSS above it names the install button too.
   const end = rst.indexOf('Install as an app', start);
   let html = rst.slice(start, end);
   html = html.replace(/^\s{0,3}/gm, '');            // rST indentation
@@ -184,14 +146,8 @@ function panelMarkup() {
   return html + '<div id="ap-install-app"></div><span id="install-state"></span>';
 }
 
-/**
- * A site that serves file tables and individual files.
- *
- * `tables` maps a published table's filename to its contents, and `served`
- * maps a path this site answers - the same paths the wiki itself is served at -
- * to the bytes at it. Anything not in `served` 404s, which is how the shared
- * image fallback is exercised: the first wiki tried does not have the file.
- */
+/** A site serving file tables (`tables`) and files (`served`); anything else
+ *  404s, which exercises the shared-image fallback. */
 function load({ manifest = null, caches = makeCaches(), persisted = false,
                 usage = 0, quota = 10e9, archives = null,
                 tables = null, served = null, rateLimit = false,
@@ -210,10 +166,7 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
   const swMessages = [];
   const sandbox = {
     window: w, document: w.document,
-    // A global, as it is in a browser. Without it the shared-file path - the
-    // only code here that asks which wiki is being read - threw a ReferenceError
-    // that the update's own error handling turned into a silent fall back to
-    // downloading the whole archive.
+    // A global, as in a browser; the shared-file path reads it.
     location: w.location,
     navigator: {
       storage: {
@@ -309,9 +262,7 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
   return { dom, w, doc: w.document, sandbox, fetchCalls, fetchOpts, swMessages };
 }
 
-// The build's file hash, in Node, so a test's published table can carry the
-// hash of exactly the bytes it serves. Same as build_offline_artifacts.file_hash
-// and the client's hashBytes: sha256, first eight bytes, hex.
+// The build's file hash: sha256, first eight bytes, hex.
 async function fileHash(text) {
   const d = await require('crypto').webcrypto.subtle.digest('SHA-256', Buffer.from(text));
   return [...new Uint8Array(d).slice(0, 8)].map(b => b.toString(16).padStart(2, '0')).join('');
@@ -647,9 +598,7 @@ async function main() {
   console.log('\nfreshness: the whole round trip');
   {
     const caches = makeCaches();
-    // A page whose name exceeds the tar 100-byte field, stored PAX-style, just
-    // like the real archives (one such page per wiki). The unpacker must key it
-    // by its full name or it is unreachable offline.
+    // A PAX-style long name, as the real archives have one per wiki.
     const longName = 'copter/docs/how-to-use-the-auth-command-to-sign-a-' +
                      'pixhawk-board-with-your-certificate-of-authenticity.html';
     const first = load({ manifest: MANIFEST, caches,
@@ -709,32 +658,17 @@ async function main() {
   }
 
   /* --------------------------------------------- differential updates ----- */
-  //
-  // The browser proof of this path took most of a session and is slow to
-  // repeat, so it is asserted here against bytes in the cache rather than
-  // against what the panel says it did. The distinction matters: the count in
-  // the panel is derived from the size of the diff, so a run that fetched
-  // nothing at all could still report that it updated nine files.
+  // Asserted against bytes in the cache, not against what the panel says it did.
 
   const TABLE_KEY = '/__ap_files__';
 
-  /**
-   * What a finished download leaves behind: the files, the table describing
-   * them, and the completion marker naming the build they came from.
-   *
-   * `files` maps an archive path to [hash, body]. The hash is opaque - the
-   * client never computes one, it only compares - so any distinct string will
-   * do, and using readable ones makes a failure legible.
-   */
+  /** What a finished download leaves behind: files, table and completion
+   *  marker. `files` maps archive path to [hash, body]. */
   async function seedSaved(cachesObj, id, build, files) {
     const c = await cachesObj.open('ardupilot-offline-' + id);
     const table = {};
     for (const [name, [hash, body]] of Object.entries(files)) {
       table[name] = hash;
-      // Seeded where the unpacker really puts it, via the shipped rule rather
-      // than a restatement of it: a harness that stores folded pages somewhere
-      // production does not would test the update against a cache no reader
-      // has.
       await c.put(ApUnpack.cachePathFor(id, name), new FakeResponse(body));
     }
     await c.put(TABLE_KEY, new FakeResponse(JSON.stringify(table)));
@@ -747,9 +681,7 @@ async function main() {
     return r ? await r.text() : null;
   };
   const OLD_BUILD = '2020-01-01T00:00:00Z';
-  // Requests for content from this site: not the CDN the tables and archives
-  // sit on, and not the manifest, which is fetched from a relative path before
-  // the manifest itself has said where the artifacts live.
+  // Content requests only: not the archive host, not the manifest.
   const siteCalls = (calls) => calls.filter(
     u => u.indexOf('/') === 0 && u.indexOf('offline-manifest.json') === -1 &&
          u.indexOf('-files.json') === -1);
@@ -757,9 +689,7 @@ async function main() {
   console.log('\ndifferential update: only what moved');
   {
     const cachesObj = makeCaches();
-    // Both saved from an older build, so both are stale and both are checked.
-    // Common's table is unchanged, which is the ordinary case: one wiki edited,
-    // everything else identical.
+    // Both stale; common's table is unchanged, the ordinary case.
     await seedSaved(cachesObj, 'common', OLD_BUILD, {
       '_images/shared.png': ['c1', 'shared bytes']
     });
@@ -771,9 +701,7 @@ async function main() {
       'copter/docs/gone.html': ['h5', 'old gone']
     });
 
-    // The published hash for a changed file is the real hash of what the
-    // server will send, because the client now verifies. Unchanged entries
-    // keep arbitrary values; they are never fetched.
+    // Changed files carry the real hash of what the server sends; the client verifies.
     const { doc, fetchCalls, fetchOpts } = load({
       manifest: MANIFEST, caches: cachesObj,
       tables: {
@@ -809,9 +737,6 @@ async function main() {
     check('a changed non-page holds the new bytes',
           (await bodyAt(copter, '/copter/searchindex.js')) === 'NEW searchindex',
           JSON.stringify(await bodyAt(copter, '/copter/searchindex.js')));
-    // The failure this guards against is the one that was actually shipped:
-    // HTML answered from the cache being refreshed and written back over
-    // itself, which looks identical to an update that worked.
     check('an unchanged page keeps its own bytes, not a refetched copy',
           (await bodyAt(copter, '/copter/index.html')) === 'old index' &&
           (await bodyAt(copter, '/copter/docs/b.html')) === 'old b',
@@ -830,10 +755,7 @@ async function main() {
     check('the marker moves to the build that was applied',
           marker.build === MANIFEST.generated, JSON.stringify(marker.build));
 
-    // Untagged requests take the cache-first route in the worker, which answers
-    // an update out of the very cache it is refreshing. Every request on this
-    // path has to carry the tag; this is the assertion that was missing when
-    // that shipped.
+    // Untagged requests would be answered from the cache being refreshed.
     check('every update request is tagged for the network',
           siteCalls(fetchCalls).length > 0 &&
           siteCalls(fetchCalls).every(u => u.indexOf('ap-update=') !== -1),
@@ -842,9 +764,7 @@ async function main() {
           fetchOpts.filter(f => f.url.indexOf('/') === 0)
                    .every(f => f.opts && f.opts.cache === 'no-cache'));
 
-    // An unchanged wiki costs one request for its table and no more. This is
-    // the whole point of the design: a typo in Copter must not cost anyone the
-    // 439 MB of common.
+    // An unchanged wiki costs one table request and no more.
     const commonCalls = fetchCalls.filter(u => u.indexOf('common') !== -1);
     check('an unchanged wiki costs one request, its table',
           commonCalls.length === 1 && commonCalls[0].indexOf('common-files.json') !== -1,
@@ -854,10 +774,7 @@ async function main() {
           JSON.parse(await bodyAt(commonCache, '/__ap_complete__')).build ===
             MANIFEST.generated);
 
-    // Two fetched, one deleted. The count is currently derived from the size of
-    // the diff rather than from writes that completed, so it would report the
-    // same on a run that stored nothing. It is true here, and this pins it to
-    // what the cache actually holds so that it stays true.
+    // Two fetched, one deleted; pinned to what the cache holds.
     check('the reported count equals the changes actually applied',
           ($(doc, 'check-result').textContent || '').indexOf('3 files') !== -1,
           JSON.stringify($(doc, 'check-result').textContent));
@@ -865,9 +782,7 @@ async function main() {
 
   console.log('\na quiet update never starts an archive download by itself');
   {
-    // Observed live before the fix: a background tick, no click anywhere, and
-    // 439 MB on its way. The fallback from the cheap path is the most
-    // expensive action in the product and must not run unattended.
+    // The archive fallback is the most expensive action here; never unattended.
     const cachesObj = makeCaches();
     // A wiki saved before tables existed: updateStored() resolves null, which
     // is the fallback trigger.
@@ -884,9 +799,7 @@ async function main() {
     await settle();
     // The quiet path, exactly as the timer calls it.
     await sandbox.window.eval ? null : null;
-    // Reach the internals the way the scheduler does: fire a tick.
-    // checkForUpdates(true) is not exported, so drive it via the checkbox
-    // handler's immediate tick after re-enabling autoupdate.
+    // Fire a tick via the autoupdate checkbox; checkForUpdates is not exported.
     doc.getElementById('autoupdate').checked = false;
     doc.getElementById('autoupdate').dispatchEvent(
       new sandbox.window.Event('change', { bubbles: true }));
@@ -912,10 +825,7 @@ async function main() {
 
   console.log('\nthe update paces itself and backs off when told to');
   {
-    // The client is the rate limiter here, so these two behaviours are load
-    // bearing rather than polite. Sequential fetches with no pause ran at about
-    // 75 a second from one browser; a hundred readers doing that after a build
-    // is 7,500 a second at the origin.
+    // The client is the rate limiter: unpaced fetches ran at 75 a second.
     const cachesObj = makeCaches();
     const files = {};
     for (let i = 0; i < 8; i++) { files['dev/docs/p' + i + '.html'] = ['h' + i, 'old']; }
@@ -936,18 +846,12 @@ async function main() {
     $(doc, 'check-btn').click();
     for (let i = 0; i < 40; i++) { await settle(); }
 
-    // The gaps between consecutive file requests, which is what pacing means.
-    // Wall-clock time is no use here: it is dominated by the harness's own
-    // polling, so an unpaced run looks identical to a paced one.
+    // Gaps between requests, not wall time, which the harness dominates.
     const times = fetchOpts.filter(f => f.url.indexOf('/') === 0 &&
                                         f.url.indexOf('ap-update=') !== -1)
                            .map(f => f.at);
     const gaps = times.slice(1).map((t, i) => t - times[i]).sort((a, b) => a - b);
-    // The MEDIAN gap, not every gap. Under a loaded machine the harness's own
-    // timers can batch and produce one or two artificially short gaps, which
-    // made this assertion flaky. The median is robust to that and still bites:
-    // remove the pacing and every gap collapses toward zero, taking the median
-    // with it. Floor is 60% of the 66 ms interval.
+    // The median: a loaded machine batches a timer or two. Floor is 60% of 66 ms.
     const median = gaps.length ? gaps[Math.floor(gaps.length / 2)] : 0;
     const floor = (1000 / 15) * 0.6;
     check('consecutive update requests are spaced apart',
@@ -955,12 +859,8 @@ async function main() {
           gaps.length + ' gaps, median ' + median + ' ms, need >= ' + Math.round(floor));
   }
   {
-    // A 429 is the server saying stop. Trying the next wiki for that file would
-    // be one more request at precisely the wrong moment.
-    // A shared file, deliberately: those are looked for under every wiki in
-    // turn, so ignoring a 429 means asking the struggling server four more
-    // times for the same file. A wiki-owned file has only one source and would
-    // make this look fine either way.
+    // A shared file, deliberately: it has several sources, so ignoring a 429
+    // would mean four more requests to a struggling server.
     const cachesObj = makeCaches();
     await seedSaved(cachesObj, 'common', OLD_BUILD, {
       '_images/shared.png': ['c1', 'old'],
@@ -974,9 +874,7 @@ async function main() {
     await settle();
     $(doc, 'check-btn').click();
     for (let i = 0; i < 25; i++) { await settle(); }
-    // Every source is tagged ap-update, so the refusal lands on the first one
-    // tried - now the loose /files/ copy - and the walk stops there. Count all
-    // tagged fetches, not just same-origin ones: exactly one, then it gives up.
+    // Exactly one tagged fetch, then it gives up.
     const tagged = fetchCalls.filter(u => u.indexOf('ap-update=') !== -1);
     check('a 429 stops the update rather than trying every other source',
           tagged.length === 1,
@@ -985,9 +883,7 @@ async function main() {
 
   console.log('\nautomatic updates are spread out, not synchronised');
   {
-    // Every reader on a fixed interval discovers a new build in the same window
-    // and starts fetching together. The interval must be jittered or the update
-    // mechanism floods its own origin whenever a template changes.
+    // A fixed interval would have every reader fetch a new build together.
     const src = fs.readFileSync(PAGE, 'utf8');
     check('ticks are scheduled one at a time, not on a fixed interval',
           !/setInterval\(autoUpdateTick/.test(src) && /scheduleNextTick/.test(src),
@@ -1018,19 +914,14 @@ async function main() {
 
   console.log('\ndifferential update: a large diff falls back to the archive');
   {
-    // A template or stylesheet change rewrites every page, and then the
-    // "difference" is the whole wiki fetched one request at a time. Measured on
-    // a real reader with twelve wikis saved: 5,169 requests from one browser.
-    // Past a threshold this must give up and use the archive, which is one.
+    // A stylesheet change rewrites every page; past a threshold use the archive.
     const cachesObj = makeCaches();
     const many = {};
     for (let i = 0; i < 400; i++) { many['dev/docs/p' + i + '.html'] = ['h' + i, 'old ' + i]; }
     await seedSaved(cachesObj, 'dev', OLD_BUILD, many);
 
-    // Make every changed file genuinely fetchable, with the RIGHT hash, so the
-    // only reason not to fetch them one by one is the cap. Otherwise the test
-    // passes whether the cap fires or the files simply 404, which does not
-    // isolate the thing under test.
+    // Every changed file is fetchable with the right hash, so only the cap can
+    // stop the one-by-one path.
     const published = {};
     const loose = {};
     for (const k of Object.keys(many)) {
@@ -1087,20 +978,14 @@ async function main() {
 
   console.log('\ndifferential update: a wrong body is refused, not stored');
   {
-    // The blocker a reviewer found: a 200 with the wrong body (captive portal,
-    // error page, mid-deploy skew) was stored verbatim and the table rewritten
-    // to claim health, so no later update could ever detect it. The client now
-    // hashes what it fetched against the table and refuses a mismatch.
+    // A 200 with the wrong body (captive portal, mid-deploy skew) is refused.
     const cachesObj = makeCaches();
     const copter = await seedSaved(cachesObj, 'copter', OLD_BUILD, {
       'copter/docs/a.html': ['h1', 'old a'],
     });
     (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
       completeMarker(MANIFEST.generated, 'common'));
-    // No archive available either, so the differential path is observed in
-    // isolation: if it wrongly advanced the table, nothing downstream would
-    // correct it. (When an archive IS available it repairs the wiki, which is
-    // fine and desirable; that is a different assertion.)
+    // No archive either, so the differential path is observed in isolation.
     const { doc, fetchCalls } = load({
       manifest: MANIFEST, caches: cachesObj,
       // The table promises the hash of the RIGHT bytes...
@@ -1128,9 +1013,7 @@ async function main() {
 
   console.log('\ndifferential update: rewritten files come from /files/');
   {
-    // The build publishes rewritten HTML at <base>/files/<name>; those are the
-    // bytes the table hashes. The update must prefer them, or it fetches the
-    // original from the live path, mismatches, and re-downloads the whole wiki.
+    // The loose copy under <base>/files/ is what the table hashes.
     const cachesObj = makeCaches();
     const copter = await seedSaved(cachesObj, 'copter', OLD_BUILD, {
       'copter/docs/a.html': ['h1', 'old a'],
@@ -1141,9 +1024,7 @@ async function main() {
     const { doc, fetchCalls } = load({
       manifest: MANIFEST, caches: cachesObj,
       tables: { 'copter-files.json': { 'copter/docs/a.html': await fileHash(rewritten) } },
-      // The loose copy has the rewritten bytes (hash matches the table). The
-      // live path has the ORIGINAL, which would NOT match - if the client used
-      // it, verification would reject and this would fall back to the archive.
+      // The live path has the original, which would not match.
       loose: { 'copter/docs/a.html': rewritten },
       served: { '/copter/docs/a.html': '<html>ORIGINAL a</html>' },
     });
@@ -1164,9 +1045,7 @@ async function main() {
 
   console.log('\ndifferential update: a shared file is found under some wiki');
   {
-    // Common's files are stored once under /_common/, a path this site never
-    // serves. Each is published under every wiki that uses it, so the update
-    // tries the wikis in turn. Here only Rover has it.
+    // A shared image is tried under each wiki in turn; here only Rover has it.
     const cachesObj = makeCaches();
     const common = await seedSaved(cachesObj, 'common', OLD_BUILD, {
       '_images/shared.png': ['c1', 'old shared bytes']
@@ -1196,9 +1075,7 @@ async function main() {
 
   console.log('\ndifferential update: a failure leaves the record intact');
   {
-    // One changed file is unavailable everywhere. The update must not record
-    // itself as complete, because a wiki that claims a build it does not have
-    // is one no later update will ever correct.
+    // A wiki must not claim a build it does not have.
     const cachesObj = makeCaches();
     const copter = await seedSaved(cachesObj, 'copter', OLD_BUILD, {
       'copter/index.html':  ['h1', 'old index'],
@@ -1231,17 +1108,13 @@ async function main() {
 
   console.log('\ndifferential update: download, then update');
   {
-    // The two halves joined up: a real archive download has to leave behind a
-    // table an update can compare against, or the differential path can never
-    // engage for anyone who obtained their copy the normal way.
+    // A real download must leave a table behind, or updates never engage.
     const cachesObj = makeCaches();
     const first = load({
       manifest: MANIFEST, caches: cachesObj,
       archives: { 'copter/index.html': 'from the archive',
                   'copter/docs/a.html': 'a from the archive' },
-      // Common is always part of a download, so it needs a table too, or it
-      // falls back to its own archive on the next check and the run below is
-      // measuring two different things at once.
+      // Common needs a table too, or the next check re-fetches its archive.
       tables: { 'copter-files.json': { 'copter/index.html': 'h1',
                                        'copter/docs/a.html': 'h2' },
                 'common-files.json': { '_images/shared.png': 'c1' } }
@@ -1311,9 +1184,7 @@ async function main() {
 
   console.log('\neviction: a reclaimed wiki is noticed, not silent');
   {
-    // The browser can reclaim "temporary" storage without warning. A wiki we
-    // recorded as saved but that is no longer in Cache Storage was evicted, and
-    // the panel should say so rather than showing it as never-saved.
+    // Recorded as saved but gone from Cache Storage: evicted, and said so.
     const caches = makeCaches();
     // common is present; copter was saved (recorded) but its cache is gone.
     (await caches.open('ardupilot-offline-common')).put('/__ap_complete__',
@@ -1343,9 +1214,7 @@ async function main() {
 
   console.log('\nthe update toast appears and shows progress');
   {
-    // A saved wiki updating itself is news the reader should see, not a hidden
-    // text line. The toast card should appear on a manual check and, when files
-    // are applied, show progress then a done state.
+    // The toast appears on a manual check and shows progress, then done.
     const cachesObj = makeCaches();
     const copter = await seedSaved(cachesObj, 'copter', OLD_BUILD, {
       'copter/docs/a.html': ['h1', 'old a'],
@@ -1374,9 +1243,7 @@ async function main() {
 
   console.log('\nregression: the worker is told when caches change (B3)');
   {
-    // The worker memoises which caches exist and which are complete, and only
-    // rebuilds that on CACHES_CHANGED. Nothing sent it, so a wiki saved or
-    // removed while the worker ran stayed invisible. Assert the message is sent.
+    // The worker memoises cache names and only refreshes on CACHES_CHANGED.
     const cachesObj = makeCaches();
     (await cachesObj.open('ardupilot-offline-copter')).put('/__ap_complete__',
       completeMarker(MANIFEST.generated, 'copter'));
@@ -1394,9 +1261,7 @@ async function main() {
 
   console.log('\nregression: a click on a button child still acts (closest)');
   {
-    // Once armed, Remove all contains a 3px countdown bar. A click landing on
-    // it reported the bar as e.target, matched no id, and was swallowed. The
-    // handler uses closest() now; simulate a click whose target is a child.
+    // A click on the armed button's countdown bar must still count.
     const cachesObj = makeCaches();
     (await cachesObj.open('ardupilot-offline-copter')).put('/__ap_complete__',
       completeMarker(MANIFEST.generated, 'copter'));
@@ -1432,12 +1297,7 @@ async function main() {
 
   console.log('\nregression: a folded wiki updates in place, from its own URL');
   {
-    // The other half of the fold. An About page that changes has to be fetched
-    // from /ardupilot/... - the URL the site actually serves it at - and
-    // written over the copy being read. Because it arrives in the common
-    // archive, the update once treated it like a shared image: looked for it
-    // under every other wiki's prefix, found nothing, and would have written it
-    // to /_common/ardupilot/... if it had.
+    // A folded wiki's page updates from its own URL, over the copy being read.
     const cachesObj = makeCaches();
     await seedSaved(cachesObj, 'common', OLD_BUILD, {
       '_images/shared.png':        ['c1', 'shared bytes'],
@@ -1474,11 +1334,8 @@ async function main() {
 
   console.log('\nB14 + B2: a saved point release is never hidden in the dropdown');
   {
-    // The two features could fight. The shortlist keeps the newest of each
-    // series; a reader who saved 4.5.2 has a version that is NOT the newest of
-    // anything. If the shortlist won, their saved copy would vanish into the
-    // dropdown and the panel would show it as not chosen while it sat in
-    // storage. What you have must always be visible.
+    // A saved point release is not the newest of any series and must still be
+    // a tick: what you have is always visible.
     const mk = (ver) => ({
       file: `docs/parameters-Copter-stable-V${ver}.html`, channel: 'stable',
       version: ver, label: ver, bytes: 4e6,
@@ -1510,13 +1367,8 @@ async function main() {
 
   console.log('\nRemove all quotes what it removes, not what the origin is charged');
   {
-    // Seen live: a table totalling 697 MB, a footer saying 1.0 GB used, and a
-    // button offering to "Delete 1.6 GB". Three numbers, one screen. The button
-    // read navigator.storage.estimate().usage, which counts space the browser
-    // has billed the origin for including anything freed but not yet reclaimed,
-    // so after a day of saving and deleting it bore no relation to what
-    // pressing it would return. A clean download of all eleven wikis measures
-    // 746 MB.
+    // The button quotes the table's sizes, not storage.estimate().usage, which
+    // counts space freed but not yet reclaimed.
     const cachesObj = makeCaches();
     for (const id of ['common', 'copter', 'rover']) {
       (await cachesObj.open('ardupilot-offline-' + id)).put('/__ap_complete__',
@@ -1535,9 +1387,7 @@ async function main() {
       .filter((w) => ['common', 'copter', 'rover'].indexOf(w.id) !== -1)
       .reduce((n, w) => n + w.mb, 0);
 
-    // Any GB figure is wrong here: only 506 MB is saved. Matching the exact
-    // string would not bite, because fmt is 1024-based and renders 1.6e9 as
-    // "1.5 GB".
+    // Any GB figure is wrong: only 506 MB is saved.
     check('the button does not quote the inflated quota figure',
           !/GB/.test(label), JSON.stringify(label));
     check('it quotes the size of what is actually saved',
@@ -1548,12 +1398,7 @@ async function main() {
 
   console.log('\nB8: the toast says why, and offers a button');
   {
-    // "A full download is needed" had three causes and one wording: a diff too
-    // large, a published file list that will not fetch, and a saved copy with
-    // no file list to compare against. Only the first is "a lot has changed".
-    // The other two are "I cannot tell what changed", and wording them as the
-    // first sends the reader looking for a change that never happened - the
-    // real diff across every wiki today is one file.
+    // "Cannot be updated in place" is not "a lot has changed".
     const cachesObj = makeCaches();
     const c = await cachesObj.open('ardupilot-offline-dev');
     await c.put('/dev/index.html', new FakeResponse('<html>'));
@@ -1593,10 +1438,7 @@ async function main() {
 
   console.log('\nB14: a shortlist of ticks, and a dropdown for the rest');
   {
-    // Copter builds fourteen versions. Fourteen tick boxes is why the block had
-    // to be hidden behind a disclosure in the first place, and it still made the
-    // reader scan fourteen near-identical lines. The ticks are now the newest
-    // stable of each release series; everything else is one dropdown press away.
+    // Ticks are the newest stable of each series; the rest is in the dropdown.
     const man = JSON.parse(JSON.stringify(MANIFEST));
     const mk = (ver, ch, dflt) => ({
       file: `docs/parameters-Copter-${ch}-V${ver}.html`,
@@ -1660,10 +1502,7 @@ async function main() {
 
   console.log('\nregression: parameter ticks follow the cache, not the manifest (B2)');
   {
-    // The manifest marks the newest stable as default. That is the right guess
-    // for a reader who has saved nothing, and wrong for everyone else. A reader
-    // holding 4.6.0 must see 4.6.0 ticked and the newer default clear, or
-    // pressing Save fetches a version they never asked for.
+    // A reader holding 4.6.0 must see it ticked and the newer default clear.
     const versions = [
       { file: 'docs/parameters-Copter-stable-V4.7.0.html', label: '4.7.0',
         bytes: 5e6, 'default': true },
@@ -1717,18 +1556,8 @@ async function main() {
 
   console.log('\nregression: a wiki folded into common keeps its own URLs');
   {
-    // The common archive carries two kinds of entry. Shared images are bare
-    // _images/... and belong under /_common/, stored once for every wiki. A
-    // folded wiki (FOLD_INTO_COMMON in build_offline_artifacts.py) is a whole
-    // wiki tree that happens to travel in the same archive, already carrying
-    // its own name, and belongs at /ardupilot/... exactly where it would be if
-    // it still had an archive of its own.
-    //
-    // Applying one prefix to both put all 28 About pages under
-    // /_common/ardupilot/..., a path nothing ever requests. Everything
-    // reported success - the download finished, the entries were in storage,
-    // the manifest was right - and the wiki read as unsaved. Only asking for a
-    // page by its real URL catches it, which is what this does.
+    // Shared images go under /_common/; a folded wiki's pages keep their own
+    // URLs. Only asking for a page by its real URL catches a wrong prefix.
     const { sandbox } = load({ manifest: MANIFEST });
     await settle();
     const cache = await sandbox.caches.open('fold-test');

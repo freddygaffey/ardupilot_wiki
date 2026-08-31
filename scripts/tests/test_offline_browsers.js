@@ -1,32 +1,10 @@
 /*
- * Does the wiki actually read offline, in a real browser, in every engine?
+ * Does the wiki read offline in a real browser, in every engine? Serves the
+ * built tree locally, then STOPS THE SERVER: Playwright's setOffline does not
+ * reach service worker fetches outside Chromium. Covers the read-as-you-browse
+ * path; downloading a 439 MB archive per engine is not attempted.
  *
- *   node scripts/tests/test_offline_browsers.js
- *   node scripts/tests/test_offline_browsers.js --browsers chromium,webkit
- *   node scripts/tests/test_offline_browsers.js --headed --keep
- *
- * The other tests in this directory run the worker's logic under node, which
- * proves the lookup is right and proves nothing about whether a browser hands
- * the navigation to the worker at all. That is a real gap: everything here is
- * only ever exercised by Chrome on one laptop, while Safari and Firefox have
- * their own storage limits, their own service worker lifetimes, and their own
- * rules about which navigations reach a worker.
- *
- * HOW "OFFLINE" IS DONE, AND WHY NOT setOffline
- *
- * Playwright's context.setOffline drops the *page's* requests. Requests the
- * service worker makes are a separate network agent, and outside Chromium they
- * are not covered - so a worker that quietly went to the network would still
- * pass. This serves the built tree from a local server and then STOPS THE
- * SERVER. Every engine is then genuinely offline for that origin, with no
- * emulation involved and nothing to be wrong about.
- *
- * WHAT IT DOES NOT COVER
- *
- * Downloading an archive: `common` is 439 MB and required, which is minutes per
- * engine and gigabytes of disk. This covers the read-as-you-browse path, which
- * is the one every reader gets for free. Storage headroom for the archive path
- * is reported per engine instead - see the quota check.
+ *   node scripts/tests/test_offline_browsers.js [--browsers chromium,webkit] [--headed --keep]
  */
 
 'use strict';
@@ -64,14 +42,7 @@ const COMPRESSED_PROBE = '/dev/docs/ap-compressed-probe.html';
 const results = [];
 let failures = 0;
 
-/*
- * Where the time goes.
- *
- * This suite drives three real browsers through a full service worker
- * lifecycle, and "it takes a while" is not a useful answer when someone asks
- * why. Every phase is timed and printed, so the cost is attributable rather
- * than mysterious - and so that a change which doubles it is visible.
- */
+// Every phase is timed and printed, so the cost is attributable.
 const timings = [];
 async function phase(engine, label, fn) {
   const at = Date.now();
@@ -91,12 +62,7 @@ function check(engine, name, ok, detail) {
 
 /* ---------------------------------------------------------------- helpers -- */
 
-/**
- * Wait until a service worker is not merely registered but *controlling* this
- * page. The distinction is the whole test: an uncontrolled page goes to the
- * network for its next navigation and shows the browser's own error page,
- * which is exactly the failure this suite exists to catch.
- */
+/** Wait until a worker is controlling this page, not merely registered. */
 async function waitForControl(page, timeout = 30000) {
   const deadline = Date.now() + timeout;
   while (Date.now() < deadline) {
@@ -112,9 +78,7 @@ async function waitForControl(page, timeout = 30000) {
     });
     if (!state.supported) { return state; }
     if (state.controlled) { return state; }
-    // The worker claims clients on activate, so control normally arrives
-    // without a reload; reload anyway once it is active, for engines that
-    // apply claim only to the next navigation.
+    // Reload once active, for engines that apply claim only to the next navigation.
     if (state.active) {
       await page.reload({ waitUntil: 'domcontentloaded' });
       const now = await page.evaluate(
@@ -126,16 +90,7 @@ async function waitForControl(page, timeout = 30000) {
   return { supported: true, controlled: false, timedOut: true };
 }
 
-/**
- * Load every image the page will ever load, then count the ones that decoded.
- *
- * The theme lazy-loads, so a plain count is a count of what happened to be in
- * the viewport: the Creative Commons badge in the footer reports naturalWidth 0
- * online and offline alike, and an offline check that did not scroll would read
- * that as a cache miss. Scrolling to the bottom first makes the online and the
- * offline number comparable, which is the only form of this check that means
- * anything.
- */
+/** Scroll to the bottom so lazy images load, then count the ones that decoded. */
 async function imageCount(page) {
   await page.evaluate(async () => {
     window.scrollTo(0, document.body.scrollHeight);
@@ -155,13 +110,7 @@ async function imageCount(page) {
   });
 }
 
-/**
- * Median wall time for a navigation the worker answers, over several goes.
- *
- * The median, not the mean: the first navigation after the worker starts pays
- * for starting it, and one 400 ms outlier in five would drag a mean past a
- * budget that the reader never actually experiences.
- */
+/** Median wall time for a navigation, over several goes. */
 async function navigationMs(page, url, runs = 5) {
   const times = [];
   for (let i = 0; i < runs; i++) {
@@ -193,32 +142,10 @@ async function looksLikeWikiPage(page) {
 
 
 /*
- * A deploy, with a page already open.
- *
- * Shipping a new sw.js is the one routine event that takes control away from
- * every tab already on the site, and control is the whole feature: an
- * uncontrolled page goes to the network for its next navigation, so a reader
- * who goes offline while uncontrolled gets the browser's own error page with a
- * full cache sitting untouched. That state was seen once on the live mirror
- * immediately after a deploy - two navigations with no controller, recovering
- * on its own some time later. The cause was never established. This exists so
- * that if it becomes reproducible it is caught here rather than by a reader.
- *
- * The seeded caches matter. Several things the worker does on activation are
- * skipped entirely when nothing is saved - warmTheme() returns at once with no
- * ardupilot-offline-* cache present - so a fresh profile exercises a shorter
- * path than any real reader with wikis saved. These have the right names, the
- * completion marker the worker checks, and about the entry count of a reader
- * holding the full set.
- *
- * It runs in a context of its own, at the end. Seeding 8,800 entries into the
- * context the other checks use made Firefox flake on timing when three engines
- * ran back to back - a test that perturbs the run it is part of is worse than
- * no test.
- *
- * It passes today, and passed both before and after an attempted fix to the
- * activate handler, which is how that fix was shown to be addressing the wrong
- * thing and was dropped.
+ * A deploy with a page already open: how long is the page uncontrolled while
+ * the new worker takes over? Caches are seeded to a full reader's size, since
+ * activation does more with wikis saved. Its own context, at the end: seeding
+ * 8,800 entries into the shared context made Firefox flake.
  */
 async function checkUpdateWindow(name, browser, base) {
   const context = await browser.newContext({ serviceWorkers: 'allow' });
@@ -281,14 +208,7 @@ async function runEngine(name, launcher, base) {
   const context = await browser.newContext({ serviceWorkers: 'allow' });
   const page = await context.newPage();
 
-  /*
-   * Only our own errors count.
-   *
-   * A wiki page embeds YouTube, and Firefox logs a SameSite cookie rejection
-   * for every embed; those are the browser reporting on a third party and say
-   * nothing about the offline feature. Filtering by the message text would go
-   * stale the moment a browser rewords it, so filter by where it came from.
-   */
+  // Only our own errors count, filtered by origin rather than by wording.
   const consoleErrors = [];
   page.on('console', (m) => {
     if (m.type() !== 'error') { return; }
@@ -303,9 +223,7 @@ async function runEngine(name, launcher, base) {
   try {
     /* ---- online: register the worker and read a few pages -------------- */
 
-    /* The worker is opt-in. A reader who has not asked for offline mode must
-     * get NO registration at all - that is the property that lets the feature
-     * ship to production dormant - so pin it before opting in. */
+    // Opt-in: a reader who has not asked must get no registration at all.
     const dormant = await phase(name, 'no worker without opt-in', async () => {
       await page.goto(base + VISITED, { waitUntil: 'load' });
       await page.waitForTimeout(1200);
@@ -359,9 +277,7 @@ async function runEngine(name, launcher, base) {
       await page.goto(base + ALSO_VISITED, { waitUntil: 'load' });
       return imgs;
     });
-    // The search page, so that searchindex.js is fetched at least once. Sphinx
-    // loads it from search.html and from nowhere else, so browsing the wiki
-    // never brings it into the runtime cache on its own.
+    // Only search.html fetches searchindex.js.
     await phase(name, 'load search index', async () => {
       await page.goto(base + SEARCH_PAGE, { waitUntil: 'load' });
       // Give the stale-while-revalidate writes a moment to land.
@@ -395,28 +311,15 @@ async function runEngine(name, launcher, base) {
           'quota ' + quotaGB + ', persist API ' +
           (quota.canPersist ? 'present' : 'MISSING'));
 
-    /*
-     * The same page online, with the worker in front of it.
-     *
-     * stale-while-revalidate answers from storage and refreshes behind, so an
-     * online navigation to a page already read should cost about what the
-     * offline one costs. If it does not, the worker has started waiting on the
-     * network for something it already holds - which is the regression that
-     * took one measured page to 1,501 ms with no third-party requests on it.
-     */
+    // Online, a page already read should cost about what it costs offline.
     const onlineSpeed = await navigationMs(page, base + VISITED);
     check(name, 'an already-read page is not slowed down by being online',
           onlineSpeed.median < 1500,
           'median ' + onlineSpeed.median + ' ms, worst ' + onlineSpeed.worst +
           ' ms of [' + onlineSpeed.all.join(', ') + ']');
 
-    /*
-     * A page stored the way a downloaded wiki now stores one: gzipped, with the
-     * marker header, in an ardupilot-offline-* cache carrying its completion
-     * marker. If the worker serves this as-is the reader sees mojibake, not an
-     * error, which is the kind of failure that reaches people rather than
-     * tests. Seeded before the server stops so the write itself is ordinary.
-     */
+    // A page stored as a saved wiki stores one: gzipped, with the marker
+    // header. Served as-is it would be mojibake, not an error.
     const compressedSeed = await page.evaluate(async (probe) => {
       const html = '<!doctype html><html><head><title>Compressed probe</title>' +
         '</head><body><h1 id="probe">INFLATED-FROM-CACHE</h1><p>' +
@@ -433,16 +336,8 @@ async function runEngine(name, launcher, base) {
       return { raw: html.length, packed: packed.byteLength };
     }, COMPRESSED_PROBE);
 
-    /*
-     * The parameter picker, with the manifest's default applied.
-     *
-     * The panel draws once from its built-in wiki list before the manifest
-     * arrives, so anything that reads per-wiki data has to survive being asked
-     * too early. It did not: an empty selection was memoised on that first
-     * render and the default was never ticked afterwards. Nothing looked
-     * broken - the versions listed correctly, every box just came up clear -
-     * which is why it took a screenshot to catch rather than a test.
-     */
+    // The parameter picker must apply the manifest's default even though the
+    // panel first draws before the manifest arrives.
     const picker = await (async () => {
       const p = await context.newPage();
       try {
@@ -496,40 +391,17 @@ async function runEngine(name, launcher, base) {
           (offlineImages.missing.length
             ? '; missing ' + offlineImages.missing.slice(0, 2).join(', ') : ''));
 
-    /*
-     * How fast, not just whether.
-     *
-     * The whole argument for a service worker here is that a stored page is
-     * quicker than a fetched one, and every strategy in sw.js was chosen on a
-     * measurement: cache-first for _static because revalidating cost twenty
-     * background requests a navigation, an exact cache.match because ignoring
-     * the query string measured 63-79 ms against 0.1-0.3 ms. None of that was
-     * ever guarded, so the next change that quietly reintroduces a per-asset
-     * round trip would show up as "still passes, feels slower".
-     *
-     * Offline there is no network to blame, so the number is the worker plus
-     * the render, and a budget can be honest. 1200 ms is deliberately loose -
-     * it is the wall time of a full navigation including layout in a headless
-     * browser on a busy machine, not a microbenchmark, and it is set to catch a
-     * strategy regression rather than to police tens of milliseconds.
-     */
+    // How fast, not just whether: every strategy in sw.js was chosen on a
+    // measurement, and this budget (loose, a full headless navigation) is what
+    // notices a per-asset round trip creeping back.
     const offlineSpeed = await navigationMs(page, base + VISITED);
     check(name, 'a stored page is served offline well inside the budget',
           offlineSpeed.median < 1200,
           'median ' + offlineSpeed.median + ' ms, worst ' + offlineSpeed.worst +
           ' ms of [' + offlineSpeed.all.join(', ') + ']');
 
-    /*
-     * Offline search.
-     *
-     * searchindex.js sits at a wiki's root, so it matches none of the worker's
-     * page, image or _static routes; it was served from storage by nothing at
-     * all and offline search failed silently while the file sat in the archive.
-     *
-     * The search page was opened online above, which is the only thing that
-     * fetches this file. Fetching it again with no network is the check: if it
-     * resolves with a body, offline search has what it needs.
-     */
+    // Offline search: searchindex.js matches no other route and was fetched
+    // once online above; it must resolve with no network.
     const searchIndex = await page.evaluate(async () => {
       try {
         const r = await fetch('/dev/searchindex.js');
@@ -592,9 +464,7 @@ async function runEngine(name, launcher, base) {
     } catch (err) {
       panelError = String(err.message).split('\n')[0];
     }
-    // The panel is network-only by design (markup and script are one unit), so
-    // offline it is expected to fall back rather than render. Only assert that
-    // it does not leave the reader on a browser error page.
+    // The panel is network-only by design; assert only that it falls back.
     check(name, 'offline panel degrades to the fallback rather than an error',
           !panelError, panelError || '');
 
@@ -610,31 +480,13 @@ async function runEngine(name, launcher, base) {
     check(name, 'the same page loads normally once the network returns',
           !!back.h1, 'h1=' + JSON.stringify(back.h1));
 
-    /*
-     * WebKit logs the browser's own service worker update check when it fails.
-     *
-     * Every engine re-fetches sw.js on navigation, and with the origin down
-     * that fetch cannot succeed. pwa.js catches the rejection from its explicit
-     * registration.update(), but the failed request is still logged by the
-     * browser itself - WebKit as "...sw.js due to access control checks" - and
-     * no page code can suppress a resource load the browser reports. It is a
-     * report about the network, not about this feature, and every offline check
-     * above passes with it in the log.
-     *
-     * Matched on the subject rather than the wording: the wording is the part
-     * that differs between engines and changes between releases.
-     */
+    // WebKit logs the browser's own failed sw.js re-fetch with the origin down;
+    // a report about the network, not this feature. Matched on subject, not wording.
     const fatal = consoleErrors
       .concat(pageErrors)
       .filter((t) => !/favicon|Failed to load resource/i.test(t))
       .filter((t) => !/\/sw\.js/.test(t))
-      /*
-       * A message that names only third-party URLs is about a third party.
-       * Firefox reports the YouTube embeds' blocked doubleclick requests with
-       * no location of its own, so filtering by m.location() alone lets them
-       * through. Reading the URLs out of the text catches them without a
-       * blocklist of hostnames that would need maintaining.
-       */
+      // A message naming only third-party URLs is about a third party.
       .filter((t) => {
         const urls = t.match(/https?:\/\/[^\s"')]+/g);
         return !urls || urls.some((u) => u.startsWith(base));
@@ -720,11 +572,7 @@ async function main() {
     console.log(n.padEnd(width) + '  ' + cells.join(''));
   });
 
-  /*
-   * And where the time went. Three browsers, each taken through a full worker
-   * lifecycle, is not fast and should not pretend to be; what matters is that
-   * the cost is attributable.
-   */
+  // Where the time went.
   const labels = [];
   timings.forEach((t) => {
     if (!labels.includes(t.label)) { labels.push(t.label); }
