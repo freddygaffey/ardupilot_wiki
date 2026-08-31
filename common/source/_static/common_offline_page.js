@@ -985,7 +985,6 @@
             }
             return renderWikis();
           }
-          // A full download never starts from a timer; a manual press is consent.
           // These cannot be updated in place, so they are downloaded again,
           // on a timer too: an out-of-date saved copy is worse than a download.
           var nameOf = function (id) { return (byId[id] && byId[id].name) || id; };
