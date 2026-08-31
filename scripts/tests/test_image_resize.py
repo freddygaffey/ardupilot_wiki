@@ -1,12 +1,7 @@
 #!/usr/bin/env python3
-"""
-Tests for the optional archive image downsizing (scripts/build_offline_artifacts).
+"""Tests for the optional archive image downsizing in build_offline_artifacts.
 
     python3 scripts/tests/test_image_resize.py
-
-Off by default and flagged, so these set the pixel cap explicitly. The point is
-that it shrinks what it should, leaves small images and non-images alone, keeps
-PNG as PNG (so screenshot text stays sharp), and never raises.
 """
 import io
 import sys
