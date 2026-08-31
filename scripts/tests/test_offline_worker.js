@@ -556,6 +556,19 @@ async function checkRefreshSurvivesAConsumedBody() {
 }
 
 // A cache without the completion marker must not be served.
+async function checkDirectoryRedirect() {
+  console.log('\nservice worker: a wiki root without its slash is redirected\n');
+  const w = bootWorker();
+  const res = await w.ask('/rover', { mode: 'navigate', destination: 'document' });
+  const loc = res && res.headers &&
+              (res.headers.get ? res.headers.get('Location') : res.headers.Location);
+  check('/rover answers 301 to /rover/', !!res && res.status === 301 && loc === '/rover/',
+        JSON.stringify({ status: res && res.status, location: loc }));
+  const page = await w.ask('/rover/docs/thing.html', { mode: 'navigate', destination: 'document' });
+  check('a page URL is not redirected', !!page && page.status !== 301,
+        JSON.stringify({ status: page && page.status }));
+}
+
 async function checkMarkerRespected() {
   console.log('\nservice worker: a download without its marker is not a copy\n');
 
@@ -765,6 +778,7 @@ async function main() {
     await checkRevalidationIsAwaited();
     await checkRefreshSurvivesAConsumedBody();
     await checkMarkerRespected();
+    await checkDirectoryRedirect();
     await checkNoFalseUpdateToast();
   await checkFullStorageFailsOpen();
     console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
@@ -881,6 +895,7 @@ async function main() {
   await checkRevalidationIsAwaited();
   await checkRefreshSurvivesAConsumedBody();
   await checkMarkerRespected();
+  await checkDirectoryRedirect();
   await checkNoFalseUpdateToast();
   await checkFullStorageFailsOpen();
   await checkParamIndexFiltered();

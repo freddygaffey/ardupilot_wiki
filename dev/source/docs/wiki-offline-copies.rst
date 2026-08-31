@@ -366,8 +366,30 @@ involved. The host must meet four requirements:
   its own path and everything below it, so a worker placed at
   ``/frontend/sw.js`` registers successfully and then controls no wiki page at
   all.
+- A directory asked for without its slash must redirect to the slash form:
+  ``/plane`` to ``/plane/``. Serving the index page at ``/plane`` makes every
+  relative link on it resolve one level up. The worker does the same redirect
+  when it answers offline.
 
-``deploy/nginx-wiki.conf`` is a working configuration.
+Under nginx, the rules that matter look like this::
+
+    location / {
+        if (-d $request_filename) {
+            rewrite ^(.*[^/])$ $1/ permanent;
+        }
+        try_files $uri $uri/ =404;
+    }
+    location = /sw.js                              { add_header Cache-Control "no-cache"; }
+    location ~ ^/(js/pwa\.js|.*/_static/common_offline[^/]*\.(js|css))$ {
+        add_header Cache-Control "no-cache";
+    }
+    location = /offline/offline-manifest.json      { add_header Cache-Control "no-cache"; }
+    location ~ ^/offline/[^/]+-files\.json$         { add_header Cache-Control "no-cache"; }
+    location /offline/ {
+        gzip_static on;
+        gzip off;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
 
 Recovery
 --------
