@@ -28,8 +28,7 @@ const KEEP = flag('keep');           // leave the browser open on failure
 const WANTED = opt('browsers', 'chromium,firefox,webkit').split(',')
   .map((s) => s.trim()).filter(Boolean);
 
-// A page that exists in every local build, plus one never visited while online
-// so the fallback can be told apart from a cache hit.
+// Pages in every local build; one is never visited online.
 const VISITED = '/dev/docs/building-setup-linux.html';
 const ALSO_VISITED = '/dev/index.html';
 const NEVER_VISITED = '/dev/docs/apmcopter-programming-libraries.html';
@@ -132,8 +131,7 @@ async function looksLikeWikiPage(page) {
       h1: h1 ? h1.textContent.trim().slice(0, 80) : null,
       hasNav: !!document.querySelector('.wy-nav-side, nav'),
       styleSheets: document.styleSheets.length,
-      // A stylesheet element that failed to load still counts in
-      // document.styleSheets, so read a value the theme actually sets.
+      // A value the theme sets, since a failed stylesheet still counts.
       themed: getComputedStyle(document.body).fontFamily || '',
       bodyText: (document.body.innerText || '').length,
     };
@@ -141,12 +139,7 @@ async function looksLikeWikiPage(page) {
 }
 
 
-/*
- * A deploy with a page already open: how long is the page uncontrolled while
- * the new worker takes over? Caches are seeded to a full reader's size, since
- * activation does more with wikis saved. Its own context, at the end: seeding
- * 8,800 entries into the shared context made Firefox flake.
- */
+// A deploy with a page open: is the page controlled again after the swap?
 async function checkUpdateWindow(name, browser, base) {
   const context = await browser.newContext({ serviceWorkers: 'allow' });
   const page = await context.newPage();
@@ -258,8 +251,7 @@ async function runEngine(name, launcher, base) {
     check(name, 'worker scope is the whole origin',
           !!scope && new URL(scope).pathname === '/', String(scope));
 
-    // sw.js must not be cacheable, or a broken worker cannot be replaced and
-    // the kill switch in frontend/sw-kill.js has no way to reach anyone.
+    // Or the kill switch can never reach anyone.
     const swHeaders = await page.evaluate(async () => {
       const r = await fetch('/sw.js', { method: 'HEAD' });
       return { cc: r.headers.get('cache-control'),
@@ -269,8 +261,7 @@ async function runEngine(name, launcher, base) {
           /no-cache|no-store|max-age=0/.test(swHeaders.cc || ''),
           'Cache-Control: ' + swHeaders.cc);
 
-    // Read two pages online so they are in the runtime page cache. Reload the
-    // first: its initial load happened before the worker controlled anything.
+    // Reload the first: its initial load predates the worker.
     const onlineImages = await phase(name, 'read pages online', async () => {
       await page.goto(base + VISITED, { waitUntil: 'load' });
       const imgs = await imageCount(page);
@@ -304,8 +295,6 @@ async function runEngine(name, launcher, base) {
     });
     const quotaGB = quota.estimate
       ? (quota.estimate.quota / 1e9).toFixed(1) + ' GB' : 'unreported';
-    // The full set of archives is 697 MB, so anything under ~1 GB of quota
-    // means the download path cannot complete on this engine.
     check(name, 'storage quota fits the 697 MB archive set',
           !!(quota.estimate && quota.estimate.quota > 750e6),
           'quota ' + quotaGB + ', persist API ' +
@@ -318,8 +307,7 @@ async function runEngine(name, launcher, base) {
           'median ' + onlineSpeed.median + ' ms, worst ' + onlineSpeed.worst +
           ' ms of [' + onlineSpeed.all.join(', ') + ']');
 
-    // A page stored as a saved wiki stores one: gzipped, with the marker
-    // header. Served as-is it would be mojibake, not an error.
+    // Stored gzipped, as a saved wiki stores pages.
     const compressedSeed = await page.evaluate(async (probe) => {
       const html = '<!doctype html><html><head><title>Compressed probe</title>' +
         '</head><body><h1 id="probe">INFLATED-FROM-CACHE</h1><p>' +
@@ -336,8 +324,7 @@ async function runEngine(name, launcher, base) {
       return { raw: html.length, packed: packed.byteLength };
     }, COMPRESSED_PROBE);
 
-    // The parameter picker must apply the manifest's default even though the
-    // panel first draws before the manifest arrives.
+    // The panel first draws before the manifest arrives.
     const picker = await (async () => {
       const p = await context.newPage();
       try {
@@ -391,17 +378,14 @@ async function runEngine(name, launcher, base) {
           (offlineImages.missing.length
             ? '; missing ' + offlineImages.missing.slice(0, 2).join(', ') : ''));
 
-    // How fast, not just whether: every strategy in sw.js was chosen on a
-    // measurement, and this budget (loose, a full headless navigation) is what
-    // notices a per-asset round trip creeping back.
+    // A loose budget that notices a per-asset round trip creeping back.
     const offlineSpeed = await navigationMs(page, base + VISITED);
     check(name, 'a stored page is served offline well inside the budget',
           offlineSpeed.median < 1200,
           'median ' + offlineSpeed.median + ' ms, worst ' + offlineSpeed.worst +
           ' ms of [' + offlineSpeed.all.join(', ') + ']');
 
-    // Offline search: searchindex.js matches no other route and was fetched
-    // once online above; it must resolve with no network.
+    // Fetched once online above; must resolve with no network.
     const searchIndex = await page.evaluate(async () => {
       try {
         const r = await fetch('/dev/searchindex.js');
@@ -480,8 +464,7 @@ async function runEngine(name, launcher, base) {
     check(name, 'the same page loads normally once the network returns',
           !!back.h1, 'h1=' + JSON.stringify(back.h1));
 
-    // WebKit logs the browser's own failed sw.js re-fetch with the origin down;
-    // a report about the network, not this feature. Matched on subject, not wording.
+    // WebKit logs its own failed sw.js re-fetch with the origin down.
     const fatal = consoleErrors
       .concat(pageErrors)
       .filter((t) => !/favicon|Failed to load resource/i.test(t))

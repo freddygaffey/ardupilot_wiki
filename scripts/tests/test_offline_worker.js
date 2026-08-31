@@ -24,8 +24,7 @@ function check(name, ok, detail) {
 
 /* ------------------------------------------------------- the worker's code -- */
 
-/** Lift the lookup functions out of sw.js by name; a copy here could agree
- *  with itself while the shipped worker is wrong. */
+/** Lift the lookup functions out of sw.js by name. */
 function liftLookup(src) {
   let out = '';
   // Module-level state the matcher consults, taken with it.
@@ -90,8 +89,7 @@ function run(workerSrc, label) {
     return;
   }
 
-  // Cache keys exactly as offline-page.js writes them: the wiki archive keeps
-  // its own prefix, the common archive is written under /_common/.
+  // Cache keys exactly as the unpacker writes them.
   const store = new Set();
   const wikiArchive = path.join(REPO, 'offline', WIKI + '-offline.tar.gz');
   const commonArchive = path.join(REPO, 'offline', 'common-offline.tar.gz');
@@ -105,8 +103,7 @@ function run(workerSrc, label) {
   wikiNames.forEach((n) => store.add('/' + n));
   tarNames(commonArchive).forEach((n) => store.add('/_common/' + n));
 
-  // Keys are paths; a Request carries a full URL. Normalise so the worker's
-  // code can be run exactly as written.
+  // Keys are paths; a Request carries a full URL.
   const keyOf = (r) => {
     const u = typeof r === 'string' ? r : r.url;
     return u.startsWith('http') ? new URL(u).pathname : u;
@@ -122,8 +119,7 @@ function run(workerSrc, label) {
     text: async () => '',
   });
 
-  // Where the unpacker puts a path; likelyCacheName must agree, or a fold
-  // silently demotes every request to the exhaustive search.
+  // Where the unpacker puts a path; likelyCacheName must agree.
   const holderOf = (k) => {
     if (k.startsWith('/_common/')) { return 'ardupilot-offline-common'; }
     const first = k.split('/')[1];
@@ -135,16 +131,14 @@ function run(workerSrc, label) {
     console,
     caches: {
       match: async (r) => (store.has(keyOf(r)) ? asResponse(keyOf(r)) : undefined),
-      // Every offline cache a reader would hold, so the named-cache path is
-      // exercised rather than silently falling through to the exhaustive one.
+      // Every offline cache a reader would hold.
       keys: async () => [...new Set([...store].filter((k) => k.startsWith('/'))
         .map(holderOf))],
       open: async (name) => ({
         match: async (r) => {
           const k = keyOf(r);
           if (typeof name === 'string' && name.startsWith('ardupilot-offline-')) {
-            // These caches model FINISHED downloads, so they carry the marker
-            // the worker now requires before consulting them.
+            // Finished downloads carry the marker.
             if (k === '/__ap_complete__') { return asResponse(k); }
             if (holderOf(k) !== name) { return undefined; }
             return store.has(k) ? asResponse(k) : undefined;
@@ -180,8 +174,7 @@ function canonical(p) {
   return p.replace(/\.html$/, '');
 }
 
-/** The worker must evaluate, not merely parse: a const used above its
- *  declaration passes node --check and registers as nothing in a browser. */
+/** The worker must evaluate, not merely parse. */
 function checkWorkerEvaluates() {
   const ctx = {
     self: { addEventListener() {}, skipWaiting() {}, clients: {},
@@ -201,10 +194,8 @@ function checkWorkerEvaluates() {
 
 /* ------------------------------------------------- differential updates -- */
 
-/** Boot the real worker against a ServiceWorkerGlobalScope-alike and hand
- *  back its fetch listener. */
-/** A Response whose clone() throws once the body has been read, as a real
- *  one does. */
+/** Boot the real worker against a ServiceWorkerGlobalScope-alike. */
+/** A Response whose clone() throws once the body has been read. */
 function bodyAwareResponse(text) {
   return {
     _used: false,
@@ -257,8 +248,7 @@ function bootWorker({ networkFails = false, serve = null,
     },
     put: async (k) => {
       seen.puts.push(String(k && k.url ? k.url : k));
-      // Storage full. Cache.put rejects with QuotaExceededError, and the
-      // question is whether that reaches the reader.
+      // Storage full.
       if (putFails) {
         const err = new Error('The quota has been exceeded.');
         err.name = 'QuotaExceededError';
@@ -307,8 +297,7 @@ function bootWorker({ networkFails = false, serve = null,
       if (holdNetwork) {
         await new Promise((resolve) => { seen.releaseNetwork = resolve; });
       }
-      // What the server said it was sending. The point of the guard is that
-      // this can contradict what was asked for.
+      // What the server said it was sending.
       const spec = serve ? serve(url) : {};
       return {
         ok: true, status: 200, url, type: spec.type || 'basic',
@@ -356,8 +345,7 @@ async function checkUpdateRouting() {
   const UPDATE = '?ap-update=2026-08-09T00%3A00%3A00Z';
   const PAGE = '/copter/docs/common-thing.html';
 
-  // The tag is what the worker routes on, so read it out of the worker rather
-  // than writing it here twice.
+  // Read the tag out of the worker rather than repeating it.
   const src = fs.readFileSync(WORKER, 'utf8');
   const param = (src.match(/const UPDATE_PARAM\s*=\s*'([^']+)'/) || [])[1];
   check('the worker names the update parameter', param === 'ap-update', String(param));
@@ -370,15 +358,12 @@ async function checkUpdateRouting() {
     check('a tagged request goes to the network',
           w.seen.fetches.length === 1 && w.seen.fetches[0].indexOf('ap-update=') !== -1,
           JSON.stringify(w.seen.fetches));
-    // The bug that shipped: an untagged request took the cache-first route and
-    // the update was answered out of the very cache it was refreshing.
     check('and the cache is never consulted for it',
           w.seen.cacheReads.length === 0, JSON.stringify(w.seen.cacheReads));
   }
 
   {
-    // Without the tag the same URL is a page, and pages are served from storage.
-    // This is the contrast that shows the tag is doing the work.
+    // Without the tag the same URL is a page, served from storage.
     const w = bootWorker();
     const answered = w.ask(PAGE);
     if (answered) { await answered; }
@@ -411,10 +396,7 @@ async function checkUpdateRouting() {
   }
 }
 
-/*
- * A response that contradicts the request (captive wifi's login page as a
- * stylesheet) must not be stored: cache-first would keep it indefinitely.
- */
+// A response that contradicts the request must not be stored.
 async function checkPoisonGuard() {
   console.log('\nservice worker: refusing an implausible body\n');
 
@@ -487,9 +469,8 @@ async function checkPoisonGuard() {
         w.seen.puts.length === 1, JSON.stringify(w.seen.puts));
 }
 
-/* A version bump must discard only the versioned caches, never a saved wiki. */
-/* searchindex.js and objects.inv match no other route and must still be
- * answered from a saved wiki. */
+// A version bump must discard only the versioned caches, never a saved wiki.
+// searchindex.js and objects.inv must still be answered from a saved wiki.
 async function checkArchiveFallback() {
   console.log('\nservice worker: archive files no route claims\n');
 
@@ -514,8 +495,7 @@ async function checkArchiveFallback() {
         answered === w.seen.servedCopy ? 'served the saved copy' : String(answered));
 }
 
-/* A background refresh nobody waits for is abandoned when the worker is
- * killed, so both stale-while-revalidate routes must pass it to waitUntil. */
+// Both stale-while-revalidate routes must pass the refresh to waitUntil.
 async function checkRevalidationIsAwaited() {
   console.log('\nservice worker: the refresh behind is actually waited for\n');
 
@@ -528,8 +508,7 @@ async function checkRevalidationIsAwaited() {
   check('and the refreshed copy is then stored',
         w.seen.puts.length === 1, JSON.stringify(w.seen.puts));
 
-  // pwa.js is the only other stale-while-revalidate route; _static is
-  // cache-first and must not wait for anything.
+  // _static is cache-first and must not wait for anything.
   w = bootWorker({ serve: () => ({ ct: 'application/javascript', body: '//' }) });
   a = w.ask('/js/pwa.js');
   if (a) { await a; }
@@ -542,8 +521,7 @@ async function checkRevalidationIsAwaited() {
   check('a fingerprinted static asset stays cache-first, with nothing to wait for',
         (w.seen.waited || []).length === 0, (w.seen.waited || []).length + ' waitUntil calls');
 
-  // The source itself, because a future edit could drop the argument and every
-  // assertion above would still pass against a harness that always supplies it.
+  // The source itself, since the harness always supplies the argument.
   const src = fs.readFileSync(WORKER, 'utf8');
   check('every stale-while-revalidate call site passes the event',
         !/staleWhileRevalidate\(request,\s*[A-Z_]+\)/.test(src) &&
@@ -551,8 +529,7 @@ async function checkRevalidationIsAwaited() {
         'no call site omits it');
 }
 
-/* The refresh must survive the browser having consumed the body it was
- * handed: the comparison copy has to be cloned before the response goes out. */
+// The refresh must survive the browser having consumed the served body.
 async function checkRefreshSurvivesAConsumedBody() {
   console.log('\nservice worker: refreshing a page that has been read\n');
 
@@ -566,8 +543,7 @@ async function checkRefreshSurvivesAConsumedBody() {
   check('the stored copy is served while the refresh is still in flight',
         !!response && !!w.seen.releaseNetwork);
 
-  // The browser reads it to render the page, and only then does the refresh
-  // land. Reversing these two is what made the bug invisible in testing.
+  // The browser reads the body before the refresh lands.
   if (response && response.text) { await response.text(); }
   if (w.seen.releaseNetwork) { w.seen.releaseNetwork(); }
 
@@ -579,13 +555,11 @@ async function checkRefreshSurvivesAConsumedBody() {
         !(w.seen.errors || []).length, JSON.stringify(w.seen.errors || []));
 }
 
-/* A cache without the completion marker is an aborted download and must not
- * be served. */
+// A cache without the completion marker must not be served.
 async function checkMarkerRespected() {
   console.log('\nservice worker: a download without its marker is not a copy\n');
 
-  // The dangerous state: CONTENT present, marker absent. This is what an
-  // abort or a quota kill leaves, and what was observed being served.
+  // Content present, marker absent.
   const w2 = bootWorker({
     serve: () => ({ ct: 'text/html', body: '<html>from the network' }),
     offlineCopy: { path: '/dev/docs/thing.html',
@@ -599,8 +573,7 @@ async function checkMarkerRespected() {
   check('the network answers instead',
         w2.seen.fetches.length >= 1, w2.seen.fetches.length + ' fetches');
 
-  // And the same cache WITH its marker is served offline, so the gate does
-  // not throw away legitimate copies.
+  // With its marker, the same cache is served.
   const w3 = bootWorker({ networkFails: true,
     offlineCopy: { path: '/dev/docs/thing.html', body: '<html>saved page' } });
   const a3 = w3.ask('/dev/docs/thing.html', { mode: 'navigate' });
@@ -610,13 +583,11 @@ async function checkMarkerRespected() {
         r3 === w3.seen.servedCopy ? 'served' : String(r3));
 }
 
-/* A saved wiki's page is the archive's rewritten version and must never be
- * compared with the network copy, or every page reads as "updated". */
+// A saved wiki's rewritten page must never be compared with the network copy.
 async function checkNoFalseUpdateToast() {
   console.log('\nservice worker: no false "page updated" from the offline copy\n');
 
-  // Served from the OFFLINE cache (rewritten), network returns a different
-  // (original) body. This must NOT announce a change.
+  // Offline copy differs from the network copy; no announcement.
   let w = bootWorker({
     serve: () => ({ ct: 'text/html', body: '<html>ORIGINAL from the site' }),
     offlineCopy: { path: '/dev/docs/p.html', body: '<html>REWRITTEN offline copy' },
@@ -630,8 +601,7 @@ async function checkNoFalseUpdateToast() {
         JSON.stringify(w.seen.posted));
 }
 
-/* A QuotaExceededError on store must not turn a successful network response
- * into an offline answer. WebKit's quota is about 1 GB. */
+// A QuotaExceededError on store must not turn a network success into an offline answer.
 async function checkFullStorageFailsOpen() {
   console.log('\nservice worker: no room to cache, still online\n');
 
@@ -655,8 +625,7 @@ async function checkFullStorageFailsOpen() {
           !!res && res.status === 200, res ? 'status ' + res.status : 'nothing');
   }
 
-  // The other half of the contract: a real network failure must still be
-  // answered from storage, which is the behaviour the catch was written for.
+  // A real network failure is still answered from storage.
   {
     const w = bootWorker({ networkFails: true,
                            offlineCopy: { path: INDEX, body: 'SAVED' } });
@@ -699,8 +668,6 @@ async function checkVersionBump() {
   check('caches at the current version are kept',
         left.includes('ardupilot-pages-' + version) &&
         left.includes('ardupilot-static-' + version), JSON.stringify(left));
-  // The one that matters: a reader's downloaded wikis are not versioned and
-  // must survive, or a one-character edit costs everybody 500 MB.
   check('downloaded wikis survive the bump',
         left.includes('ardupilot-offline-dev') &&
         left.includes('ardupilot-offline-common'), JSON.stringify(left));
@@ -716,9 +683,7 @@ function keyOfUrl(r) {
   return u.startsWith('http') ? new URL(u).pathname : u;
 }
 
-/* Offline, the firmware version index offers only the versions held. Filtered
- * in the worker, since 66 of the pages carrying the dropdown are frozen HTML;
- * nothing filtered is stored. */
+// Offline, the firmware version index offers only the versions held.
 async function checkParamIndexFiltered() {
   console.log('\nservice worker: the version dropdown offers only what is held');
 
@@ -849,8 +814,6 @@ async function main() {
         !(await ask('/' + WIKI + '/docs/no-such-page-here')));
 
   /* ------------------------------------------------ lookups stay exact ---- */
-  // Shapes are built from the pathname, so a fingerprint query never reaches
-  // the lookup and an exact match is enough.
   check('a fingerprinted asset URL still resolves',
         !!(await ask('/' + WIKI + '/_static/css/theme.css?v=5d32c60e')) ||
         !!(await ask('/' + WIKI + '/index.html?highlight=motor')),
@@ -863,8 +826,7 @@ async function main() {
         'exact matches only');
 
   /* ------------------------------------------- wikis folded into common --- */
-  // A folded wiki's pages resolve either way; assert they resolve by NAME,
-  // since the exhaustive fallback is 325 ms against 0.2 ms.
+  // Assert they resolve by name, not through the exhaustive fallback.
   check('a folded wiki is looked up in the common cache, not its own',
         ctx.likelyCacheName('/ardupilot/docs/about.html') ===
           'ardupilot-offline-common',
@@ -873,8 +835,6 @@ async function main() {
         ctx.likelyCacheName('/copter/docs/x.html') === 'ardupilot-offline-copter');
 
   /* ---------------------------------------------------------- images ------ */
-  // Every image a saved wiki holds must come out of the download, the
-  // wiki-unique ones included.
   const ownImages = wikiNames
     .filter((n) => /^[^/]+\/_images\/[^/]+$/.test(n))
     .map((n) => '/' + n);

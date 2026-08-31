@@ -66,8 +66,7 @@ function resolveFile(urlPath) {
   return path.join(ROOT, 'frontend', ...parts);
 }
 
-// The header rules the feature depends on; sw.js served cacheable would break
-// the kill switch.
+// The header rules the feature depends on.
 function extraHeaders(urlPath) {
   if (urlPath === '/sw.js') {
     return { 'Cache-Control': 'no-cache', 'Service-Worker-Allowed': '/' };
@@ -78,8 +77,7 @@ function extraHeaders(urlPath) {
   return {};
 }
 
-// Bumping this appends a changed comment to sw.js, which is all a browser
-// compares, so a test can cause a worker update.
+// Bumping this changes sw.js, so a test can cause a worker update.
 let workerBuild = 0;
 function bumpWorker() {
   workerBuild += 1;
@@ -91,8 +89,7 @@ function createServer() {
     const urlPath = (req.url || '/').split('?')[0];
     const file = resolveFile(req.url || '/');
 
-    // nginx gzip_static: <name>.tar is answered with <name>.tar.gz and
-    // Content-Encoding: gzip.
+    // As nginx gzip_static does.
     if (urlPath.endsWith('.tar') && fs.existsSync(file + '.gz')) {
       const gz = file + '.gz';
       res.writeHead(200, Object.assign({
@@ -150,8 +147,7 @@ function createServer() {
 function start(port) {
   return new Promise((resolve, reject) => {
     const server = createServer();
-    // Kept short so that stopping the server does not wait on the keep-alive
-    // sockets the browser is holding open. Without this, close() hangs.
+    // Or close() waits on the browser's keep-alive sockets.
     server.keepAliveTimeout = 1;
     const sockets = new Set();
     server.on('connection', (s) => {
