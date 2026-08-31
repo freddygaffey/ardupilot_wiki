@@ -5,7 +5,6 @@ never leave a page half-written.
     python3 scripts/tests/test_lazy_embeds.py
 """
 
-import os
 import sys
 import tempfile
 from pathlib import Path

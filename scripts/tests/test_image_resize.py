@@ -71,7 +71,8 @@ def main():
 
     print()
     if failures:
-        print(f"{failures} CHECK(S) FAILED\n"); sys.exit(1)
+        print(f"{failures} CHECK(S) FAILED\n")
+        sys.exit(1)
     print("all checks passed\n")
 
 
