@@ -218,9 +218,10 @@
       var clear = el('clear-btn');
       if (clear) {
         var anything = pages > 0 || Object.keys(storedIds).length > 0;
-        clear.disabled = !anything;
-        clear.title = anything ? 'Removes saved wikis and pages cached while reading'
-                               : 'Nothing is stored on this device';
+        clear.disabled = !anything || checkBusy || !!activeDownload;
+        clear.title = !anything ? 'Nothing is stored on this device'
+          : clear.disabled ? 'Wait for the update to finish'
+          : 'Removes saved wikis and pages cached while reading';
         if (!anything && clearArmed) { disarmClear(clear); }
       }
 
@@ -782,6 +783,8 @@
 
     progress.hidden = false;
     activeDownload = new AbortController();
+    var clearBtn = el('clear-btn');
+    if (clearBtn) { clearBtn.disabled = true; }
     button.classList.add('busy');
     setLabel('Cancel');
 
@@ -869,8 +872,16 @@
   }
 
   /** Compare the server's build with each stored copy and update what is behind. */
+  var checkBusy = false;
+
   function checkForUpdates(quiet) {
     var out = el('check-result');
+    if (checkBusy) { return Promise.resolve(); }
+    checkBusy = true;
+    var checkBtn = el('check-btn');
+    if (checkBtn) { checkBtn.disabled = true; }
+    var clearBtn = el('clear-btn');
+    if (clearBtn) { clearBtn.disabled = true; }
 
     // An automatic run says nothing until it has news.
     function announce(text) { out.hidden = false; out.textContent = text; }
@@ -1003,6 +1014,11 @@
       .catch(function (err) {
         // A failed automatic check means offline, which is ordinary.
         report((err && err.message) || 'Check failed');
+      })
+      .then(function () {
+        checkBusy = false;
+        if (checkBtn) { checkBtn.disabled = false; }
+        return renderStorage();
       });
   }
 
