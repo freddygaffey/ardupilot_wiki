@@ -1,13 +1,8 @@
 #!/usr/bin/env python3
-"""
-Tests for scripts/lazy_embeds.py, the post-build pass that defers YouTube.
+"""Tests for scripts/lazy_embeds.py: touch only YouTube iframes, be idempotent,
+never leave a page half-written.
 
     python3 scripts/tests/test_lazy_embeds.py
-
-This pass rewrites every built HTML page in place, so it needs to be exactly
-right: touch a YouTube iframe and nothing else, be safe to run twice, and leave
-no page half-written if it dies. A mutation to a no-op used to keep the whole
-suite green because nothing exercised it at all.
 """
 
 import os
