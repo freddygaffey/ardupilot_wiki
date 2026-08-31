@@ -254,36 +254,14 @@
   }
 })();
 
-// TODO(mirror): delete when served from ardupilot.org; keeps absolute links on the mirror.
-(function () {
-  'use strict';
-
-  var WIKIS = /^\/(copter|plane|rover|sub|blimp|dev|antennatracker|planner|planner2|ardupilot|mavproxy)(\/|$)/;
-  var SITE = /^https?:\/\/(?:www\.)?ardupilot\.org(\/.*)?$/i;
-
-  document.addEventListener('click', function (e) {
-    // Modified and middle clicks keep the live site.
-    if (e.defaultPrevented || e.button !== 0) { return; }
-    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) { return; }
-
-    var a = e.target && e.target.closest ? e.target.closest('a[href]') : null;
-    if (!a || a.target === '_blank') { return; }
-
-    var m = SITE.exec(a.href);
-    if (!m) { return; }
-
-    var path = m[1] || '/';
-    if (!WIKIS.test(path)) { return; }
-
-    e.preventDefault();
-    window.location.href = path;
-  });
-})();
-
-
 // Prefetch the page the pointer is heading for.
 (function () {
   'use strict';
+
+  // Speculative traffic is part of offline mode; a reader who has not opted in causes none.
+  if (!(window.ApOffline && window.ApOffline.enabled())) {
+    return;
+  }
 
   var conn = navigator.connection || {};
   if (conn.saveData || /(^|-)2g$/.test(conn.effectiveType || '')) {
@@ -617,4 +595,3 @@
     start();
   }
 })();
-
