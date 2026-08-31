@@ -1,29 +1,11 @@
 /*
  * [copywiki destination="copter,plane,rover,sub,blimp,antennatracker,dev,planner,planner2,ardupilot,mavproxy"]
  *
- * The same destinations as docs/common-offline.rst, deliberately: an asset
- * belongs wherever its page does. Without a marker a .js takes
- * DEFAULT_COPY_WIKIS, which is four of the eleven, so the panel would have
- * been scriptless on seven wikis while looking correct on the four anyone
- * would think to check. (.css is copied to every wiki unconditionally, which
- * is why the stylesheet needs no marker and this does.)
- */
-/*
- * Builds downloadable copies from what is already in Cache Storage.
- *
- * This half reads the cache and moves bytes. What the finished file says -
- * its shell, its stylesheet, its sidebar tree and its reading order - is in
- * common_offline_document_builder.js, which must be loaded first.
- *
- * The alternative was for the build server to produce and host a ~970MB file
- * for every combination of wikis, duplicating content the reader has already
- * downloaded. Generating it here means the server hosts only the archives,
- * and the export costs nothing extra to fetch.
- *
- * Everything streams. A few hundred megabytes cannot be assembled in a Blob or
- * a string, so the page writes chunks into a stream that the service worker
- * answers as a download response, and the browser writes it to disk as it goes.
- * Peak memory is one file, not one archive.
+ * Build a single self-contained HTML file from what is in Cache Storage,
+ * streamed to disk through the service worker so peak memory is one file, not
+ * one archive. What the file says is in common_offline_document_builder.js.
+ * The destinations match docs/common-offline.rst; without a marker a .js
+ * reaches only DEFAULT_COPY_WIKIS.
  */
 (function (global) {
   'use strict';
@@ -53,20 +35,9 @@
 
   /* ------------------------------------------------------ download plumbing */
 
-  /**
-   * Open a download the page can write into.
-   *
-   * Prefers the service worker: it can answer with a ReadableStream, so the
-   * browser writes to disk while we are still generating, and this works
-   * outside Chromium. Falls back to the File System Access API, and finally to
-   * a Blob for browsers with neither - which is memory-bound, so it is only a
-   * last resort.
-   */
+  /** Open a download the page can write into: streamed through the service
+   *  worker, else the File System Access API, else a memory-bound Blob. */
   function openDownload(filename) {
-    // Order matters, and none of these may be assumed available. A page can be
-    // uncontrolled for perfectly ordinary reasons - a hard reload, a first
-    // visit before the worker activates, a worker that failed to install - so
-    // the export has to work regardless rather than depend on one path.
     if (navigator.serviceWorker && navigator.serviceWorker.controller &&
         typeof TransformStream !== 'undefined') {
       var ts = new TransformStream();
@@ -78,8 +49,7 @@
         [ts.readable]
       );
 
-      // An iframe rather than location: navigating away would tear down the
-      // page that is generating the stream.
+      // An iframe: navigating away would tear down the generating page.
       var frame = document.createElement('iframe');
       frame.hidden = true;
       frame.src = '/__export__/' + id;
@@ -133,22 +103,14 @@
               ttf: 'font/ttf' })[ext] || 'application/octet-stream';
   }
 
-  /**
-   * Relative reference -> path from the site root, as a browser would read it.
-   *
-   * The rule lives in common_offline_document_builder.js because the sidebar applies
-   * it to every href in every toctree it reads. Images and stylesheets need
-   * exactly the same rule, and a second copy is how the two would come to
-   * disagree about where a file is. Looked up per call so the two scripts may
-   * load in either order.
-   */
+  // One resolution rule, shared with the document builder; looked up per call
+  // so the scripts may load in either order.
   function resolvePath(basePath, href) {
     return global.ArduPilotOfflineDocument.resolvePath(basePath, href);
   }
 
   function base64(bytes) {
-    // Chunked: String.fromCharCode.apply blows the argument limit on anything
-    // more than a few tens of kilobytes, and these are photographs.
+    // Chunked: fromCharCode.apply blows the argument limit on large images.
     var out = '', CHUNK = 0x8000;
     for (var i = 0; i < bytes.length; i += CHUNK) {
       out += String.fromCharCode.apply(null, bytes.subarray(i, i + CHUNK));
@@ -156,13 +118,7 @@
     return btoa(out);
   }
 
-  /**
-   * Sphinx's own search index, trimmed to what searching needs.
-   *
-   * The file is `Search.setIndex({...})`, so the JSON sits between the outer
-   * brackets. Dropping objects, indexentries, alltitles and filenames halves
-   * it: 11 MB across eleven wikis becomes 5 MB, against a 970 MB export.
-   */
+  /** Sphinx's search index, trimmed to what searching needs (11 MB -> 5 MB). */
   function readSearchIndex(entry) {
     return ApUnpack.readFrom(entry.cache, entry.path)
       .then(function (r) { return r.text(); })
@@ -177,18 +133,10 @@
       .catch(function () { return null; });
   }
 
-  /**
-   * Assemble one self-contained HTML file from the cached pages.
-   *
-   * Images are inlined as data URIs, the shared common set included: a single
-   * file cannot reference an archive beside it. Written straight to the stream
-   * page by page, because the finished file runs to hundreds of megabytes and
-   * cannot be built as a string first.
-   */
+  /** Assemble one self-contained HTML file from the cached pages, images
+   *  inlined once each, written page by page to the stream. */
   function exportHtml(wikiIds, filename, onProgress, sink) {
     var enc = new TextEncoder();
-    // What the file says, as opposed to where its bytes come from. Read here
-    // rather than at load time so the two scripts may arrive in either order.
     var DOC = global.ArduPilotOfflineDocument;
     if (!DOC) {
       throw new Error('common_offline_document_builder.js is not loaded.');
@@ -196,8 +144,7 @@
 
     return storedEntries(wikiIds).then(function (groups) {
       var pages = [], assets = {}, styles = {};
-      // Sphinx already built a stemmed full-text index per wiki, and the
-      // stemmer that built it. Both are sitting in the cache.
+      // Sphinx's stemmed index and its stemmer are both in the cache.
       var indexes = {}, stemmerSrc = null;
 
       groups.forEach(function (g) {
@@ -223,10 +170,7 @@
       }
       pages.sort(function (a, b) { return a.path < b.path ? -1 : 1; });
 
-      // The parameter list is published once per release, back to 3.x, and one
-      // of those pages is 5.8 MB. Decide which to carry before anything is
-      // written, so the ones left out cost nothing rather than being written
-      // and then ignored.
+      // Decide which parameter-list versions to carry before anything is written.
       var params = DOC.parameterVersions(pages.map(function (p) {
         return p.path.replace(/\.html?$/, '');
       }));
@@ -234,8 +178,7 @@
         return !params.drop[p.path.replace(/\.html?$/, '')];
       });
 
-      // Group by wiki from the pages themselves, so a wiki still appears even
-      // if its index page was not part of the export.
+      // From the pages themselves, so a wiki appears even without its index page.
       var wikis = [];
       pages.forEach(function (pg) {
         var w = pg.path.split('/')[1];
@@ -247,16 +190,11 @@
         return (sink ? Promise.resolve(sink) : openDownload(filename))
         .then(function (sink) {
           var done = 0, index = [];
-          // Shared across pages so each image is emitted once.
+          // Each image is emitted once and referenced by id.
           var imgIds = { __next: 0 };
-          // Image path as pages spell it -> the id of the block holding it,
-          // so a link to an image can be answered from what is already here.
           var imgPaths = {};
-          // The navigation is collected as the pages stream past rather than
-          // read from each wiki's index page. The index page is the one page
-          // whose sidebar expands nothing, so reading only that produced the
-          // flat list the export used to show; every other page expands the
-          // branch it sits in, and the union of them is the whole tree.
+          // The navigation is the union of every page's expanded sidebar; the
+          // index page alone expands nothing.
           var navState = DOC.newNav();
           var write = function (text) { return sink.write(enc.encode(text)); };
 
@@ -270,7 +208,6 @@
                     var title = (html.match(/<title>([^<]*)<\/title>/i) || [])[1] ||
                                 p.path.replace(/^\//, '');
                     // Strip the theme's " <dash> Project documentation" suffix.
-                    // The dashes are what Sphinx emits, so the split spells them.
                     title = title.split('&mdash;')[0].split(' — ')[0].trim();
                     index.push({ t: title, p: p.path.replace(/\.html?$/, '') });
 
@@ -289,11 +226,9 @@
             });
             return chain;
           }).then(function () {
-            // With one wiki there is nothing to choose, so open it directly.
-            // With several, opening on one of them is a guess: show the list.
+            // One wiki opens directly; several show the list.
             var homes = DOC.wikiHomes(index, wikis);
-            // Sidebar and reading order out of the same call, because a
-            // separately derived order disagrees with the tree on screen.
+            // Sidebar and reading order from one call, so they agree.
             var nav = DOC.buildNav(navState, wikis, pages);
             var payload = { pages: index, nav: nav.html, order: nav.order,
                             wikis: wikis, imgs: imgPaths, homes: homes,
@@ -326,15 +261,8 @@
     });
   }
 
-  /**
-   * Rebuild the theme's stylesheet with its fonts inlined.
-   *
-   * Without this the export approximates the theme: admonitions, code blocks,
-   * tables and inline literals all render plain, and the type falls back to
-   * Helvetica because Lato and Roboto Slab are loaded by @font-face. All of it
-   * is already in the cache, so using it is a few hundred kilobytes on a file
-   * that is already hundreds of megabytes.
-   */
+  /** The theme's stylesheets with their fonts inlined, so the export renders
+   *  as the site does. */
   function buildThemeCss(styles, assets) {
     var wanted = Object.keys(styles).filter(function (p) {
       return /_static\/css\/(theme|badge_only)\.css$/.test(p) ||
@@ -394,18 +322,8 @@
     return chain;
   }
 
-  /**
-   * Point each <img> at a shared image block instead of inlining it.
-   *
-   * Inlining per page encodes the same picture once for every page that shows
-   * it - a diagram used on forty pages was written forty times, which is what
-   * made a full export enormous. Each image is now emitted once as its own
-   * inert block and referenced by id, so the file holds one copy of each
-   * regardless of how many pages use it.
-   *
-   * Returns the rewritten html plus any images seen for the first time, which
-   * the caller writes out as it streams.
-   */
+  /** Point each <img> at a shared image block, so a diagram on forty pages is
+   *  written once. Returns the html and any images seen for the first time. */
   function referenceImages(html, assets, pagePath, imgIds, imgPaths) {
     var srcs = [];
     html.replace(/<img[^>]+src="([^"]+)"/gi, function (all, src) {
@@ -431,16 +349,12 @@
         var hit = null;
         candidates.forEach(function (c) { if (!hit && assets[c]) { hit = c; } });
         if (!hit) {
-          // Leaving the relative src in place points at nothing once the page
-          // is inside a single file, and shows as a silently blank space.
-          // Drop the src so the alt text renders and the gap is legible.
+          // Drop the src so the alt text renders instead of a blank space.
           return current.split('src="' + src + '"')
                         .join('data-ap-missing="' + src + '"');
         }
 
-        // Record the path as the page spells it, so a link to this image can
-        // be answered from the copy already in the file.
-        // Already emitted for an earlier page: just point at it.
+        // Already emitted: point at it.
         if (imgIds[hit] !== undefined) {
           if (imgPaths) { imgPaths[resolved] = imgIds[hit]; }
           return current.split('src="' + src + '"')
