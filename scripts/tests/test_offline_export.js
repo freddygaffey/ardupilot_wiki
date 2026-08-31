@@ -1,18 +1,8 @@
 /*
- * Verification harness for the browser-side exporters.
+ * Harness for the single-file exporter: runs the real exporter against a
+ * CacheStorage-alike over real build output and checks the bytes it produces.
  *
  *   node scripts/tests/test_offline_export.js [wiki...]
- *
- * common/source/_static/common_offline_export.js builds the single-file .html from Cache
- * Storage. Every bug it has had so far - images resolved to paths that match
- * nothing, the same image written once per page, a sidebar that nested each
- * wiki inside the last - looked fine from the outside and only showed up when
- * something opened the result. So this runs the real exporter against a cache
- * built from real build output, and checks the bytes it produces.
- *
- * The browser APIs it needs are shimmed rather than mocked away: a real
- * CacheStorage-alike over the filesystem, and the exporter is given a sink so
- * output lands in a file instead of a download.
  */
 
 const fs = require('fs');
@@ -124,16 +114,8 @@ function loadWiki(wiki, limit) {
   return { pages, images, css };
 }
 
-/*
- * The versioned parameter pages, which no build here has.
- *
- * update.py produces them only with --paramversioning; without it the build
- * calls cleanup_versioned_parameters(), which deletes them, and every build so
- * far has used --cached-parameter-files. So there is nothing on disk to load
- * and the shape has to be written out: the markup is the site's, copied from
- * ardupilot.org/rover/docs/parameters-Rover-stable-V4.7.0.html, down to the
- * script that fetches a JSON list the export cannot carry.
- */
+/* A versioned parameter page, in the site's own markup; local builds do not
+ * produce them. */
 function paramPageHtml(vehicle, label) {
   return '<!DOCTYPE html><html><head><title>Complete Parameter List &mdash; ' +
     vehicle + ' documentation</title></head><body>' +
@@ -168,13 +150,8 @@ function loadParameterVersions(wiki, vehicle, versions) {
 /* --------------------------------------------------------- module load ---- */
 
 function loadExporter() {
-  // The modules common-offline.rst loads, in an order that satisfies them: the
-  // exporter reads the document builder and ApUnpack out of the global, so
-  // running it alone throws ReferenceError the moment it touches the cache.
-  // It reads through ApUnpack.readFrom rather than cache.match because entries
-  // are stored gzipped, and reading one raw yields mojibake rather than an
-  // error - so the real module is loaded here, not a stub that cannot make
-  // that mistake.
+  // The modules the page loads, in its order; the real ApUnpack, because a
+  // stub could not produce the mojibake a raw gzipped read would.
   const src = [DOCUMENT, UNPACK, EXPORTER]
     .map((f) => fs.readFileSync(f, 'utf8')).join('\n');
   const sandbox = {
@@ -202,11 +179,7 @@ function fileSink(target) {
   };
 }
 
-/**
- * Count patterns and look for literals in a file too large to hold as a string.
- *
- * Chunks overlap so a match spanning a boundary is not missed.
- */
+/** Count patterns in a file too large to hold as a string; chunks overlap. */
 function scanFile(file, patterns, literals) {
   const counts = patterns.map(() => 0);
   const found = {};
@@ -232,10 +205,7 @@ function scanFile(file, patterns, literals) {
   return { counts, found };
 }
 
-/**
- * The JSON the shell routes from, read back out of the finished file. It is
- * written last, so the tail holds it however large the export is.
- */
+/** The routing payload, read back from the tail of the finished file. */
 function readIndexPayload(file) {
   const size = fs.statSync(file).size;
   const span = Math.min(size, 64 * 1024 * 1024);
@@ -276,14 +246,8 @@ let stemWord = (w) => w, STOPWORDS = [];
   if (ctx.stopwords) { STOPWORDS = ctx.stopwords; }
 })();
 
-/**
- * Lift named functions out of one of the shipped scripts and run them here.
- *
- * The alternative is a second copy of the logic in this file, and that is
- * precisely how a strict-AND search bug survived a passing test: the copy
- * carried the same defect, so the two agreed with each other and both were
- * wrong. Run the shipped code or do not claim to have tested it.
- */
+/** Lift named functions out of a shipped script; a copy here could agree with
+ *  itself while the shipped code is wrong. */
 function liftFunctions(names, file) {
   const src = fs.readFileSync(file || EXPORTER, 'utf8');
   let out = '';
@@ -306,13 +270,7 @@ function liftFunctions(names, file) {
   return ctx;
 }
 
-/**
- * The exporter's own full-text search, lifted out of the shell it writes.
- *
- * SHELL_JS is an array of string literals joined at export time, so the real
- * source is recovered by evaluating the array and slicing out the search
- * block: the same text that ends up inside the .html a reader opens.
- */
+/** The shell's search code, recovered from the SHELL_JS literals as exported. */
 function shellSource() {
   const src = fs.readFileSync(DOCUMENT, 'utf8');
   const s = src.indexOf('var SHELL_JS = [');
@@ -323,17 +281,8 @@ function shellSource() {
   } catch (err) { return null; }
 }
 
-/**
- * The whole shell, running in a DOM, over the payload the export just wrote.
- *
- * The sidebar and the footer buttons are behaviour, not markup: a tree that
- * renders correctly and never opens, or buttons that render and point at the
- * wrong page, both look perfect in the bytes. So drive the real script.
- *
- * The page blocks are stand-ins - the shell only reads their text into the
- * document - but the routing payload, the sidebar HTML and the reading order
- * are the genuine article, straight out of the exported file.
- */
+/** The whole shell running in a DOM over the payload the export wrote, since
+ *  the sidebar and footer buttons are behaviour, not markup. */
 function bootShell(D, bodies) {
   let JSDOM;
   try { ({ JSDOM } = require('jsdom')); } catch (e) { return null; }
@@ -401,10 +350,7 @@ async function main() {
     const r = loadWiki(w, cap);
     totals.pages += r.pages; totals.images += r.images; totals.css += r.css;
   }
-  // Six releases across four major lines, so the window can be seen to bite at
-  // both ends: a line beyond the newest three, and an older patch inside a
-  // line that is kept. PARAM_SERIES x PARAM_PER_SERIES in
-  // common_offline_document_builder.js decides which three survive.
+  // Six releases across four lines, so the window bites at both ends.
   const PARAM_KEPT = ['V4.7.1', 'V4.6.0', 'V4.5.2'];
   const PARAM_DROPPED = ['V4.7.0', 'V4.4.0', 'V4.3.0'];
   const paramWiki = wikis.includes('rover') ? 'rover' : wikis[0];
@@ -438,10 +384,7 @@ async function main() {
       '#ap-toast.on{display:flex}',
       'if(mapped===null){e.preventDefault();toast(a.href);return;}',
       'go.target="_blank"',
-      // SHELL_JS is assembled from single-quoted literals, so a backslash
-      // written once is a backslash the built file never sees. This one turned
-      // /\s+/ into /s+/ and stripped every letter "s" out of search snippets,
-      // which reads as bad data rather than as a broken regex.
+      // A single backslash in a SHELL_JS literal vanishes from the built file.
       '.replace(/\\s+/g," ")',
       // The theme's own element, carried through as markup rather than
       // rebuilt, so the switcher is the site's switcher.
@@ -463,9 +406,7 @@ async function main() {
   check('images actually resolved', imgBlocks > 0);
   check('navigation from toctree', html.includes('toctree-l1'));
 
-  // Links to other hosts are the one kind that genuinely cannot be routed
-  // anywhere, so they used to be followed silently and the reader lost the
-  // document. Leaving has to be a decision rather than an accident.
+  // Leaving the file has to be a decision, not an accident.
   check('a link to another host raises the toast instead of navigating',
         html.includes('if(mapped===null){e.preventDefault();toast(a.href);return;}'));
   check('the toast is styled', html.includes('#ap-toast.on{display:flex}'));
@@ -494,12 +435,8 @@ async function main() {
           indexed.join(', '));
     check('sidebar sections are siblings, not nested',
           !/<div/i.test(D.nav) && !/<form/i.test(D.nav));
-    // Under a page cap a sidebar link may legitimately name a page this
-    // export does not hold, so resolution can only be asserted on a full run.
-    // The shape of the anchor can be asserted either way, and that is where
-    // the bug was: a cross-wiki link arriving as /copter/index.html got this
-    // wiki prefixed onto it and became #/ardupilot//copter/index, which
-    // resolves to nothing whether or not copter is in the file.
+    // Under a page cap, only the anchor's shape can be asserted: a cross-wiki
+    // link must not get this wiki prefixed onto it.
     const anchors = (D.nav.match(/href="#([^"]+)"/g) || [])
       .map((h) => h.slice(7, -1)).filter((p) => p.charAt(0) === '/');
     const malformed = anchors.filter(
@@ -513,13 +450,7 @@ async function main() {
     check('image index built', Object.keys(D.imgs || {}).length > 0,
           Object.keys(D.imgs || {}).length + ' image paths');
 
-    /*
-     * The parameter list is published once per release, back to 3.x. One of
-     * those pages is 5.8 MB and about 215,000 elements, so the whole history
-     * is several hundred megabytes per vehicle. The export carries a window of
-     * it and the switcher offers exactly that window - a list naming versions
-     * the file does not hold is a list of ways to reach "not in this copy".
-     */
+    // The switcher offers exactly the window the file carries.
     const offered = (D.params || {})[paramWiki] || [];
     const want = PARAM_KEPT.map((v) =>
       '/' + paramWiki + '/docs/parameters-' + paramVehicle + '-stable-' + v);
@@ -540,10 +471,8 @@ async function main() {
           want.every((p) => carried.has(p)));
   }
 
-  // Downloaded archives are the shape this test cannot reach from build/html:
-  // rewrite_site_links turns the About wiki's absolute cross-wiki links into
-  // paths from the site root, and only an archive carries them. So drive the
-  // exporter's own nav rewriting with that shape directly.
+  // Root-relative cross-wiki links exist only in archives, so drive the nav
+  // rewriting with that shape directly.
   const navFns = liftFunctions(
     ['resolvePath', 'innerOf', 'topLevelLists', 'textOf', 'navHref', 'prune',
      'parseToc', 'navNodes', 'mergeToc'], DOCUMENT);
@@ -568,13 +497,7 @@ async function main() {
     check('a link to another host is left alone',
           got.indexOf('https://cloud.ardupilot.org') !== -1, got.join('  '));
 
-    /*
-     * The theme is built with collapse_navigation on, so no single page holds
-     * the whole tree: each one expands only the branch it sits in. Reading one
-     * page - which is what the export used to do, and it chose the index page,
-     * the one page that expands nothing - yields a flat list. These two pages
-     * are what the theme really emits for two sides of the same tree.
-     */
+    // Two pages expanding two branches of one tree, as the theme emits them.
     const pageA =
       '<div class="wy-menu wy-menu-vertical"><ul class="current">' +
       '<li class="toctree-l1"><a href="common-autopilots.html">Autopilots</a></li>' +
@@ -626,12 +549,8 @@ async function main() {
           merged[1].children.length + ' under the expanded one');
   }
 
-  /*
-   * The sidebar and the reading order have to be one derivation. Built apart
-   * they drift, and "next" starts skipping pages the sidebar is showing. So
-   * assert they agree: every internal anchor the sidebar renders for a wiki is
-   * in that wiki's order, in the same sequence.
-   */
+  // Every internal anchor the sidebar renders is in that wiki's reading order,
+  // in the same sequence.
   if (D) {
     const order = D.order || [];
     check('a reading order was published', order.length > 0,
@@ -668,9 +587,7 @@ async function main() {
           depth(2) > 0, 'l1 ' + depth(1) + ', l2 ' + depth(2) +
           ', l3 ' + depth(3));
 
-    // theme.js prepends this button to every sidebar link that has a list
-    // beside it. Without it a branch can be opened only by visiting a page
-    // inside it, which is the thing the reader cannot do yet.
+    // Without the expand button a branch opens only by visiting a page in it.
     const buttons = (D.nav.match(/<button class="toctree-expand"/g) || []).length;
     const parents = (D.nav.match(/<\/a><ul>/g) || []).length;
     check('every branch has the theme expand button', buttons === parents &&
@@ -687,15 +604,10 @@ async function main() {
     const doc = win.document;
     const nav = doc.getElementById('ap-nav');
     const inFile = new Set(D.pages.map((p) => p.p));
-    // The export's own wiki order, not the order they were asked for: the
-    // first section of the sidebar is the one with a wiki after it, which is
-    // where the reading order has to stop.
+    // The export's own wiki order, where the reading order has to stop.
     const wiki0 = D.wikis[0];
 
-    // Sidebar anchors in the order the tree renders them, which is the order a
-    // reader walking the sidebar top to bottom would meet the pages. Derived
-    // from the markup rather than from D.order, so the two are checked against
-    // each other rather than against themselves.
+    // From the markup, not D.order, so the two are checked against each other.
     const walk = [];
     const seenA = new Set();
     [].forEach.call(nav.querySelectorAll('a[href^="#/"]'), (a) => {
@@ -778,9 +690,7 @@ async function main() {
         btn.dispatchEvent(ev);
         check('clicking the arrow opens that branch',
               li.classList.contains('current'));
-        // The arrow sits inside the anchor, exactly as the theme puts it, so
-        // unless the click is cancelled the browser follows the link and the
-        // reader is taken to the branch instead of shown it.
+        // The arrow sits inside the anchor; the click must be cancelled.
         check('opening a branch does not navigate away', ev.defaultPrevented);
         btn.dispatchEvent(new win.MouseEvent('click',
                                              { bubbles: true, cancelable: true }));
@@ -806,14 +716,8 @@ async function main() {
               versions.map((v) => v.n).join(),
               [].map.call(sel.options, (o) => o.textContent).join(' '));
 
-        // The page is stored inside an inert <script> block, so its own inline
-        // <script> is escaped going in. Left escaped coming out it never
-        // closes, and the browser swallows the rest of the page into it - on
-        // this page that is the entire parameter list, a few lines below the
-        // switcher.
-        // Elements, not text: left escaped the page still *contains* the
-        // words, because they end up inside the script element that swallowed
-        // them. What is lost is that they are a paragraph.
+        // Elements, not text: a page swallowed into an unclosed script still
+        // contains the words; what is lost is that they are a paragraph.
         const paras = [].map.call(doc.querySelectorAll('#ap-doc p'),
                                   (el) => el.textContent);
         check('the page below its own inline script survives',
@@ -839,9 +743,7 @@ async function main() {
     }
   }
 
-  // Sphinx omits stopwords from its index, so a query containing one must not
-  // reduce the result set to nothing. Pasting a sentence used to find nothing
-  // at all.
+  // Sphinx omits stopwords from its index; a query containing one must still work.
   const fts = readSearchPayload(htmlPath);
   const search = fts ? liftSearch(fts) : null;
   check('search lifted from the exporter', !fts || search !== null);
@@ -854,10 +756,7 @@ async function main() {
     check('a whole pasted sentence still matches',
           probe('the vehicle is a copter') > 0, probe('the vehicle is a copter') + ' docs');
 
-    // Requiring every word to match meant one unmatchable word answered
-    // "nothing found" however much of the query pointed somewhere. A reader
-    // dragging a selection clips the first and last words, so this is what
-    // pasting a sentence actually looks like.
+    // A pasted selection clips its first and last words.
     check('a word that matches nothing does not empty the results',
           probe('vehicle zzzznotaword') === bare,
           probe('vehicle zzzznotaword') + ' vs ' + bare);
