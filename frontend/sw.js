@@ -24,6 +24,8 @@ const THIRD_PARTY_FRESH = /^https:\/\/firmware\.ardupilot\.org\/useralerts\//;
 const CURRENT_CACHES = [PAGE_CACHE, IMAGE_CACHE, STATIC_CACHE, THIRD_PARTY_CACHE];
 // Saved wikis, unversioned so they outlive worker updates.
 const OFFLINE_CACHE_PREFIX = 'ardupilot-offline-';
+// The wiki roots; other single-segment paths are the site's own short links.
+const WIKI_ROOT = /^\/(copter|plane|rover|sub|blimp|dev|antennatracker|planner|planner2|ardupilot|mavproxy)$/;
 
 // Deliberately short; everything else is cached as it is visited.
 const SHELL = [
@@ -635,7 +637,7 @@ self.addEventListener('fetch', (event) => {
 
   // A wiki root without its slash: send it to the slash form, as the server
   // does, or every relative link on the page resolves one level up.
-  if (request.mode === 'navigate' && /^\/[a-z0-9]+$/.test(url.pathname)) {
+  if (request.mode === 'navigate' && WIKI_ROOT.test(url.pathname)) {
     event.respondWith(new Response(null, {
       status: 301, headers: { Location: url.pathname + '/' + url.search }
     }));
