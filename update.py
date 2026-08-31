@@ -1266,11 +1266,10 @@ class WikiUpdater:
 
         try:
             from scripts.optimise_images import run as optimise_images
-        except ImportError as ex:
-            error(f"image pass unavailable, skipping: {ex}")
-        else:
             n, saved = optimise_images(wikis, passes_root)
             info(f"recompressed {n} PNGs, saving {saved / 1048576:.1f} MB")
+        except Exception as ex:
+            error(f"image pass failed, skipping: {ex}")
 
         # Skipped for a partial build: --site leaves the other wikis unbuilt,
         # and a manifest describing one wiki would tell every saved copy it is
