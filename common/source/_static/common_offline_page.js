@@ -1204,6 +1204,11 @@
       updateSaveState();
     }
     if (e.target.id === 'select-all') { toggleAll(e.target.checked); }
+    if (e.target.id === 'offline-mode' && global.ApOffline) {
+      var turnOn = e.target.checked;
+      Promise.resolve(turnOn ? global.ApOffline.enable() : global.ApOffline.disable())
+        .then(renderOfflineMode, renderOfflineMode);
+    }
     if (e.target.id === 'autoupdate') {
       try {
         window.localStorage.setItem(AUTOUPDATE_KEY, e.target.checked ? '1' : '0');
@@ -1221,14 +1226,24 @@
     if (hit.id === 'clear-btn') { confirmClear(); }
     if (hit.id === 'download-cache-btn') {
       // Saving opts in to offline mode (pwa.js).
-      if (window.ApOffline) { window.ApOffline.enable(); }
+      if (window.ApOffline) { window.ApOffline.enable(); renderOfflineMode(); }
       saveSelectedReal();
     }
     if (hit.id === 'check-btn') { checkForUpdates(); }
     if (hit.id === 'dl-single') { e.preventDefault(); exportHtmlFile(); }
   });
 
+  // The switch reflects pwa.js's flag; pwa.js owns the registration itself.
+  function renderOfflineMode() {
+    var box = el('offline-mode'), state = el('offline-mode-state');
+    if (!box || !global.ApOffline) { return; }
+    var on = global.ApOffline.enabled();
+    box.checked = on;
+    if (state) { state.textContent = on ? 'on' : 'off'; }
+  }
+
   function init() {
+    renderOfflineMode();
     try {
       var pref = window.localStorage.getItem(AUTOUPDATE_KEY);
       if (pref === '0') { el('autoupdate').checked = false; }

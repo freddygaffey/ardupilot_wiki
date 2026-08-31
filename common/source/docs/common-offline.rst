@@ -63,6 +63,19 @@ developer documentation.
 
    <div class="apo">
 
+     <div class="apo-mode">
+       <label class="apo-switch" title="Turn offline mode on or off">
+         <input type="checkbox" id="offline-mode" />
+         <span class="apo-switch-track"></span>
+       </label>
+       <div>
+         <strong>Offline mode: <span id="offline-mode-state">off</span></strong>
+         <div class="apo-hint">Runs a service worker in this browser so the pages
+           you have read, and the wikis you save, open with no connection.
+           Saving a wiki turns it on. Off, the site behaves as it always has.</div>
+       </div>
+     </div>
+
      <div class="apo-head">
        <p class="apo-title">Save Documentation for Offline Use</p>
        <span class="apo-spacer"></span>
@@ -149,9 +162,10 @@ is involved, and the pages you read offline are the same files the site serves
 normally. While automatic updates are enabled, the wiki may check this site for
 changed pages while it is open.
 
-Offline mode is off until you ask for it. Saving a wiki turns it on, and so
-does **Enable offline mode** in the Offline menu. Until then the site behaves
-exactly as it always has, and nothing runs in the background.
+Offline mode is off until you turn it on with the switch at the top of this
+page; saving a wiki turns it on too. Off, the site behaves exactly as it
+always has and nothing runs in the background. Turning it off keeps your
+saved wikis stored, but they cannot be read offline until it is on again.
 
 Install as an App
 =================

@@ -933,6 +933,33 @@ async function main() {
           JSON.stringify(fetchCalls.filter(u => u.indexOf('.tar') !== -1)));
   }
   {
+    // A template edit: every page changed, no image did. Stays differential.
+    const cachesObj = makeCaches();
+    const files = {};
+    for (let i = 0; i < 60; i++) { files['dev/docs/p' + i + '.html'] = ['h' + i, 'old ' + i]; }
+    for (let i = 0; i < 40; i++) { files['dev/_images/i' + i + '.png'] = ['g' + i, 'img ' + i]; }
+    await seedSaved(cachesObj, 'dev', OLD_BUILD, files);
+    const published = {}, loose = {};
+    for (const k of Object.keys(files)) {
+      if (k.endsWith('.png')) { published[k] = files[k][0]; continue; }
+      loose[k] = 'NEW ' + k;
+      published[k] = await fileHash(loose[k]);
+    }
+    const { fetchCalls, doc } = load({
+      manifest: MANIFEST, caches: cachesObj,
+      tables: { 'dev-files.json': published }, loose,
+      archives: { 'dev/index.html': '<html>from the archive' },
+    });
+    await settle();
+    $(doc, 'check-btn').click();
+    for (let i = 0; i < 40; i++) { await settle(); }
+    const tagged = fetchCalls.filter(u => u.indexOf('ap-update=') !== -1).length;
+    check('every page changed but no image: still fetched file by file',
+          tagged > 0 && !fetchCalls.some(u => u.indexOf('.tar') !== -1),
+          tagged + ' file requests, archive fetched: ' +
+          fetchCalls.some(u => u.indexOf('.tar') !== -1));
+  }
+  {
     // A handful of changed files still takes the cheap path.
     const cachesObj = makeCaches();
     const files = {};

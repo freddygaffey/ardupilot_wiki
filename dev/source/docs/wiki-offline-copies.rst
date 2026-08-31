@@ -32,8 +32,8 @@ you want depends on what you are trying to achieve.
 
 **Browse faster.** Every page you visit is stored on your device and served
 from there the next time it is requested. It starts when you turn offline mode
-on - **Enable offline mode** in the Offline menu, or saving a wiki - and works
-from then on. This applies to ordinary browsing over a normal internet
+on, with the switch at the top of the Offline page or by saving a wiki, and
+works from then on. This applies to ordinary browsing over a normal internet
 connection.
 
 **Save a wiki for offline use.** Saving downloads the wiki you select into your
@@ -169,8 +169,9 @@ as built by Sphinx; nothing is rewritten and no framework is introduced.
 Implementation is in ``frontend/sw.js``, registered by ``frontend/js/pwa.js``,
 which ``common/_templates/layout.html`` includes on every page. Inclusion is
 not registration: ``pwa.js`` registers the worker only after the reader has
-opted in, by saving a wiki or by pressing **Enable offline mode** in the
-Offline menu. A reader who never opts in gets no worker and browses the wiki
+opted in, with the switch at the top of the Offline page or by saving a wiki;
+turning the switch off unregisters it. A reader who never opts in gets no
+worker and browses the wiki
 exactly as before the feature existed, which is what allows it to be deployed
 dormant and tested in production without touching anyone else.
 

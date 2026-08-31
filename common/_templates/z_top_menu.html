@@ -89,14 +89,8 @@
                </ul>
              </li>
            {%- endif %}
-           {# The Offline page and the opt-in switch, wired by /js/pwa.js. #}
            {%- if hasdoc('docs/common-offline') %}
-             <li><a href="{{ pathto('docs/common-offline') }}">{{ _('Offline') }}</a>
-               <ul>
-                 <li><a href="{{ pathto('docs/common-offline') }}">{{ _('Offline Copies') }}</a></li>
-                 <li><a id="ap-offline-enable" href="{{ pathto('docs/common-offline') }}">{{ _('Enable offline mode') }}</a></li>
-               </ul>
-             </li>
+             <li><a href="{{ pathto('docs/common-offline') }}">{{ _('Offline') }}</a></li>
            {%- endif %}
         </ul>
         
