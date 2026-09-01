@@ -65,7 +65,7 @@ developer documentation.
 
      <div class="apo-mode">
        <label class="apo-switch" title="Turn offline mode on or off">
-         <input type="checkbox" id="offline-mode" />
+         <input type="checkbox" id="offline-mode" aria-label="Offline mode" />
          <span class="apo-switch-track"></span>
        </label>
        <div>

@@ -1530,7 +1530,7 @@ async function main() {
 
     const ticked = [...doc.querySelectorAll('.param-check')]
       .filter((b) => b.checked).map((b) => b.value);
-    check('the saved version is ticked', 
+    check('the saved version is ticked',
           ticked.includes('docs/parameters-Copter-stable-V4.6.0.html'),
           JSON.stringify(ticked));
     check('the newer default is NOT ticked, because it is not saved',
