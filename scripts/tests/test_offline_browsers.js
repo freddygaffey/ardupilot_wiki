@@ -221,9 +221,12 @@ async function runEngine(name, launcher, base) {
     /* ---- online: register the worker and read a few pages -------------- */
 
     // Opt-in: a reader who has not asked must get no registration at all.
+    const dormantRequests = [];
+    const onRequest = (r) => dormantRequests.push(new URL(r.url()).pathname);
+    page.on('request', onRequest);
     const dormant = await phase(name, 'no worker without opt-in', async () => {
       await page.goto(base + VISITED, { waitUntil: 'load' });
-      await page.waitForTimeout(1200);
+      await page.waitForTimeout(1500);
       return page.evaluate(async () => {
         const reg = await navigator.serviceWorker.getRegistration();
         return { registered: !!reg };
@@ -231,6 +234,10 @@ async function runEngine(name, launcher, base) {
     });
     check(name, 'a reader who has not opted in gets no service worker',
           !dormant.registered, JSON.stringify(dormant));
+    page.off('request', onRequest);
+    const prefetched = dormantRequests.filter((p) => /\.html$/.test(p) && p !== VISITED);
+    check(name, 'and no page is prefetched for them either',
+          prefetched.length === 0, JSON.stringify(prefetched.slice(0, 3)));
     const switchOff = await phase(name, 'switch reads off', async () => {
       await page.goto(base + '/dev/docs/common-offline.html', { waitUntil: 'load' });
       await page.waitForTimeout(800);
