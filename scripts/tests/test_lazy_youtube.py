@@ -6,8 +6,12 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "extensions"))
-import lazy_youtube  # noqa: E402
-from sphinxcontrib.youtube import youtube  # noqa: E402
+try:
+    import lazy_youtube  # noqa: E402
+    from sphinxcontrib.youtube import youtube  # noqa: E402
+except ImportError as ex:
+    print(f"  SKIP  sphinxcontrib-youtube is not installed ({ex}); pip install -r requirements.txt\n")
+    sys.exit(0)
 
 failures = 0
 
@@ -32,6 +36,10 @@ class Translator:
 class App:
     def __init__(self):
         self.nodes = {}
+        self.extensions = []
+
+    def setup_extension(self, name):
+        self.extensions.append(name)
 
     def add_node(self, node_class, override=False, **visitors):
         self.nodes[node_class] = (override, visitors)
@@ -50,6 +58,8 @@ def node(**extra):
 
 app = App()
 lazy_youtube.setup(app)
+check("sphinxcontrib.youtube is set up first, whatever conf.py's order",
+      app.extensions == ["sphinxcontrib.youtube"])
 check("the youtube node is re-registered with override",
       youtube.youtube in app.nodes and app.nodes[youtube.youtube][0])
 visit, depart = app.nodes[youtube.youtube][1]["html"]
@@ -66,6 +76,18 @@ for label, extra in (("a plain embed", {}), ("an aligned embed", {"align": "cent
 t = Translator()
 visit(t, node())
 check("the tag carries loading exactly once", t.body[-2].count("loading=") == 1)
+
+earlier = Translator()
+earlier.body = ["<iframe>an earlier embed, not this one</iframe>"]
+visit(earlier, node())
+check("only the output this visit appended is touched", "loading=" not in earlier.body[0])
+
+# The visitor's output changing shape must be said, not silently accepted.
+warned = []
+lazy_youtube.logger.warning = lambda msg, **kw: warned.append(msg)
+lazy_youtube._lazy(lambda self, node: self.body.append("<div>no iframe</div>"))(Translator(), node())
+check("a visitor that renders no iframe raises a build warning",
+      len(warned) == 1 and "not lazy" in warned[0])
 check("nothing else in the output changed",
       t.body[0].startswith("<div") and t.body[-1] == "</iframe></div>")
 
