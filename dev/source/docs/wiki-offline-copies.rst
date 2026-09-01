@@ -433,7 +433,7 @@ Testing
 ``scripts/tests/test_offline_archives.py``
    Inspects the finished archives. Requires a full ``update.py`` first.
 
-``scripts/tests/test_lazy_embeds.py``
+``scripts/tests/test_lazy_youtube.py``
    Covers the post-build pass that defers YouTube embeds.
 
 ``scripts/tests/test_image_resize.py``
