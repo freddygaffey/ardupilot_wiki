@@ -26,7 +26,7 @@ class Translator:
         self.body = []
 
     def starttag(self, node, tag, **attrs):
-        return "<%s %s>" % (tag, " ".join(f'{k}="{v}"' for k, v in attrs.items()))
+        return f"<{tag} " + " ".join(f'{k}="{v}"' for k, v in attrs.items()) + ">"
 
 
 class App:

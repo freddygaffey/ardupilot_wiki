@@ -58,10 +58,18 @@ ALLVEHICLES = ["AntennaTracker", "Copter", "Plane", "Rover", "Sub", "Blimp"]
 VEHICLES = ALLVEHICLES
 # Filter out versions below this semantic version threshold (each kept version
 # is another 5.8 MB parameter page per vehicle).
-PARAM_PARSE_MINIMUM_VERSION = tuple(
-    int(part) for part in
-    os.environ.get("ARDUPILOT_PARAM_MIN_VERSION", "3.9.0").split(".")
-)
+def _minimum_version():
+    raw = os.environ.get("ARDUPILOT_PARAM_MIN_VERSION", "3.9.0")
+    try:
+        parts = tuple(int(part) for part in raw.split("."))
+        if len(parts) != 3:
+            raise ValueError
+    except ValueError:
+        raise SystemExit(f"ARDUPILOT_PARAM_MIN_VERSION must look like 4.5.0, got {raw!r}") from None
+    return parts
+
+
+PARAM_PARSE_MINIMUM_VERSION = _minimum_version()
 
 BASEPATH = ""
 error_count = 0
@@ -340,8 +348,7 @@ def setup():
         # Release commits live on branches and tags, not master.
         run_git("git fetch origin master", cwd=repo_path)
         run_git("git fetch origin --tags --force "
-                "'+refs/heads/*:refs/remotes/origin/*'", cwd=repo_path,
-                check=False)
+                "+refs/heads/*:refs/remotes/origin/*", cwd=repo_path)
         run_git("git reset --hard origin/master", cwd=repo_path)
         run_git("git pull", cwd=repo_path)
 
