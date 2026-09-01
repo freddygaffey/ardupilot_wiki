@@ -31,7 +31,14 @@ GZIP_LEVEL = 1
 ARTIFACT_BASE_ENV = "ARDUPILOT_OFFLINE_BASE"
 
 # Long-side pixel cap for archive images, 0 = off.
-IMAGE_MAX_DIM = int(os.environ.get("ARDUPILOT_OFFLINE_MAX_IMAGE_DIM", "0"))
+def _int_env(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+IMAGE_MAX_DIM = _int_env("ARDUPILOT_OFFLINE_MAX_IMAGE_DIM", 0)
 
 # Capitalising the directory name gave "Dev" and "Ardupilot".
 DISPLAY_NAMES = {

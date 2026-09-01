@@ -1269,8 +1269,11 @@ class WikiUpdater:
         except ImportError as ex:
             error(f"image pass unavailable, skipping: {ex}")
         else:
-            n, saved = optimise_images(wikis, passes_root)
-            info(f"recompressed {n} PNGs, saving {saved / 1048576:.1f} MB")
+            try:
+                n, saved = optimise_images(wikis, passes_root)
+                info(f"recompressed {n} PNGs, saving {saved / 1048576:.1f} MB")
+            except Exception as ex:  # an optimisation must never stop a build
+                error(f"image pass failed, images left as built: {ex}")
 
         # Skipped for a partial build: --site leaves the other wikis unbuilt,
         # and a manifest describing one wiki would tell every saved copy it is
@@ -1279,8 +1282,11 @@ class WikiUpdater:
             info(f"offline artefacts skipped: --site {self.args.site} builds "
                  "one wiki, and the archives describe all of them")
         else:
-            from scripts.build_offline_artifacts import build as build_offline
-            build_offline(ALL_WIKIS, Path(self.args.destdir or "."))
+            try:
+                from scripts.build_offline_artifacts import build as build_offline
+                build_offline(ALL_WIKIS, Path(self.args.destdir or "."))
+            except Exception as ex:  # the wiki must still publish without them
+                error(f"offline artefacts not built: {ex}")
 
         if self.args.enablebackups:
             make_backup(building_time, self.args.site, self.args.destdir, self.args.backupdestdir)
