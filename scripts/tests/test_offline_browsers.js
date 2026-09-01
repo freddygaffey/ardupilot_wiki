@@ -174,23 +174,31 @@ async function checkUpdateWindow(name, browser, base) {
     }, ['copter', 'plane', 'rover', 'sub', 'blimp', 'dev', 'antennatracker',
         'planner', 'planner2', 'ardupilot', 'mavproxy']);
 
+    // Armed before the update. The old controller stays non-null throughout,
+    // so only the handover events prove the new worker took the tab.
+    const handover = page.evaluate(() => new Promise((resolve) => {
+      const started = Date.now();
+      const result = { updatefound: false, controllerchange: false, ms: -1 };
+      const timer = setTimeout(() => resolve(result), 15000);
+      navigator.serviceWorker.getRegistration().then((reg) => {
+        reg.addEventListener('updatefound', () => { result.updatefound = true; });
+      });
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        result.controllerchange = true;
+        result.ms = Date.now() - started;
+        clearTimeout(timer);
+        resolve(result);
+      });
+    }));
     bumpWorker();
     await page.evaluate(async () => {
       const reg = await navigator.serviceWorker.getRegistration();
       await reg.update();
     });
-    const reclaimed = await page.evaluate(async () => {
-      const started = Date.now();
-      while (Date.now() - started < 10000) {
-        if (navigator.serviceWorker.controller) { return Date.now() - started; }
-        await new Promise((r) => setTimeout(r, 100));
-      }
-      return -1;
-    });
+    const reclaimed = await handover;
     check(name, 'a tab open across a worker update is controlled again',
-          reclaimed >= 0,
-          (reclaimed >= 0 ? reclaimed + ' ms' : 'still none after 10s') +
-          ', with ' + seeded + ' entries saved');
+          reclaimed.updatefound && reclaimed.controllerchange,
+          JSON.stringify(reclaimed) + ', with ' + seeded + ' entries saved');
   } finally {
     await context.close().catch(() => {});
   }
@@ -287,10 +295,17 @@ async function checkOptOut(name, browser, base) {
         const reg = await navigator.serviceWorker.getRegistration();
         await reg.update();
       });
-      const state = await waitForClean(page);
-      check(name, 'the kill switch leaves the same never-opted-in browser',
-            JSON.stringify(state) === CLEAN, JSON.stringify(state));
+      let state = await waitForClean(page);
       const spontaneous = loads;
+      let when = 'in the open tab';
+      if (JSON.stringify(state) !== CLEAN) {
+        // WebKit activates the replacement only when the tab next navigates.
+        await page.reload({ waitUntil: 'load' });
+        state = await waitForClean(page);
+        when = 'on the next visit';
+      }
+      check(name, 'the kill switch leaves the same never-opted-in browser',
+            JSON.stringify(state) === CLEAN, JSON.stringify(state) + ', ' + when);
       await page.reload({ waitUntil: 'load' });
       await page.waitForTimeout(1500);
       const after = await optOutState(page);
@@ -334,11 +349,12 @@ async function runEngine(name, launcher, base) {
       await page.waitForTimeout(1200);
       return page.evaluate(async () => {
         const reg = await navigator.serviceWorker.getRegistration();
-        return { registered: !!reg };
+        // pwa.js must have run, or a 404 on it would pass this check.
+        return { registered: !!reg, pwaLoaded: typeof window.ApOffline === 'object' };
       });
     });
     check(name, 'a reader who has not opted in gets no service worker',
-          !dormant.registered, JSON.stringify(dormant));
+          !dormant.registered && dormant.pwaLoaded, JSON.stringify(dormant));
     const switchOff = await phase(name, 'switch reads off', async () => {
       await page.goto(base + '/dev/docs/common-offline.html', { waitUntil: 'load' });
       await page.waitForTimeout(800);
