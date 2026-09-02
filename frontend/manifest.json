@@ -30,6 +30,6 @@
     {"name": "Copter", "url": "/copter/"},
     {"name": "Plane", "url": "/plane/"},
     {"name": "Rover", "url": "/rover/"},
-    {"name": "Offline copies", "url": "/offline/"}
+    {"name": "Offline copies", "url": "/copter/docs/common-offline.html"}
   ]
 }
