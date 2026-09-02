@@ -113,63 +113,98 @@ def classify_images(wikis):
     return common, per_wiki
 
 
-EMBED_RE = re.compile(
-    r'<div class="video_wrapper"[^>]*>\s*'
-    r'<iframe[^>]*src="https?://(?:www\.)?youtube\.com/embed/'
-    r'([A-Za-z0-9_-]+)[^"]*"[^>]*>\s*</iframe>\s*</div>',
+# Any iframe is a dead box offline, so each one becomes a card.
+WRAPPED_IFRAME_RE = re.compile(
+    r'<div class="video_wrapper[^"]*"[^>]*>\s*'
+    r'<iframe[^>]*src="([^"]+)"[^>]*>\s*</iframe>\s*</div>',
     re.IGNORECASE)
+BARE_IFRAME_RE = re.compile(
+    r'<iframe[^>]*src="([^"]+)"[^>]*>(?:\s*</iframe>)?', re.IGNORECASE)
+
+YOUTUBE_SRC_RE = re.compile(
+    r'https?://(?:www\.)?(?:youtube(?:-nocookie)?\.com/embed/|youtu\.be/)'
+    r'([A-Za-z0-9_-]+)', re.IGNORECASE)
+VIMEO_SRC_RE = re.compile(r'https?://player\.vimeo\.com/video/(\d+)', re.IGNORECASE)
 
 THUMB_URL = "https://img.youtube.com/vi/{}/hqdefault.jpg"
+VIMEO_OEMBED_URL = ("https://vimeo.com/api/oembed.json"
+                    "?url=https%3A%2F%2Fvimeo.com%2F{}")
 
 
-def video_ids(wikis):
-    """Every YouTube id embedded anywhere in the built output."""
-    ids = set()
+def classify_embed(src: str):
+    """(still key, watch link, verb) for an iframe src; key None when unknown."""
+    m = YOUTUBE_SRC_RE.match(src)
+    if m:
+        return (f"yt-{m.group(1)}",
+                f"https://www.youtube.com/watch?v={m.group(1)}", "Watch on YouTube")
+    m = VIMEO_SRC_RE.match(src)
+    if m:
+        return (f"vimeo-{m.group(1)}", f"https://vimeo.com/{m.group(1)}",
+                "Watch on Vimeo")
+    return (None, src, "Open in a browser")
+
+
+def collect_embeds(wikis):
+    """Still key -> where its thumbnail comes from, for every embedded video."""
+    wanted = {}
     for wiki in wikis:
         root = Path(wiki) / "build" / "html"
         if not root.is_dir():
             continue
         for page in root.rglob("*.html"):
-            ids.update(EMBED_RE.findall(
-                page.read_text(encoding="utf-8", errors="replace")))
-    return ids
+            for src in BARE_IFRAME_RE.findall(
+                    page.read_text(encoding="utf-8", errors="replace")):
+                key = classify_embed(src)[0]
+                if key is None:
+                    continue
+                wanted[key] = (THUMB_URL.format(key[3:]) if key.startswith("yt-")
+                               else VIMEO_OEMBED_URL.format(key[6:]))
+    return wanted
 
 
-def fetch_thumbnails(ids, cache: Path):
+def fetch_thumbnails(specs, cache: Path):
     """A still per video, cached across builds; a missing one is not fatal."""
     cache.mkdir(parents=True, exist_ok=True)
     have, failed = {}, []
-    for vid in sorted(ids):
-        path = cache / f"{vid}.jpg"
+    for key in sorted(specs):
+        path = cache / f"{key}.jpg"
         if not path.is_file():
             try:
-                with urllib.request.urlopen(THUMB_URL.format(vid), timeout=15) as r:
+                url = specs[key]
+                # Vimeo publishes no fixed still URL; its oEmbed answer names one.
+                if "oembed" in url:
+                    with urllib.request.urlopen(url, timeout=15) as r:
+                        url = json.loads(r.read()).get("thumbnail_url")
+                    if not url:
+                        raise ValueError("no thumbnail_url")
+                with urllib.request.urlopen(url, timeout=15) as r:
                     data = r.read()
                 if not data:
                     raise ValueError("empty")
                 path.write_bytes(data)
             except (urllib.error.URLError, OSError, ValueError):
-                failed.append(vid)
+                failed.append(key)
                 continue
-        have[vid] = path
+        have[key] = path
     if failed:
         # Usually a deleted or private video; this is the only place it shows.
         log(f"  no still for {len(failed)} video(s), so those cards link "
             f"without one. Usually deleted or private:")
-        for vid in failed:
-            log(f"    https://www.youtube.com/watch?v={vid}")
+        for key in failed:
+            log(f"    {key}")
     return have
 
 
-def video_card(vid: str, wiki: str, has_thumb: bool) -> str:
-    """A still linking to the video, styled inline for the export's sake."""
-    link = f"https://www.youtube.com/watch?v={vid}"
-    label = ("&#9654; Watch on YouTube "
+def embed_card(src: str, wiki: str, thumbs) -> str:
+    """A still linking to what the iframe embedded, styled inline for the export's sake."""
+    key, link, verb = classify_embed(src)
+    link = link.replace("&", "&amp;").replace('"', "&quot;")
+    label = (f"&#9654; {verb} "
              '<span style="opacity:.8">(needs a connection)</span>')
 
     still = ''
-    if has_thumb:
-        still = (f'<img src="/{wiki}/_images/yt-{vid}.jpg" alt="" '
+    if key in thumbs:
+        still = (f'<img src="/{wiki}/_images/{key}.jpg" alt="" '
                  'onerror="this.remove()" '
                  'style="position:absolute;top:0;left:0;width:100%;height:100%;'
                  'object-fit:cover;border-radius:4px">')
@@ -189,9 +224,9 @@ def video_card(vid: str, wiki: str, has_thumb: bool) -> str:
 
 
 def rewrite_embeds(html: str, wiki: str, thumbs) -> str:
-    """Swap every YouTube embed in a page for its card."""
-    return EMBED_RE.sub(
-        lambda m: video_card(m.group(1), wiki, m.group(1) in thumbs), html)
+    """Swap every iframe in a page for its card; nothing live is archived."""
+    html = WRAPPED_IFRAME_RE.sub(lambda m: embed_card(m.group(1), wiki, thumbs), html)
+    return BARE_IFRAME_RE.sub(lambda m: embed_card(m.group(1), wiki, thumbs), html)
 
 
 # The theme's donate control is a remote <input type="image">, a grey box offline.
@@ -323,8 +358,8 @@ def write_common_archive(wikis, common_names, out_dir: Path, thumbs,
                     add_image(tar, path, f"_images/{name}", files, out_dir / "files")
                     seen.add(name)
         # Stills live with the shared images, where the worker and exporter look.
-        for vid, path in sorted(thumbs.items()):
-            add_bytes(tar, f"_images/yt-{vid}.jpg", path.read_bytes(), files,
+        for key, path in sorted(thumbs.items()):
+            add_bytes(tar, f"_images/{key}.jpg", path.read_bytes(), files,
                       loose_dir=out_dir / "files")
         # Written exactly as write_wiki_archive would, unique images included.
         for wiki in folded:
@@ -472,9 +507,9 @@ def build(wikis, destdir: Path) -> Path:
     log(f"classifying images across {len(built)} wikis")
     common_names, per_wiki = classify_images(built)
 
-    ids = video_ids(built)
-    log(f"fetching stills for {len(ids)} embedded videos")
-    thumbs = fetch_thumbnails(ids, out_dir / ".thumbs")
+    embeds = collect_embeds(built)
+    log(f"fetching stills for {len(embeds)} embedded videos")
+    thumbs = fetch_thumbnails(embeds, out_dir / ".thumbs")
 
     folded = [w for w in built if w in FOLD_INTO_COMMON]
     log(f"writing common archive ({len(common_names)} shared images, "

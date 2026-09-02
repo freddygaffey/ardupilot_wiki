@@ -70,6 +70,31 @@ def check_image_classification():
           "own.png" in per_wiki[alpha] and "own.png" not in per_wiki[beta])
 
 
+def check_embed_rewrite():
+    """No iframe survives into a page bound for an archive."""
+    sys.path.insert(0, str(REPO / "scripts"))
+    from build_offline_artifacts import rewrite_embeds
+
+    wrapped = ('<div class="video_wrapper align-center">'
+               '<iframe src="https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ?rel=0">'
+               '</iframe></div>')
+    vimeo = ('<div class="video_wrapper">'
+             '<iframe src="https://player.vimeo.com/video/123456"></iframe></div>')
+    form = '<iframe src="https://docs.google.com/forms/d/e/abc/viewform"></iframe>'
+    page = "<html><body>" + wrapped + vimeo + form + "</body></html>"
+    out = rewrite_embeds(page, "rover", {"yt-dQw4w9WgXcQ": object()})
+
+    check("no iframe survives the rewrite", "<iframe" not in out.lower(), out[:120])
+    check("an aligned privacy-mode embed becomes a YouTube card with its still",
+          'href="https://www.youtube.com/watch?v=dQw4w9WgXcQ"' in out and
+          "yt-dQw4w9WgXcQ.jpg" in out)
+    check("a vimeo embed becomes a Vimeo card",
+          'href="https://vimeo.com/123456"' in out and "Watch on Vimeo" in out)
+    check("an unknown iframe becomes a link card to what it embedded",
+          'href="https://docs.google.com/forms/d/e/abc/viewform"' in out and
+          "Open in a browser" in out)
+
+
 def check_shared_images_agree():
     """An image the common archive serves must be what every wiki published."""
     table_path = OFFLINE / "common-files.json"
@@ -224,6 +249,7 @@ def main():
     print("\noffline archives: what the reader receives\n")
 
     check_image_classification()
+    check_embed_rewrite()
     check_shared_images_agree()
 
     checked = 0
@@ -233,6 +259,7 @@ def main():
             continue
 
         remote_donate = []
+        live_iframes = []
         local_donate = 0
         pages = 0
         # A sample: the control is in every sidebar.
@@ -240,6 +267,8 @@ def main():
             pages += 1
             if "paypalobjects" in html:
                 remote_donate.append(name)
+            if "<iframe" in html.lower():
+                live_iframes.append(name)
             if 'href="https://ardupilot.org/donate"' in html and ">Donate</a>" in html:
                 local_donate += 1
 
@@ -247,6 +276,10 @@ def main():
             continue
         checked += 1
 
+        check(f"{wiki}: no page ships a live iframe",
+              not live_iframes,
+              f"{len(live_iframes)} pages, e.g. {live_iframes[0]}" if live_iframes
+              else f"{pages} pages sampled")
         check(f"{wiki}: no page ships a remote donate image",
               not remote_donate,
               f"{len(remote_donate)} of {pages} still reference paypalobjects"
