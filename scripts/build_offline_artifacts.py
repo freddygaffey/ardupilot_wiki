@@ -86,21 +86,30 @@ def log(msg):
 
 
 def classify_images(wikis):
-    """Return (names shared by 2+ wikis, {wiki: names unique to it})."""
-    owners = defaultdict(set)
+    """Return (names shared by 2+ wikis, {wiki: names it carries itself}).
+
+    Shared means the same name AND the same bytes everywhere. Two wikis using
+    one name for different pictures is a collision, not sharing: folding either
+    copy would show the other wiki the wrong image offline, so every owner
+    keeps its own.
+    """
+    owners = defaultdict(dict)
     for wiki in wikis:
         images = Path(wiki) / "build" / "html" / "_images"
         if not images.is_dir():
             continue
         for path in images.iterdir():
             if path.is_file():
-                owners[path.name].add(wiki)
+                owners[path.name][wiki] = content_hash(path.read_bytes())
 
-    common = {name for name, who in owners.items() if len(who) > 1}
+    common = set()
     per_wiki = defaultdict(set)
-    for name, who in owners.items():
-        if len(who) == 1:
-            per_wiki[next(iter(who))].add(name)
+    for name, copies in owners.items():
+        if len(copies) > 1 and len(set(copies.values())) == 1:
+            common.add(name)
+        else:
+            for wiki in copies:
+                per_wiki[wiki].add(name)
     return common, per_wiki
 
 
@@ -412,7 +421,7 @@ def add_wiki_tree(tar, wiki: str, exclusive: set, out_dir: Path, thumbs,
 
 def write_wiki_archive(wiki: str, exclusive: set, out_dir: Path, thumbs,
                        wikis, files=None) -> int:
-    """Pages, static assets and images unique to this wiki."""
+    """Pages, static assets and the images this wiki carries itself."""
     archive = out_dir / f"{wiki}-offline.tar.gz"
     with reproducible_tar(archive) as tar:
         add_wiki_tree(tar, wiki, exclusive, out_dir, thumbs, wikis, files)

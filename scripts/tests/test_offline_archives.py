@@ -6,9 +6,11 @@ Run after a full update.py. The rewrites are regular expressions over the
 theme's HTML, so a theme change would silently stop them matching.
 """
 
+import json
 import re
 import sys
 import tarfile
+import tempfile
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -41,6 +43,61 @@ def html_members(archive: Path, limit=None):
             seen += 1
             if limit and seen >= limit:
                 return
+
+
+def check_image_classification():
+    """Same name and bytes is shared; same name, different bytes is a collision."""
+    sys.path.insert(0, str(REPO / "scripts"))
+    from build_offline_artifacts import classify_images
+
+    with tempfile.TemporaryDirectory() as tmp:
+        trees = {"alpha": {"logo.png": b"same", "clash.png": b"A", "own.png": b"mine"},
+                 "beta": {"logo.png": b"same", "clash.png": b"B"}}
+        for wiki, images in trees.items():
+            root = Path(tmp) / wiki / "build" / "html" / "_images"
+            root.mkdir(parents=True)
+            for name, body in images.items():
+                (root / name).write_bytes(body)
+        alpha, beta = (str(Path(tmp) / w) for w in ("alpha", "beta"))
+        common, per_wiki = classify_images([alpha, beta])
+
+    check("identical bytes under one name are shared", common == {"logo.png"},
+          str(sorted(common)))
+    check("a name collision is nobody's to share",
+          "clash.png" in per_wiki[alpha] and "clash.png" in per_wiki[beta],
+          str({w.rsplit("/", 1)[-1]: sorted(n) for w, n in per_wiki.items()}))
+    check("a unique image stays with its wiki",
+          "own.png" in per_wiki[alpha] and "own.png" not in per_wiki[beta])
+
+
+def check_shared_images_agree():
+    """An image the common archive serves must be what every wiki published."""
+    table_path = OFFLINE / "common-files.json"
+    if not table_path.is_file():
+        check("common file table exists", False, str(table_path))
+        return
+    table = json.loads(table_path.read_text())
+    shared = {name.split("/", 1)[1]: h for name, h in table.items()
+              if name.startswith("_images/") and not name.startswith("_images/yt-")}
+
+    import hashlib
+    wrong = []
+    holders = 0
+    for wiki in WIKIS:
+        images = REPO / wiki / "build" / "html" / "_images"
+        if not images.is_dir():
+            continue
+        for name, expected in shared.items():
+            path = images / name
+            if not path.is_file():
+                continue
+            holders += 1
+            if hashlib.sha256(path.read_bytes()).hexdigest()[:16] != expected:
+                wrong.append(f"{wiki}/{name}")
+    check("every wiki holding a shared image holds the bytes common serves",
+          holders and not wrong,
+          f"{len(wrong)} disagree, e.g. {wrong[0]}" if wrong
+          else f"{len(shared)} shared images checked across {holders} holdings")
 
 
 def check_assets_follow_pages():
@@ -165,6 +222,9 @@ def check_no_dangling_assets():
 def main():
     wikis = [w for w in (sys.argv[1:] or WIKIS)]
     print("\noffline archives: what the reader receives\n")
+
+    check_image_classification()
+    check_shared_images_agree()
 
     checked = 0
     for wiki in wikis:
