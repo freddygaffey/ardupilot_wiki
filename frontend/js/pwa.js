@@ -500,11 +500,27 @@
 (function () {
   'use strict';
 
-  var ID = /[?&]v=([\w-]{6,})/;
+  var YT = /[?&]v=([\w-]{6,})/;
+  var VIMEO = /^https?:\/\/vimeo\.com\/(\d+)/;
+
+  function embedFor(href) {
+    var m = YT.exec(href || '');
+    if (m) {
+      return { src: 'https://www.youtube-nocookie.com/embed/' + m[1] + '?rel=0',
+               title: 'YouTube video' };
+    }
+    m = VIMEO.exec(href || '');
+    if (m) {
+      return { src: 'https://player.vimeo.com/video/' + m[1],
+               title: 'Vimeo video' };
+    }
+    return null;
+  }
+
   function upgrade(a) {
     if (a.dataset.apLive) { return; }
-    var m = ID.exec(a.getAttribute('href') || '');
-    if (!m) { return; }
+    var embed = embedFor(a.getAttribute('href'));
+    if (!embed) { return; }
     a.dataset.apLive = '1';
 
     var img = a.querySelector('img');
@@ -520,8 +536,8 @@
     ratio.style.cssText = 'display:block;padding-bottom:56.25%';
 
     var frame = document.createElement('iframe');
-    frame.src = 'https://www.youtube-nocookie.com/embed/' + m[1] + '?rel=0';
-    frame.title = 'YouTube video';
+    frame.src = embed.src;
+    frame.title = embed.title;
     frame.loading = 'lazy';
     frame.allowFullscreen = true;
     frame.setAttribute('allow',
