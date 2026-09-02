@@ -370,7 +370,7 @@ async function main() {
     await settle();
     check('a partial download is not reported as saved',
           doc.querySelector('tr[data-wiki="copter"] .apo-badge')
-             .textContent.toLowerCase().includes('not saved'));
+             .textContent.toLowerCase().includes('incomplete'));
     check('a partial download is not auto-ticked',
           !doc.querySelector('.wiki-check[value="copter"]').checked);
   }
@@ -1691,6 +1691,27 @@ async function main() {
     check('the redownloaded copy is current and marked complete',
           (await bodyAt(cache, '/copter/index.html')) === '<html>new index</html>' &&
           !!(await cache.match('/__ap_complete__')));
+  }
+
+  console.log('\nan unfinished download is called incomplete, not hidden');
+  {
+    const cachesObj = makeCaches();
+    (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'common'));
+    // Entries but no marker: a save that died part-way.
+    (await cachesObj.open('ardupilot-offline-copter')).put('/copter/index.html',
+      new FakeResponse('<html></html>'));
+    const { doc } = load({ manifest: MANIFEST, caches: cachesObj, usage: 80e6 });
+    await settle();
+    const row = doc.querySelector('tr[data-wiki="copter"]');
+    check('the wiki with a markerless cache reads Incomplete, save again',
+          /Incomplete, save again/.test(row ? row.textContent : ''),
+          JSON.stringify(row && row.textContent.slice(0, 80)));
+    check('the storage line counts the unfinished download',
+          /1 incomplete download/.test($(doc, 'storage-status').textContent || ''),
+          JSON.stringify($(doc, 'storage-status').textContent));
+    check('a finished wiki is not called incomplete',
+          !/Incomplete/.test((doc.querySelector('tr[data-wiki="common"]') || {}).textContent || ''));
   }
 
   console.log('\noffline mode switch: off removes everything, after a warning');

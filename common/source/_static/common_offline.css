@@ -194,6 +194,7 @@
 }
 .apo .apo-badge-stored { background: var(--success); color: #fff; }
 .apo .apo-badge-none { background: var(--track); color: var(--muted); }
+.apo .apo-badge-partial { background: #fdf8ec; color: #6b5518; border: 1px solid #ffc107; }
 .apo .apo-badge-busy { background: var(--warning); color: #000; }
 
 /* ---- progress ---------------------------------------------------------- */

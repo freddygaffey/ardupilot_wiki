@@ -468,26 +468,30 @@ async function freshBehind(request, cacheName, event) {
 
 async function cacheFirst(request, cacheName) {
   // heldOffline matches by path and cannot find a cross-origin URL.
-  const named = await caches.open(cacheName);
-  const exact = await named.match(request);
+  const exact = await (await caches.open(cacheName)).match(request);
   if (exact) {
     return exact;
   }
 
-  const held = await heldOffline(request);
-  if (held) {
-    // Promote into the named cache; a saved wiki is not a trusted source.
-    if (plausibleBody(request, held)) {
-      await named.put(request, held.clone());
+  // A query means a fingerprint: the saved wiki may hold another build's
+  // bytes, so the network answers first and the fallback is never promoted.
+  const fingerprinted = new URL(request.url).search !== '';
+  if (!fingerprinted) {
+    const held = await heldOffline(request);
+    if (held) {
+      // Promote into the named cache; a saved wiki is not a trusted source.
+      if (plausibleBody(request, held)) {
+        await keep(cacheName, request, held);
+      }
+      return held;
     }
-    return held;
   }
   try {
     const response = await fetch(request);
     // Opaque cross-origin responses report status 0 and are still usable.
     if (response && (response.ok || response.type === 'opaque') &&
         plausibleBody(request, response)) {
-      await named.put(request, response.clone());
+      await keep(cacheName, request, response);
     }
     return response;
   } catch (err) {

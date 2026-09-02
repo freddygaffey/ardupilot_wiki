@@ -694,6 +694,37 @@ async function checkVersionBump() {
         left.includes('something-else-entirely'), JSON.stringify(left));
 }
 
+// A deploy changes the fingerprint; the old saved copy must not answer for it.
+async function checkFingerprintNotPinned() {
+  console.log('\nservice worker: fingerprinted assets prefer the network\n');
+
+  let w = bootWorker({ serve: () => ({ ct: 'text/css', body: 'new css' }),
+                       offlineCopy: { path: '/dev/_static/css/theme.css',
+                                      body: 'old css', ct: 'text/css' } });
+  let a = w.ask('/dev/_static/css/theme.css?v=NEW');
+  if (a) { await a; }
+  check('online, a ?v= asset is fetched, not served from the saved wiki',
+        w.seen.fetches.length === 1, JSON.stringify(w.seen.fetches));
+
+  w = bootWorker({ networkFails: true,
+                   offlineCopy: { path: '/dev/_static/css/theme.css',
+                                  body: 'old css', ct: 'text/css' } });
+  a = w.ask('/dev/_static/css/theme.css?v=NEW');
+  const answered = a ? await a.catch(() => 'REJECTED') : undefined;
+  check('offline, the saved copy still answers it',
+        !!answered && answered === w.seen.servedCopy, String(answered));
+  check('but it is not pinned under the new fingerprint',
+        w.seen.puts.length === 0, JSON.stringify(w.seen.puts));
+
+  w = bootWorker({ networkFails: true,
+                   offlineCopy: { path: '/dev/_images/board.png',
+                                  body: 'png bytes', ct: 'image/png' } });
+  a = w.ask('/dev/_images/board.png');
+  if (a) { await a; }
+  check('a query-less asset is still promoted from the saved wiki',
+        w.seen.puts.length === 1, JSON.stringify(w.seen.puts));
+}
+
 // The kill switch: the opt-out, done to every reader.
 async function checkKillSwitch() {
   console.log('\nservice worker: the kill switch\n');
@@ -810,6 +841,7 @@ async function main() {
     await checkDirectoryRedirect();
     await checkNoFalseUpdateToast();
   await checkFullStorageFailsOpen();
+    await checkFingerprintNotPinned();
     await checkKillSwitch();
     console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
                          : '\nall checks passed\n');
@@ -928,6 +960,7 @@ async function main() {
   await checkDirectoryRedirect();
   await checkNoFalseUpdateToast();
   await checkFullStorageFailsOpen();
+  await checkFingerprintNotPinned();
   await checkKillSwitch();
   await checkParamIndexFiltered();
 

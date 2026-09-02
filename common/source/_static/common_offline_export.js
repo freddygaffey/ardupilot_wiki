@@ -257,11 +257,22 @@
   }
 
   /** The theme's stylesheets with their fonts inlined. */
+  // The page's whole cascade, in the order the site loads it.
+  var THEME_CSS_ORDER = ['css/theme.css', 'css/badge_only.css', 'pygments.css',
+                         'css/ardupilot.css', 'custom.css',
+                         'common_theme_override.css'];
+
+  function themeCssRank(path) {
+    for (var i = 0; i < THEME_CSS_ORDER.length; i++) {
+      if (path.indexOf('_static/' + THEME_CSS_ORDER[i]) !== -1) { return i; }
+    }
+    return -1;
+  }
+
   function buildThemeCss(styles, assets) {
     var wanted = Object.keys(styles).filter(function (p) {
-      return /_static\/css\/(theme|badge_only)\.css$/.test(p) ||
-             /_static\/(ardupilot|custom)\.css$/.test(p);
-    }).sort();
+      return themeCssRank(p) !== -1;
+    }).sort(function (a, b) { return themeCssRank(a) - themeCssRank(b); });
     if (!wanted.length) { return Promise.resolve(''); }
 
     // One wiki's copy is enough - they are identical across wikis.
@@ -354,11 +365,13 @@
                         .join('data-ap-img="' + imgIds[hit] + '"');
         }
 
-        var id = imgIds[hit] = imgIds.__next++;
-        if (imgPaths) { imgPaths[resolved] = id; }
         return ApUnpack.readFrom(assets[hit], hit)
           .then(function (res) { return res.arrayBuffer(); })
           .then(function (buf) {
+            // The id is taken only once the bytes are in hand, so a failed
+            // read here does not blank this image on every later page.
+            var id = imgIds[hit] = imgIds.__next++;
+            if (imgPaths) { imgPaths[resolved] = id; }
             fresh.push({
               id: id,
               uri: 'data:' + mimeFor(hit) + ';base64,' + base64(new Uint8Array(buf))
@@ -366,7 +379,10 @@
             return current.split('src="' + src + '"')
                           .join('data-ap-img="' + id + '"');
           })
-          .catch(function () { return current; });
+          .catch(function () {
+            return current.split('src="' + src + '"')
+                          .join('data-ap-missing="' + src + '"');
+          });
       });
     });
 

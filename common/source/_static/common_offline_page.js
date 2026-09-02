@@ -125,16 +125,17 @@
   function storedWikis() {
     return caches.keys().then(function (names) {
       var stored = {};
+      var partial = {};
       var offline = names.filter(function (n) { return n.indexOf(OFFLINE_CACHE_PREFIX) === 0; });
       return Promise.all(offline.map(function (name) {
         return caches.open(name).then(function (cache) {
+          var id = name.slice(OFFLINE_CACHE_PREFIX.length).split('-')[0];
           // Without the completion marker it is an aborted download.
           return cache.match(COMPLETE_MARKER).then(function (marker) {
-            if (!marker) { return; }
-            stored[name.slice(OFFLINE_CACHE_PREFIX.length).split('-')[0]] = true;
+            if (marker) { stored[id] = true; } else { partial[id] = true; }
           });
         });
-      })).then(function () { return stored; });
+      })).then(function () { partialIds = partial; return stored; });
     });
   }
 
@@ -177,6 +178,10 @@
       parts.push(savedWikis
         ? savedWikis + ' wiki' + (savedWikis === 1 ? '' : 's') + ' saved'
         : 'no wikis saved');
+      var partial = Object.keys(partialIds).length;
+      if (partial) {
+        parts.push(partial + ' incomplete download' + (partial === 1 ? '' : 's'));
+      }
       if (pages) {
         parts.push(pages + ' page' + (pages === 1 ? '' : 's') + ' cached while reading');
       }
@@ -258,6 +263,8 @@
   }
 
   var storedIds = {};
+  // Markerless caches: downloads that did not finish.
+  var partialIds = {};
 
   // Mirrored to localStorage so an evicted wiki can be reported.
   var SAVED_IDS_KEY = 'ap-saved-ids';
@@ -509,7 +516,9 @@
             '" data-mb="' + w.mb + '"' + (isStored ? ' checked' : '') + '>';
         var badge = isStored
           ? '<span class="apo-badge apo-badge-stored">Saved</span>'
-          : '<span class="apo-badge apo-badge-none">Not saved</span>';
+          : partialIds[w.id]
+            ? '<span class="apo-badge apo-badge-partial">Incomplete, save again</span>'
+            : '<span class="apo-badge apo-badge-none">Not saved</span>';
         return '<tr data-wiki="' + w.id + '">' +
                  '<td class="apo-name"><label class="apo-pick">' + box +
                    '<span>' + w.name + '</span></label>' +
@@ -879,7 +888,8 @@
         if (err && err.name === 'AbortError') {
           report('Cancelled. Anything already saved is kept.');
         } else if (err && err.name === 'QuotaExceededError') {
-          report('Ran out of space. Your existing copy is untouched.');
+          report('Ran out of space; this download is incomplete. ' +
+                 'Free some space and save again.');
         } else {
           report((err && err.message) || 'Download failed');
         }
