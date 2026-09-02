@@ -111,7 +111,7 @@
           var path = (typeof prefix === 'function' ? prefix(entryName) : prefix) +
                      entryName;
           return storeEntry(cache, path, entryName, body).then(function () {
-            if (onEntry) { onEntry(path); }
+            if (onEntry) { onEntry(path, entryName); }
             return step();
           });
         });
@@ -212,10 +212,14 @@
       // Counted after the browser decompressed, so compare with raw_bytes.
       var stream = response.body.pipeThrough(counter);
 
+      // Resolves with the entry names, so the caller can check them off.
+      var names = [];
       return untarToCache(stream, cache, function (entryName) {
         var full = cachePathFor(entry.id, entryName);
         return full.slice(0, full.length - entryName.length);
-      });
+      }, function (_path, entryName) {
+        names.push(entryName);
+      }).then(function () { return names; });
     });
   }
 

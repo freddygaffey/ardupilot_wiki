@@ -1629,6 +1629,70 @@ async function main() {
           !abs.ok && /unsafe archive path/.test(abs.error), JSON.stringify(abs));
   }
 
+  console.log('\nthe first save is checked against the file table before the marker');
+  {
+    // The table names a page the archive lacked: a build landed mid-save.
+    const cachesObj = makeCaches();
+    const { doc } = load({ manifest: MANIFEST, caches: cachesObj,
+      archives: { 'copter/index.html': '<html>a</html>' },
+      tables: { 'copter-files.json': { 'copter/index.html': 'h1',
+                                       'copter/docs/landed-later.html': 'h2' } } });
+    await settle();
+    doc.querySelector('.wiki-check[value="copter"]').click();
+    await settle();
+    $(doc, 'download-cache-btn').click();
+    for (let i = 0; i < 12; i++) { await settle(); }
+    const cache = await cachesObj.open('ardupilot-offline-copter');
+    check('a table naming pages the archive lacked leaves no marker',
+          !(await cache.match('/__ap_complete__')));
+    check('the mismatched table is not stored either',
+          !(await cache.match(TABLE_KEY)));
+    check('the reader is told, not left with a spinner',
+          /new build|try again/i.test($(doc, 'cache-progress').textContent || ''),
+          JSON.stringify($(doc, 'cache-progress').textContent));
+
+    // The same save with a table the archive satisfies completes.
+    const okCaches = makeCaches();
+    const ok = load({ manifest: MANIFEST, caches: okCaches,
+      archives: { 'copter/index.html': '<html>a</html>' },
+      tables: { 'copter-files.json': { 'copter/index.html': 'h1' },
+                'common-files.json': {} } });
+    await settle();
+    ok.doc.querySelector('.wiki-check[value="copter"]').click();
+    await settle();
+    $(ok.doc, 'download-cache-btn').click();
+    for (let i = 0; i < 12; i++) { await settle(); }
+    const okCache = await okCaches.open('ardupilot-offline-copter');
+    check('a table the archive satisfies is stored and marked complete',
+          !!(await okCache.match('/__ap_complete__')) && !!(await okCache.match(TABLE_KEY)));
+  }
+
+  console.log('\na full redownload replaces the copy, deleted pages included');
+  {
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'common', OLD_BUILD, {
+      '_images/shared.png': ['c1', 'shared bytes']
+    });
+    // Both entries moved, so the caps push this to a full redownload.
+    await seedSaved(cachesObj, 'copter', OLD_BUILD, {
+      'copter/index.html':     ['h1', 'old index'],
+      'copter/docs/gone.html': ['h2', 'a page since deleted upstream']
+    });
+    const { doc } = load({ manifest: MANIFEST, caches: cachesObj,
+      archives: { 'copter/index.html': '<html>new index</html>' },
+      tables: { 'copter-files.json': { 'copter/index.html': 'NEW' },
+                'common-files.json': { '_images/shared.png': 'c1' } } });
+    await settle();
+    $(doc, 'check-btn').click();
+    for (let i = 0; i < 14; i++) { await settle(); }
+    const cache = await cachesObj.open('ardupilot-offline-copter');
+    check('the deleted page is gone after the redownload',
+          !(await cache.match('/copter/docs/gone.html')));
+    check('the redownloaded copy is current and marked complete',
+          (await bodyAt(cache, '/copter/index.html')) === '<html>new index</html>' &&
+          !!(await cache.match('/__ap_complete__')));
+  }
+
   console.log('\noffline mode switch: off removes everything, after a warning');
   {
     const cachesObj = makeCaches();
