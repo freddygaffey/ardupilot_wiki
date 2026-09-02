@@ -58,6 +58,9 @@ developer documentation.
         header strip, status badges, progress bars. -->
 
 
+   <noscript><p class="apo-note apo-note-warn">This tool needs JavaScript.
+     Reading the wiki does not: every page works as it always has.</p></noscript>
+
    <div id="storage-warning"></div>
    <p id="quota-warning" class="apo-note apo-note-warn" hidden></p>
 

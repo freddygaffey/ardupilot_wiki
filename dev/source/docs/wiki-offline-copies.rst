@@ -110,9 +110,10 @@ existed, on a first visit with it, and on every visit afterwards.
 
 The table assumes offline mode is on and you have opened some page of the wiki
 before, which is the situation every opted-in reader is in. The service worker
-and the script that registers it are about 24 KB compressed, fetched once when
-offline mode is first enabled and never again; charging that to every new page
-would describe a first-ever visit rather than an ordinary one. Excluded, a
+is about 7 KB compressed and is fetched once, when offline mode is first
+enabled; ``pwa.js``, which registers it, is another 7 KB compressed, loaded on
+every page and cached like any other shared asset. Charging those to every new
+page would describe a first-ever visit rather than an ordinary one. Excluded, a
 page you have not read costs exactly what it cost before the feature existed.
 It is free until it starts paying, which it does the second time you open
 anything. A reader who never enables offline mode is not in the table at all:
@@ -128,7 +129,9 @@ spends about six of its eight seconds laying the page out rather than fetching
 it. The ``content-visibility`` rule these pages carry reduces that work by
 about a factor of three, which is where most of the improvement comes from. It
 remains a two second page, and caching will not change that, because the cost
-is the size of the document itself.
+is the size of the document itself. Unlike the rows above it, this row is not
+offline mode's doing: the rule ships in the theme and reaches every reader,
+opted in or not.
 
 The reduction in bytes is worth explaining. Of the resources a page pulls in,
 twelve are shared assets totalling 131 KB and are identical on every page of
@@ -258,8 +261,10 @@ already stored bypass the budget entirely and generate no traffic at all.
 .. note::
 
    Nothing is fetched speculatively if you have asked your browser to reduce
-   data usage, or on pages carrying more than 250 links. On those pages the
-   links are an index rather than a sign of where you intend to go.
+   data usage. The pointer heuristics also stand down on pages carrying more
+   than 250 links, where links are an index rather than a sign of where you
+   intend to go; the next and previous buttons and a held hover still count,
+   because those are explicit.
 
 Saving a Wiki
 -------------
@@ -352,7 +357,7 @@ Requirements
 ------------
 
 The archives are static files, and no application server or database is
-involved. The host must meet four requirements:
+involved. The host must meet these requirements:
 
 - Pages must be served at their built URLs. ``/copter/docs/foo.html`` must
   return that page rather than redirecting to ``/copter/docs/foo``.

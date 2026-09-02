@@ -391,13 +391,14 @@ async function runEngine(name, launcher, base) {
     check(name, 'worker scope is the whole origin',
           !!scope && new URL(scope).pathname === '/', String(scope));
 
-    // Or the kill switch can never reach anyone.
+    // Pins the harness, not production: it must model the documented nginx
+    // config (no-cache on /sw.js), or the kill switch could never reach anyone.
     const swHeaders = await page.evaluate(async () => {
       const r = await fetch('/sw.js', { method: 'HEAD' });
       return { cc: r.headers.get('cache-control'),
                allowed: r.headers.get('service-worker-allowed') };
     });
-    check(name, 'sw.js is served no-cache so a bad worker can be replaced',
+    check(name, 'the harness serves sw.js no-cache, as production must',
           /no-cache|no-store|max-age=0/.test(swHeaders.cc || ''),
           'Cache-Control: ' + swHeaders.cc);
 
