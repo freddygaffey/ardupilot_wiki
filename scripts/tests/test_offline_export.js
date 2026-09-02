@@ -379,7 +379,9 @@ async function main() {
       'go.target="_blank"',
       // A single backslash in a SHELL_JS literal vanishes from the built file.
       '.replace(/\\s+/g," ")',
-      'id="selectPicker"']);
+      'id="selectPicker"',
+      'td.linenos .normal',
+      'table.useralerts-table td']);
 
   const html = { includes: (s) => scan.found[s] };
   const imgBlocks = scan.counts[0];
@@ -389,6 +391,8 @@ async function main() {
   check('pages written', htmlRes.pages === loaded.pages,
         htmlRes.pages + ' of ' + loaded.pages);
   check('theme stylesheet embedded', html.includes('.wy-nav-content'));
+  check('code highlighting css embedded', html.includes('td.linenos .normal'));
+  check('the wiki style overrides embedded', html.includes('table.useralerts-table td'));
   check('theme markup emitted', html.includes('wy-body-for-nav'));
   check('fonts inlined', scan.counts[3] > 0, scan.counts[3] + ' rules');
   check('images stored once (no per-page duplication)',
