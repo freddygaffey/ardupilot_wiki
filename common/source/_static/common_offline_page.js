@@ -816,10 +816,15 @@
         return queue.reduce(function (chain, entry) {
           return chain.then(function () {
             var cacheName = OFFLINE_CACHE_PREFIX + entry.id;
-            return caches.open(cacheName).then(function (cache) {
+            // A full unpack replaces the copy; starting from nothing is what
+            // removes the pages deleted upstream.
+            return caches.delete(cacheName).then(function () {
+              return caches.open(cacheName);
+            }).then(function (cache) {
               // raw_bytes: the browser decompresses before we count.
               var entryBytes = entry.raw_bytes || (entry.mb || 0) * 1048576;
               var entryGot = 0;
+              var unpacked;
               return ApUnpack.fetchArchive(entry, cache, function (n) {
                 received += n;
                 entryGot += n;
@@ -831,17 +836,27 @@
                 base: ARTIFACT_BASE,
                 build: CURRENT_BUILD,
                 signal: activeDownload ? activeDownload.signal : undefined
-              }).then(function () {
+              }).then(function (names) {
+                unpacked = names;
                 return storeParams(entry, cache, report);
               }).then(function () {
                 rowProgress(entry.id, 100, 'done');
                 // The file table for differential updates; not fatal if missing.
                 return fetch(ApUpdate.tableUrl(entry, ARTIFACT_BASE, CURRENT_BUILD), { cache: 'no-cache' })
                   .then(function (r) { return r.ok ? r.json() : null; })
-                  .then(function (table) {
-                    return table ? ApUpdate.storeTable(cache, table) : null;
-                  })
                   .catch(function () { return null; });
+              }).then(function (table) {
+                if (!table) { return null; }
+                // A build published mid-save leaves the table naming pages the
+                // archive lacked; marked complete, that mismatch would never heal.
+                var have = {};
+                (unpacked || []).forEach(function (n) { have[n] = true; });
+                var missing = Object.keys(table).filter(function (n) { return !have[n]; });
+                if (missing.length) {
+                  throw new Error('the server published a new build while saving ' +
+                                  entry.name + '; try again in a moment');
+                }
+                return ApUpdate.storeTable(cache, table);
               }).then(function () {
                 // The marker records the build an update check compares against.
                 return cache.put(COMPLETE_MARKER,

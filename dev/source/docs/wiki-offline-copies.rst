@@ -328,7 +328,9 @@ writing into ``<destdir>/offline/``:
    wiki stores this alongside its files; an update compares the stored table
    with the freshly published one and fetches only what moved, rather than
    re-downloading the whole archive to correct a typo. Every fetched file is
-   verified against its hash before it is stored.
+   verified against its hash before it is stored, and a full save is marked
+   complete only once the archive's contents have been checked off against
+   this table, so a build published mid-save cannot be frozen in as current.
 
 ``files/``
    The rewritten pages and generated video stills, published individually and
