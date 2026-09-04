@@ -13,8 +13,10 @@ lxml
 # Video stills and the lossless PNG pass; both are no-ops without it.
 Pillow
 
-# Install sphinx theme from ArduPilot repository
-git+https://github.com/ArduPilot/sphinx_rtd_theme.git
+# Install sphinx theme from ArduPilot repository, pinned to the revision
+# carrying the offline_hooks option this wiki sets (sphinx_rtd_theme PR 24).
+# Re-pin to the ArduPilot merge commit when that PR lands.
+git+https://github.com/freddygaffey/sphinx_rtd_theme.git@b1360a3de1a53cbd393c9bbf4e3ecc64a723dfb3
 
 # Sphinx youtube and video plugins:
 # This package will require a --force option if you have an older extension installed

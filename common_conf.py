@@ -77,3 +77,10 @@ if disable_non_local_image_warnings:
 
 def setup(app):
     app.add_css_file("common_theme_override.css")
+
+
+# Consumed by each wiki's conf.py; the theme's offline hooks (manifest,
+# pwa.js, the Offline menu entry) stay off for any other consumer.
+html_theme_options = {
+    "offline_hooks": True,
+}
