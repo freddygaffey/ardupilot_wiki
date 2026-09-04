@@ -25,7 +25,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 # The payload is mostly PNG and JPEG; higher levels buy a percent or two.
-GZIP_LEVEL = 1
+# Spent once per nightly build; every save pays the wire cost repeatedly.
+GZIP_LEVEL = 9
 
 # Written into the manifest; unset means this site's own /offline/.
 ARTIFACT_BASE_ENV = "ARDUPILOT_OFFLINE_BASE"
