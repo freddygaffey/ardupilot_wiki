@@ -46,6 +46,14 @@ check("the block after a literal block is checked again",
       flagged("Example::\n\n   shown\n\n" + RAW.format(src="https://www.youtube.com/embed/x")) == [7])
 check("the youtube directive is what we want",
       flagged(".. youtube:: dQw4w9WgXcQ\n") == [])
+check("a wrapped iframe with the URL on its own line is still flagged",
+      flagged('.. raw:: html\n\n   <iframe width="560"\n'
+              '           src="https://www.youtube.com/embed/x">\n'
+              '           </iframe>\n') == [3])
+check("a wrapped iframe of something else still passes",
+      flagged('.. raw:: html\n\n   <iframe\n'
+              '           src="https://docs.google.com/forms/x">\n'
+              '           </iframe>\n') == [])
 
 print(f"\n{'all checks passed' if not failures else str(failures) + ' CHECK(S) FAILED'}\n")
 sys.exit(1 if failures else 0)

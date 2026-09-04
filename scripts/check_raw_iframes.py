@@ -41,9 +41,19 @@ def opens_literal(line: str) -> bool:
 
 
 def raw_iframes(path: pathlib.Path):
-    """Yield (line number, line) for every video <iframe> in a built raw html block."""
+    """Yield (line number, snippet) for every video <iframe> in a built raw html block."""
     skip = None   # indent of the literal or code block being skipped
-    raw = None    # indent of the raw html block being scanned
+    raw = None    # indent of the raw html block being gathered
+    start = 0
+    held = []
+
+    def matches():
+        # The whole block at once: an iframe wrapped over lines is one tag.
+        text = "\n".join(held)
+        for m in VIDEO_RE.finditer(text):
+            yield (start + text.count("\n", 0, m.start()),
+                   " ".join(m.group(0).split()))
+
     for number, line in enumerate(path.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
         blank = not line.strip()
         if skip is not None:
@@ -52,15 +62,19 @@ def raw_iframes(path: pathlib.Path):
             skip = None
         if raw is not None:
             if blank or indent_of(line) > raw:
-                if VIDEO_RE.search(line):
-                    yield number, line.strip()
+                if not held:
+                    start = number
+                held.append(line)
                 continue
-            raw = None
+            yield from matches()
+            raw, held = None, []
         match = RAW_HTML_RE.match(line)
         if match:
             raw = len(match.group(1))
         elif opens_literal(line):
             skip = indent_of(line)
+    if raw is not None:
+        yield from matches()
 
 
 def main() -> int:
