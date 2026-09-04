@@ -885,11 +885,9 @@
         return queue.reduce(function (chain, entry) {
           return chain.then(function () {
             var cacheName = OFFLINE_CACHE_PREFIX + entry.id;
-            // A full unpack replaces the copy; starting from nothing is what
-            // removes the pages deleted upstream.
-            return caches.delete(cacheName).then(function () {
-              return caches.open(cacheName);
-            }).then(function (cache) {
+            // Unpacked over the existing copy, which stays readable throughout;
+            // entries the new archive no longer carries are pruned at the end.
+            return caches.open(cacheName).then(function (cache) {
               // raw_bytes: the browser decompresses before we count.
               var entryBytes = entry.raw_bytes || (entry.mb || 0) * 1048576;
               var entryGot = 0;
@@ -915,17 +913,35 @@
                   .then(function (r) { return r.ok ? r.json() : null; })
                   .catch(function () { return null; });
               }).then(function (table) {
-                if (!table) { return null; }
-                // A build published mid-save leaves the table naming pages the
-                // archive lacked; marked complete, that mismatch would never heal.
-                var have = {};
-                (unpacked || []).forEach(function (n) { have[n] = true; });
-                var missing = Object.keys(table).filter(function (n) { return !have[n]; });
-                if (missing.length) {
-                  throw new Error('the server published a new build while saving ' +
-                                  entry.name + '; try again in a moment');
+                if (table) {
+                  // A build published mid-save leaves the table naming pages the
+                  // archive lacked; marked complete, that mismatch would never heal.
+                  var have = {};
+                  (unpacked || []).forEach(function (n) { have[n] = true; });
+                  var missing = Object.keys(table).filter(function (n) { return !have[n]; });
+                  if (missing.length) {
+                    throw new Error('the server published a new build while saving ' +
+                                    entry.name + '; try again in a moment');
+                  }
                 }
-                return ApUpdate.storeTable(cache, table);
+                // Prune what the new archive no longer carries. Parameter
+                // versions live outside the archive and are kept.
+                var keep = {};
+                (unpacked || []).forEach(function (n) {
+                  keep[ApUnpack.cachePathFor(entry.id, n)] = true;
+                });
+                return cache.keys().then(function (requests) {
+                  return Promise.all(requests.map(function (request) {
+                    var key = String(request.url || request)
+                      .replace(/^https?:\/\/[^/]+/, '').split('?')[0].split('#')[0];
+                    if (keep[key] || key === COMPLETE_MARKER ||
+                        key === ApUpdate.TABLE_KEY ||
+                        /\/parameters-[^/]*\.html$/.test(key)) { return null; }
+                    return cache.delete(request);
+                  }));
+                }).then(function () {
+                  return table ? ApUpdate.storeTable(cache, table) : null;
+                });
               }).then(function () {
                 // The marker records the build an update check compares against.
                 return cache.put(COMPLETE_MARKER,
