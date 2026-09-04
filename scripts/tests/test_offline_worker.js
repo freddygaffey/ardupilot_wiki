@@ -213,6 +213,8 @@ function bodyAwareResponse(text) {
   };
 }
 
+const OFFLINE_PREFIX_FOR_TESTS = 'ardupilot-offline-';
+
 function bootWorker({ networkFails = false, serve = null,
                      existingCaches = [], offlineCopy = null,
                      holdNetwork = false, putFails = false,
@@ -229,10 +231,16 @@ function bootWorker({ networkFails = false, serve = null,
   const listeners = {};
   // One object per cache name: which cache holds what is the thing under test.
   const cacheFor = (name) => ({
+    delete: async (r) => {
+      seen.deletedKeys = seen.deletedKeys || [];
+      seen.deletedKeys.push(String(r && r.url ? r.url : r));
+      return true;
+    },
     match: async (r) => {
       const k = String(r && r.url ? r.url : r);
       seen.cacheReads.push(k);
-      if (runtimeImages && String(name).indexOf('ardupilot-images-') === 0 &&
+      if (runtimeImages && String(name).indexOf('ardupilot-') === 0 &&
+          String(name).indexOf(OFFLINE_PREFIX_FOR_TESTS) !== 0 &&
           runtimeImages[k]) {
         const hit = bodyAwareResponse(runtimeImages[k]);
         hit.headers = { get: (h) =>
@@ -308,8 +316,9 @@ function bootWorker({ networkFails = false, serve = null,
       }
       // What the server said it was sending.
       const spec = serve ? serve(url) : {};
+      const status = spec.status || 200;
       return {
-        ok: true, status: 200, url, type: spec.type || 'basic',
+        ok: status >= 200 && status < 300, status, url, type: spec.type || 'basic',
         headers: { get: (h) => (String(h).toLowerCase() === 'content-type'
                                   ? (spec.ct === undefined ? null : spec.ct)
                                   : null) },
@@ -732,9 +741,31 @@ async function checkFingerprintNotPinned() {
         w.seen.puts.length === 1, JSON.stringify(w.seen.puts));
 }
 
-// A republished image at the same URL must reach the reader without a bump.
+// A republished file at the same URL must reach the reader without a bump,
+// and one deleted upstream must stop being served.
 async function checkImageRevalidation() {
-  console.log('\nservice worker: cached images are re-asked once per session\n');
+  console.log('\nservice worker: cached files are re-asked once per session\n');
+
+  // Deleted upstream: the 404 revalidation evicts the stored copy.
+  const gone = bootWorker({ runtimeImages: {
+    'https://example.test/dev/_images/gone.png': 'stale bytes' },
+    serve: () => ({ status: 404 }) });
+  let g = gone.ask('/dev/_images/gone.png');
+  if (g) { await g; }
+  await Promise.all(gone.seen.waited);
+  check('a page deleted upstream is evicted on revalidation',
+        gone.seen.deletedKeys && gone.seen.deletedKeys.length === 1,
+        JSON.stringify(gone.seen.deletedKeys));
+
+  // A queryless static asset gets the same one look per session as an image.
+  let st = bootWorker({ runtimeImages: {
+    'https://example.test/dev/_static/language_data.js': 'old js' },
+    serve: () => ({ ct: 'text/javascript', body: 'new js' }) });
+  const sa = st.ask('/dev/_static/language_data.js');
+  if (sa) { await sa; }
+  await Promise.all(st.seen.waited);
+  check('a queryless static asset is re-asked once per session too',
+        st.seen.fetches.length === 1, JSON.stringify(st.seen.fetches));
 
   const img = 'https://example.test/dev/_images/board.png';
   let w = bootWorker({ runtimeImages: { [img]: 'cached bytes' },
