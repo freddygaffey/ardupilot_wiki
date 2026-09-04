@@ -60,6 +60,14 @@ jobs:
         run: |
           export AP_SPHINXOPTS=-W
           ./update.py --parallel 4 --verbose --destdir=/tmp/web 2>&1 | tee build_errors.txt; exit ${PIPESTATUS[0]}
+      - name: Offline feature suites
+        run: |
+          npm install
+          npm test
+      - name: Offline browser suite (Chromium)
+        run: |
+          npx playwright install --with-deps chromium
+          node scripts/tests/test_offline_browsers.js --browsers chromium
       - name: Report build errors
         if: failure()
         run: |
