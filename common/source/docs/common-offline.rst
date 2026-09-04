@@ -98,12 +98,18 @@ developer documentation.
        </span>
      </div>
 
+     <div class="apo-scroll">
      <table class="apo-table">
        <thead>
          <tr>
            <th class="apo-name"><span class="apo-pick"><input type="checkbox"
                  id="select-all" title="Select every wiki"
-                 aria-label="Select every wiki" /><span>Wiki</span></span></th>
+                 aria-label="Select every wiki" /><span>Wiki</span></span>
+               <label class="apo-pick apo-all-params"><input type="checkbox"
+                 id="all-params"
+                 aria-label="Save every parameter version of every wiki"
+                 title="Save every parameter version of every wiki" /><span>all
+                 params</span></label></th>
            <th class="apo-num">Size</th>
            <th class="apo-num apo-pages-h">Pages</th>
            <th class="apo-num apo-col-progress">Progress</th>
@@ -112,6 +118,7 @@ developer documentation.
        </thead>
        <tbody id="wiki-rows"></tbody>
      </table>
+     </div>
 
      <div class="apo-foot">
        <label><input type="checkbox" id="autoupdate" checked="checked" />

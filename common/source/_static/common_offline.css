@@ -142,12 +142,12 @@
   color: #fff;
   font-weight: 600;
   text-align: left;
-  padding: 10px 12px;
+  padding: 10px 9px;
   border: 0;
   white-space: nowrap;
 }
 .apo table.apo-table td {
-  padding: 10px 12px;
+  padding: 10px 9px;
   border: 0;
   border-bottom: 1px solid var(--line);
   vertical-align: middle;
@@ -156,6 +156,8 @@
 .apo table.apo-table th:last-child,
 .apo table.apo-table td:last-child { padding-right: 16px; }
 .apo table.apo-table tbody tr:hover td { background: var(--hover); }
+/* The one long cell; "2396 images, 28 pages" may wrap rather than burst the row. */
+.apo table.apo-table td.apo-pages { white-space: normal; }
 .apo .apo-num {
   text-align: right;
   white-space: nowrap;
@@ -207,7 +209,7 @@
 }
 .apo .apo-badge-stored { background: var(--success); color: #fff; }
 .apo .apo-badge-none { background: var(--track); color: var(--muted); }
-.apo .apo-badge-partial { background: #fdf8ec; color: #6b5518; border: 1px solid #ffc107; }
+.apo .apo-badge-partial { background: #fdf8ec; color: #6b5518; border: 1px solid #ffc107; white-space: normal; text-align: center; }
 .apo .apo-badge-busy { background: var(--warning); color: #000; }
 
 /* ---- progress ---------------------------------------------------------- */
@@ -343,7 +345,14 @@
 /* The badge says saved or not; the bar can go before the badge is clipped. */
 @media (max-width: 560px) {
   .apo .apo-col-progress { display: none; }
+  /* Stacked, or the status lines wrap one word per line beside the checkbox. */
+  .apo .apo-foot { display: block; }
+  .apo .apo-foot .apo-foot-status { text-align: left; margin-top: 8px; }
 }
+/* A phone can drag the table sideways instead of clipping it. */
+.apo .apo-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+/* The theme spaces paragraphs for prose; the panel's hints are captions. */
+.rst-content .apo p.apo-hint { line-height: 1.5; margin-bottom: 8px; }
 
 /* ---- the install button --------------------------------------------------
  * Sits under the "Install as an app" section, which is ordinary page text, so
@@ -511,6 +520,7 @@
  * that matter.
  */
 .apo-param-toggle {
+  white-space: nowrap;
   background: none;
   border: 0;
   padding: 0;
@@ -522,6 +532,14 @@
   text-decoration: underline dotted;
 }
 .apo-param-toggle:hover { color: #1a5f8f; }
+.apo-param-more .apo-param-all { margin-left: auto; cursor: pointer; }
+.apo table.apo-table thead th .apo-all-params {
+  margin-left: 1.2em;
+  font-weight: 400;
+  font-size: .85em;
+  color: #fff;
+  cursor: pointer;
+}
 .apo-param-toggle::before { content: "\25B8 "; text-decoration: none; }
 .apo-param-toggle[aria-expanded="true"]::before { content: "\25BE "; }
 
@@ -530,8 +548,8 @@
 
 .apo-param-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(11em, 1fr));
-  gap: .25em .9em;
+  grid-template-columns: repeat(auto-fill, minmax(9.5em, max-content));
+  gap: .3em 1.6em;
 }
 .apo-param {
   display: flex;
@@ -540,7 +558,7 @@
   font-size: .88em;
 }
 .apo-param input { margin: 0; flex: none; }
-.apo-param small { opacity: .6; margin-left: auto; font-variant-numeric: tabular-nums; }
+.apo-param small { opacity: .6; font-variant-numeric: tabular-nums; }
 
 #quota-warning[hidden] { display: none; }
 #quota-warning { margin: .6em 0 0; }
@@ -564,7 +582,26 @@
   border-radius: 3px;
   font-size: .9em;
 }
-.apo-param-more > span { white-space: nowrap; }
+.apo-param-more span { white-space: nowrap; }
+.apo-param-more .apo-param-pick {
+  display: flex;
+  align-items: center;
+  gap: .5em;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.apo .apo-param-none {
+  background: none;
+  border: 1px solid rgba(128, 128, 128, .45);
+  border-radius: 3px;
+  padding: .15em .6em;
+  font: inherit;
+  font-size: .95em;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.apo .apo-param-none:hover { color: var(--dark); border-color: currentColor; }
 .apo-param-more select {
   flex: 0 1 22em;
   min-width: 9em;
