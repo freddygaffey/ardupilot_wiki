@@ -111,7 +111,10 @@
           var path = (typeof prefix === 'function' ? prefix(entryName) : prefix) +
                      entryName;
           return storeEntry(cache, path, entryName, body).then(function () {
-            if (onEntry) { onEntry(path, entryName); }
+            if (onEntry) {
+              // Awaited, so a hashing onEntry finishes before the next read.
+              return Promise.resolve(onEntry(path, entryName, body)).then(step);
+            }
             return step();
           });
         });
@@ -212,13 +215,17 @@
       // Counted after the browser decompressed, so compare with raw_bytes.
       var stream = response.body.pipeThrough(counter);
 
-      // Resolves with the entry names, so the caller can check them off.
+      // Resolves with the entries, hashed when asked, so the caller can
+      // check them off against the published table by name and by content.
       var names = [];
       return untarToCache(stream, cache, function (entryName) {
         var full = cachePathFor(entry.id, entryName);
         return full.slice(0, full.length - entryName.length);
-      }, function (_path, entryName) {
-        names.push(entryName);
+      }, function (_path, entryName, body) {
+        if (!opts.hash) { names.push({ name: entryName }); return undefined; }
+        return opts.hash(body).then(function (digest) {
+          names.push({ name: entryName, hash: digest });
+        });
       }).then(function () { return names; });
     });
   }

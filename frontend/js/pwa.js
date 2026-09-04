@@ -476,7 +476,12 @@
 
   function reveal() {
     if (!location.hash || location.hash.length < 2) { return; }
-    var id = decodeURIComponent(location.hash.slice(1));
+    var id;
+    try {
+      id = decodeURIComponent(location.hash.slice(1));
+    } catch (err) {
+      return; // a fragment like #% is nobody's anchor
+    }
     var el = document.getElementById(id) ||
              document.getElementsByName(id)[0];
     if (!el) { return; }
