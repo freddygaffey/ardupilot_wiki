@@ -1130,13 +1130,15 @@ async function main() {
   {
     // A real download must leave a table behind, or updates never engage.
     const cachesObj = makeCaches();
+    const idxHash = await fileHash('from the archive');
     const first = load({
       manifest: MANIFEST, caches: cachesObj,
       archives: { 'copter/index.html': 'from the archive',
                   'copter/docs/a.html': 'a from the archive' },
       // Common needs a table too, or the next check re-fetches its archive.
-      tables: { 'copter-files.json': { 'copter/index.html': 'h1',
-                                       'copter/docs/a.html': 'h2' },
+      tables: { 'copter-files.json': { 'copter/index.html': idxHash,
+                                       'copter/docs/a.html':
+                                         await fileHash('a from the archive') },
                 'common-files.json': { '_images/shared.png': 'c1' } }
     });
     await settle();
@@ -1154,7 +1156,7 @@ async function main() {
     newer.generated = '2027-01-01T00:00:00Z';
     const next = load({
       manifest: newer, caches: cachesObj,
-      tables: { 'copter-files.json': { 'copter/index.html': 'h1',
+      tables: { 'copter-files.json': { 'copter/index.html': idxHash,
                                        'copter/docs/a.html':
                                          await fileHash('a after the edit') },
                 'common-files.json': { '_images/shared.png': 'c1' } },
@@ -1698,11 +1700,27 @@ async function main() {
           /new build|try again/i.test($(doc, 'cache-progress').textContent || ''),
           JSON.stringify($(doc, 'cache-progress').textContent));
 
+    // Right names but wrong bytes: a damaged download must not be marked saved.
+    const badCaches = makeCaches();
+    const bad = load({ manifest: MANIFEST, caches: badCaches,
+      archives: { 'copter/index.html': '<html>a</html>' },
+      tables: { 'copter-files.json': { 'copter/index.html': 'deadbeefdeadbeef' } } });
+    await settle();
+    bad.doc.querySelector('.wiki-check[value="copter"]').click();
+    await settle();
+    $(bad.doc, 'download-cache-btn').click();
+    for (let i = 0; i < 12; i++) { await settle(); }
+    const badCache = await badCaches.open('ardupilot-offline-copter');
+    check('a body that does not hash to the table is not marked saved',
+          !(await badCache.match('/__ap_complete__')) &&
+          /damaged/.test($(bad.doc, 'cache-progress').textContent || ''),
+          JSON.stringify($(bad.doc, 'cache-progress').textContent));
+
     // The same save with a table the archive satisfies completes.
     const okCaches = makeCaches();
     const ok = load({ manifest: MANIFEST, caches: okCaches,
       archives: { 'copter/index.html': '<html>a</html>' },
-      tables: { 'copter-files.json': { 'copter/index.html': 'h1' },
+      tables: { 'copter-files.json': { 'copter/index.html': await fileHash('<html>a</html>') },
                 'common-files.json': {} } });
     await settle();
     ok.doc.querySelector('.wiki-check[value="copter"]').click();
@@ -1727,7 +1745,8 @@ async function main() {
     });
     const { doc } = load({ manifest: MANIFEST, caches: cachesObj,
       archives: { 'copter/index.html': '<html>new index</html>' },
-      tables: { 'copter-files.json': { 'copter/index.html': 'NEW' },
+      tables: { 'copter-files.json':
+                  { 'copter/index.html': await fileHash('<html>new index</html>') },
                 'common-files.json': { '_images/shared.png': 'c1' } } });
     await settle();
     $(doc, 'check-btn').click();

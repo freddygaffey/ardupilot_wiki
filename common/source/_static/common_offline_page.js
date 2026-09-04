@@ -902,6 +902,7 @@
               }, {
                 base: ARTIFACT_BASE,
                 build: CURRENT_BUILD,
+                hash: ApUpdate.hashBytes,
                 signal: activeDownload ? activeDownload.signal : undefined
               }).then(function (names) {
                 unpacked = names;
@@ -915,20 +916,31 @@
               }).then(function (table) {
                 if (table) {
                   // A build published mid-save leaves the table naming pages the
-                  // archive lacked; marked complete, that mismatch would never heal.
+                  // archive lacked; marked complete, that mismatch would never
+                  // heal. Nor would corrupt bytes under a right name: updates
+                  // compare this table to the published one and see no change.
                   var have = {};
-                  (unpacked || []).forEach(function (n) { have[n] = true; });
-                  var missing = Object.keys(table).filter(function (n) { return !have[n]; });
+                  (unpacked || []).forEach(function (e) { have[e.name] = e.hash || true; });
+                  var missing = [];
+                  var damaged = [];
+                  Object.keys(table).forEach(function (n) {
+                    if (!have[n]) { missing.push(n); }
+                    else if (have[n] !== true && have[n] !== table[n]) { damaged.push(n); }
+                  });
                   if (missing.length) {
                     throw new Error('the server published a new build while saving ' +
                                     entry.name + '; try again in a moment');
+                  }
+                  if (damaged.length) {
+                    throw new Error('part of ' + entry.name + ' arrived damaged (' +
+                                    damaged[0] + '); nothing was marked saved. Try again.');
                   }
                 }
                 // Prune what the new archive no longer carries. Parameter
                 // versions live outside the archive and are kept.
                 var keep = {};
-                (unpacked || []).forEach(function (n) {
-                  keep[ApUnpack.cachePathFor(entry.id, n)] = true;
+                (unpacked || []).forEach(function (e) {
+                  keep[ApUnpack.cachePathFor(entry.id, e.name)] = true;
                 });
                 return cache.keys().then(function (requests) {
                   return Promise.all(requests.map(function (request) {
