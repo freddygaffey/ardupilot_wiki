@@ -311,18 +311,45 @@
     return (w && w.param_versions) || [];
   }
 
-  // Seeded from the manifest's default, and not before the manifest is here.
+  // The newest stable of each release series: the majors a reader expects.
+  function seriesHeads(w) {
+    var newest = {};
+    paramsOf(w).forEach(function (v) {
+      if (v.channel !== 'stable') { return; }
+      var key = seriesOf(v);
+      if (!newest[key] || compareVersions(v, newest[key]) < 0) { newest[key] = v; }
+    });
+    return Object.keys(newest).map(function (k) { return newest[k]; });
+  }
+
+  // Seeded with the series heads, and not before the manifest is here.
   function picksFor(w) {
     var versions = paramsOf(w);
     if (!versions.length) { return paramPicks[w.id] || {}; }
     if (!paramPicks[w.id]) {
       var seed = {};
-      versions.forEach(function (v) {
-        if (v['default']) { seed[v.file] = true; }
-      });
+      var heads = seriesHeads(w);
+      if (heads.length) {
+        heads.forEach(function (v) { seed[v.file] = true; });
+      } else {
+        versions.forEach(function (v) { if (v['default']) { seed[v.file] = true; } });
+      }
       paramPicks[w.id] = seed;
     }
     return paramPicks[w.id];
+  }
+
+  function setAllParams(w, on) {
+    var next = {};
+    (on ? paramsOf(w) : seriesHeads(w)).forEach(function (v) { next[v.file] = true; });
+    paramPicks[w.id] = next;
+  }
+
+  function syncAllParamsHeader() {
+    var box = el('all-params');
+    if (!box) { return; }
+    var withParams = WIKIS.filter(function (w) { return paramsOf(w).length; });
+    box.checked = withParams.length > 0 && withParams.every(allParamsPicked);
   }
 
   // Tick what is saved, not what is newest.
@@ -355,6 +382,29 @@
   function pickedFiles(w) {
     var picks = picksFor(w);
     return paramsOf(w).filter(function (v) { return picks[v.file]; });
+  }
+
+  function allParamsPicked(w) {
+    return paramsOf(w).length > 0 && pickedFiles(w).length === paramsOf(w).length;
+  }
+
+  function syncParamAll(id) {
+    var w = wikiById(id);
+    var box = document.querySelector('.param-all[data-wiki="' + id + '"]');
+    if (w && box) { box.checked = allParamsPicked(w); }
+  }
+
+  // Redraw a wiki's version row from picks, keeping its open or closed state.
+  function refreshParamRow(id) {
+    var w = wikiById(id);
+    var row = document.querySelector('[data-params-for="' + id + '"]');
+    if (!w || !row) { return; }
+    var fresh = document.createElement('tbody');
+    fresh.innerHTML = paramRowFor(w);
+    var next = fresh.firstChild;
+    if (!next) { return; }
+    if (!row.hasAttribute('hidden')) { next.removeAttribute('hidden'); }
+    row.parentNode.replaceChild(next, row);
   }
 
   /** Bytes the chosen versions add to this wiki, before compression. */
@@ -445,19 +495,28 @@
     }).join('');
 
     var rest = paramRestFor(w);
-    var more = rest.length
-      ? '<label class="apo-param-more">' +
-          '<span>Another version</span>' +
-          '<select class="param-more" data-wiki="' + w.id + '" ' +
-            'aria-label="Add another parameter version for ' + w.name + '">' +
-            '<option value="">' + rest.length + ' more\u2026</option>' +
-            rest.map(function (v) {
-              return '<option value="' + v.file + '">' + v.label +
-                     ' \u00b7 ' + mb(v) + ' MB</option>';
-            }).join('') +
-          '</select>' +
-        '</label>'
-      : '';
+    var more = '<div class="apo-param-more">' +
+        (rest.length
+          ? '<label class="apo-param-pick">' +
+              '<span>Another version</span>' +
+              '<select class="param-more" data-wiki="' + w.id + '" ' +
+                'aria-label="Add another parameter version for ' + w.name + '">' +
+                '<option value="">' + rest.length + ' more\u2026</option>' +
+                rest.map(function (v) {
+                  return '<option value="' + v.file + '">' + v.label +
+                         ' \u00b7 ' + mb(v) + ' MB</option>';
+                }).join('') +
+              '</select>' +
+            '</label>'
+          : '') +
+        '<label class="apo-param apo-param-all" ' +
+          'title="Save every parameter version of this wiki">' +
+          '<input type="checkbox" class="param-all" data-wiki="' + w.id + '"' +
+          (allParamsPicked(w) ? ' checked' : '') + '>' +
+          '<span>All versions</span></label>' +
+        '<button type="button" class="apo-param-none" data-wiki="' + w.id + '">' +
+          'Deselect all</button>' +
+      '</div>';
 
     return '<tr class="apo-param-row" data-params-for="' + w.id + '" hidden>' +
              '<td colspan="5">' +
@@ -540,6 +599,7 @@
                '</tr>' + paramRowFor(w);
       });
       el('wiki-rows').innerHTML = rows.join('');
+      syncAllParamsHeader();
 
       var clear = el('clear-btn');
       if (clear) {
@@ -1198,6 +1258,20 @@
     btn.setAttribute('aria-expanded', open ? 'true' : 'false');
   });
 
+  // Back to nothing optional ticked; the always-included list stays.
+  document.addEventListener('click', function (e) {
+    var none = e.target.closest && e.target.closest('.apo-param-none');
+    if (!none) { return; }
+    var noneId = none.getAttribute('data-wiki');
+    if (!wikiById(noneId)) { return; }
+    paramPicks[noneId] = {};
+    refreshParamRow(noneId);
+    syncParamAll(noneId);
+    syncAllParamsHeader();
+    updateTotal();
+    updateSaveState();
+  });
+
   // A dropdown choice becomes a ticked box; only this row is re-rendered.
   document.addEventListener('change', function (e) {
     if (!e.target.classList.contains('param-more')) { return; }
@@ -1211,15 +1285,11 @@
     picksFor(w)[file] = true;
 
     var row = document.querySelector('[data-params-for="' + id + '"]');
-    if (row) {
-      var fresh = document.createElement('tbody');
-      fresh.innerHTML = paramRowFor(w);
-      var next = fresh.firstChild;
-      if (next) {
-        next.removeAttribute('hidden');
-        row.parentNode.replaceChild(next, row);
-      }
-    }
+    refreshParamRow(id);
+    // Choosing from inside the row means it is open; make sure it stays so.
+    var chosenRow = document.querySelector('[data-params-for="' + id + '"]');
+    if (chosenRow) { chosenRow.removeAttribute('hidden'); }
+    syncParamAll(id);
     // Choosing a version implies wanting the wiki, same as ticking one.
     var box = document.querySelector('.wiki-check[value="' + id + '"]');
     if (box && !box.checked) {
@@ -1232,12 +1302,44 @@
   });
 
   document.addEventListener('change', function (e) {
+    // Every version of every wiki in one tick, from the table header.
+    if (e.target.id === 'all-params') {
+      var globalOn = e.target.checked;
+      WIKIS.forEach(function (pw) {
+        if (!paramsOf(pw).length) { return; }
+        setAllParams(pw, globalOn);
+        refreshParamRow(pw.id);
+      });
+      syncAllParamsHeader();
+      updateTotal();
+      updateSaveState();
+    }
+    // Every version of one wiki; unticking returns to the series heads.
+    if (e.target.classList.contains('param-all')) {
+      var allId = e.target.getAttribute('data-wiki');
+      var allW = wikiById(allId);
+      if (allW) {
+        setAllParams(allW, e.target.checked);
+        refreshParamRow(allId);
+        var allBox = document.querySelector('.wiki-check[value="' + allId + '"]');
+        if (allBox && e.target.checked && !allBox.checked) {
+          allBox.checked = true;
+          syncSelectAll();
+          updateExportState();
+        }
+        syncAllParamsHeader();
+        updateTotal();
+        updateSaveState();
+      }
+    }
     if (e.target.classList.contains('param-check')) {
       var id = e.target.getAttribute('data-wiki');
       var w = wikiById(id);
       if (w) {
         picksFor(w)[e.target.value] = e.target.checked;
         if (!e.target.checked) { delete picksFor(w)[e.target.value]; }
+        syncParamAll(id);
+        syncAllParamsHeader();
       }
       // Picking a version implies wanting its wiki.
       var box = document.querySelector('.wiki-check[value="' + id + '"]');

@@ -1629,6 +1629,51 @@ async function main() {
           !abs.ok && /unsafe archive path/.test(abs.error), JSON.stringify(abs));
   }
 
+  console.log('\nevery parameter version in one tick, or none');
+  {
+    const mk = (ver, dflt) => ({
+      file: `docs/parameters-Copter-stable-V${ver}.html`, channel: 'stable',
+      version: ver, label: ver, bytes: 4e6, ...(dflt ? { 'default': true } : {}) });
+    const man = JSON.parse(JSON.stringify(MANIFEST));
+    man.wikis[0].param_versions = [mk('4.7.0', true), mk('4.6.3'), mk('4.6.0'), mk('4.5.7')];
+    const { doc, w } = load({ manifest: man, caches: makeCaches() });
+    for (let i = 0; i < 8; i++) { await settle(); }
+
+    const allBox = () => doc.querySelector('.param-all[data-wiki="copter"]');
+    const headBox = () => doc.getElementById('all-params');
+    const ticked = () => [...doc.querySelectorAll('[data-params-for="copter"] .param-check')]
+      .filter((b) => b.checked).map((b) => b.value);
+    const flip = (el, on) => { el.checked = on;
+      el.dispatchEvent(new w.Event('change', { bubbles: true })); };
+
+    check('the boxes start clear, with the newest of each series ticked',
+          allBox() && !allBox().checked && !headBox().checked && ticked().length === 3,
+          JSON.stringify(ticked()));
+    flip(allBox(), true); await settle();
+    check('ticking all in the version row picks every version',
+          ticked().length === 4 && allBox().checked && headBox().checked,
+          ticked().length + ' ticked');
+    check('and selects the wiki they belong to',
+          doc.querySelector('.wiki-check[value="copter"]').checked);
+    flip(allBox(), false); await settle();
+    check('unticking returns to the series heads',
+          ticked().length === 3 && !headBox().checked, JSON.stringify(ticked()));
+
+    flip(headBox(), true); await settle();
+    check('the header box picks every version of every wiki',
+          ticked().length === 4 && allBox().checked, ticked().length + ' ticked');
+    const one = doc.querySelector('[data-params-for="copter"] .param-check');
+    flip(one, false); await settle();
+    check('unticking one version clears both all boxes',
+          !allBox().checked && !headBox().checked);
+
+    doc.querySelector('.apo-param-none[data-wiki="copter"]')
+      .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    await settle();
+    check('Deselect all leaves nothing optional ticked',
+          ticked().length === 0 && !allBox().checked, JSON.stringify(ticked()));
+  }
+
   console.log('\nthe first save is checked against the file table before the marker');
   {
     // The table names a page the archive lacked: a build landed mid-save.
