@@ -71,11 +71,13 @@ class FakeResponse {
     return Promise.resolve(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength));
   }
 }
+// Keys normalise to bare paths both ways, as real Cache Storage matching does.
+const cacheKey = (k) => String(k && k.url ? k.url : k).replace(/^https?:\/\/[^/]+/, '');
 class FakeCache {
   constructor() { this.map = new Map(); }
-  put(k, v) { this.map.set(String(k && k.url ? k.url : k), v); return Promise.resolve(); }
-  match(k) { return Promise.resolve(this.map.get(String(k && k.url ? k.url : k))); }
-  delete(k) { return Promise.resolve(this.map.delete(String(k && k.url ? k.url : k))); }
+  put(k, v) { this.map.set(cacheKey(k), v); return Promise.resolve(); }
+  match(k) { return Promise.resolve(this.map.get(cacheKey(k))); }
+  delete(k) { return Promise.resolve(this.map.delete(cacheKey(k))); }
   keys() { return Promise.resolve([...this.map.keys()].map(u => ({ url: 'https://x' + u }))); }
 }
 function makeCaches() {
@@ -1735,6 +1737,31 @@ async function main() {
           !(await cache.match('/copter/docs/gone.html')));
     check('the redownloaded copy is current and marked complete',
           (await bodyAt(cache, '/copter/index.html')) === '<html>new index</html>' &&
+          !!(await cache.match('/__ap_complete__')));
+  }
+
+  console.log('\na failed redownload leaves the old copy readable');
+  {
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'common', OLD_BUILD, {
+      '_images/shared.png': ['c1', 'shared bytes']
+    });
+    await seedSaved(cachesObj, 'copter', OLD_BUILD, {
+      'copter/index.html':  ['h1', 'the old but working copy'],
+      'copter/docs/a.html': ['h2', 'old a']
+    });
+    // The differential fails (nothing served), promoting to full; the archive
+    // fetch then fails too, which is exactly a bad network doing both.
+    const { doc } = load({ manifest: MANIFEST, caches: cachesObj,
+      tables: { 'copter-files.json': { 'copter/index.html': 'NEW1',
+                                       'copter/docs/a.html': 'NEW2' },
+                'common-files.json': { '_images/shared.png': 'c1' } } });
+    await settle();
+    $(doc, 'check-btn').click();
+    for (let i = 0; i < 14; i++) { await settle(); }
+    const cache = await cachesObj.open('ardupilot-offline-copter');
+    check('the old copy is still there, marked complete',
+          (await bodyAt(cache, '/copter/index.html')) === 'the old but working copy' &&
           !!(await cache.match('/__ap_complete__')));
   }
 

@@ -185,7 +185,9 @@
             return cache.delete(new Request(cacheKeyFor(entry.id, k)));
           }));
         }).then(function () {
-          // Written last, so an interrupted update leaves the previous build intact.
+          // Written last: an interruption leaves the previous build's metadata
+          // intact, and the stale table re-lists any files already fetched, so
+          // the next successful update heals the mixed content.
           return storeTable(cache, published);
         }).then(function () {
           return cache.put(cfg.completeMarker, new Response(JSON.stringify({
@@ -203,6 +205,7 @@
     updateStored: updateStored,
     tableUrl: tableUrl,
     storeTable: storeTable,
+    TABLE_KEY: TABLE_KEY,
     hashBytes: hashBytes
   };
 })(typeof self !== 'undefined' ? self : this);
