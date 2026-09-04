@@ -466,15 +466,21 @@ async function freshBehind(request, cacheName, event) {
   return (await network) || new Response('', { status: 504 });
 }
 
-// Same-URL images change across builds; each is re-asked once per worker life.
+// Same-URL files change across builds; each is re-asked once per worker life.
 const revalidated = new Set();
 
 function maybeRevalidate(request, cacheName, event) {
-  if (cacheName !== IMAGE_CACHE || revalidated.has(request.url)) {
+  // A query is a fingerprint and needs no second look.
+  if (revalidated.has(request.url) || new URL(request.url).search !== '') {
     return;
   }
   revalidated.add(request.url);
-  keepAlive(event, fetch(request).then((response) => {
+  keepAlive(event, fetch(request).then(async (response) => {
+    // The page is gone upstream; serving it forever would be lying.
+    if (response && (response.status === 404 || response.status === 410)) {
+      await (await caches.open(cacheName)).delete(request);
+      return;
+    }
     if (response && response.ok && plausibleBody(request, response)) {
       return keep(cacheName, request, response);
     }
