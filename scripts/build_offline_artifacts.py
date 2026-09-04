@@ -492,14 +492,33 @@ def refresh_static(wikis) -> int:
     return copied
 
 
+def promote(staging: Path, live: Path) -> None:
+    """The finished set becomes live in one rename, never file by file."""
+    old = live.with_name(live.name + ".old")
+    if old.exists():
+        shutil.rmtree(old)
+    if live.exists():
+        os.rename(live, old)
+    os.rename(staging, live)
+    shutil.rmtree(old, ignore_errors=True)
+
+
 def build(wikis, destdir: Path) -> Path:
-    out_dir = Path(destdir) / "offline"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    live_dir = Path(destdir) / "offline"
 
     built = [w for w in wikis if (Path(w) / "build" / "html" / "index.html").is_file()]
     if not built:
         log("no built wikis found; nothing to do")
-        return out_dir
+        return live_dir
+
+    # Everything is written to a staging generation; a failure anywhere leaves
+    # the live set untouched and consistent, and readers never see a mix.
+    out_dir = live_dir.with_name(live_dir.name + ".new")
+    if out_dir.exists():
+        shutil.rmtree(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if (live_dir / ".thumbs").is_dir():
+        shutil.copytree(live_dir / ".thumbs", out_dir / ".thumbs")
 
     # An archive is only as current as the tree it is read from.
     refresh_static(built)
@@ -590,8 +609,9 @@ def build(wikis, destdir: Path) -> Path:
 
     manifest_path = out_dir / "offline-manifest.json"
     publish(manifest_path, json.dumps(manifest, indent=2).encode("utf-8"))
-    log(f"wrote {manifest_path}")
-    return out_dir
+    promote(out_dir, live_dir)
+    log(f"wrote {live_dir / 'offline-manifest.json'}")
+    return live_dir
 
 
 if __name__ == "__main__":

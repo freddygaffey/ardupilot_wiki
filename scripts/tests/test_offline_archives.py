@@ -248,6 +248,9 @@ def main():
     wikis = [w for w in (sys.argv[1:] or WIKIS)]
     print("\noffline archives: what the reader receives\n")
 
+    check("the build promoted cleanly, leaving no staging generation behind",
+          not (OFFLINE.with_name("offline.new")).exists() and
+          not (OFFLINE.with_name("offline.old")).exists())
     check_image_classification()
     check_embed_rewrite()
     check_shared_images_agree()
