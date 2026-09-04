@@ -466,10 +466,26 @@ async function freshBehind(request, cacheName, event) {
   return (await network) || new Response('', { status: 504 });
 }
 
-async function cacheFirst(request, cacheName) {
+// Same-URL images change across builds; each is re-asked once per worker life.
+const revalidated = new Set();
+
+function maybeRevalidate(request, cacheName, event) {
+  if (cacheName !== IMAGE_CACHE || revalidated.has(request.url)) {
+    return;
+  }
+  revalidated.add(request.url);
+  keepAlive(event, fetch(request).then((response) => {
+    if (response && response.ok && plausibleBody(request, response)) {
+      return keep(cacheName, request, response);
+    }
+  }).catch(() => { /* offline; the stored copy stands */ }), request.url);
+}
+
+async function cacheFirst(request, cacheName, event) {
   // heldOffline matches by path and cannot find a cross-origin URL.
   const exact = await (await caches.open(cacheName)).match(request);
   if (exact) {
+    maybeRevalidate(request, cacheName, event);
     return exact;
   }
 
@@ -656,7 +672,7 @@ self.addEventListener('fetch', (event) => {
   }
 
   if (isImage(url)) {
-    event.respondWith(safely(cacheFirst(request, IMAGE_CACHE), request));
+    event.respondWith(safely(cacheFirst(request, IMAGE_CACHE, event), request));
     return;
   }
 

@@ -216,7 +216,7 @@ function bodyAwareResponse(text) {
 function bootWorker({ networkFails = false, serve = null,
                      existingCaches = [], offlineCopy = null,
                      holdNetwork = false, putFails = false,
-                     file = WORKER } = {}) {
+                     runtimeImages = null, file = WORKER } = {}) {
   const seen = { fetches: [], cacheReads: [], puts: [], deleted: [], posted: [] };
   let cacheNames = existingCaches.slice();
   // A completed download: named cache plus completion marker.
@@ -232,6 +232,13 @@ function bootWorker({ networkFails = false, serve = null,
     match: async (r) => {
       const k = String(r && r.url ? r.url : r);
       seen.cacheReads.push(k);
+      if (runtimeImages && String(name).indexOf('ardupilot-images-') === 0 &&
+          runtimeImages[k]) {
+        const hit = bodyAwareResponse(runtimeImages[k]);
+        hit.headers = { get: (h) =>
+          String(h).toLowerCase() === 'content-type' ? 'image/png' : null };
+        return hit;
+      }
       if (offlineCopy && name === offlineName) {
         if (k.indexOf('/__ap_complete__') !== -1) {
           // noMarker models the aborted download: content present, marker not.
@@ -725,6 +732,33 @@ async function checkFingerprintNotPinned() {
         w.seen.puts.length === 1, JSON.stringify(w.seen.puts));
 }
 
+// A republished image at the same URL must reach the reader without a bump.
+async function checkImageRevalidation() {
+  console.log('\nservice worker: cached images are re-asked once per session\n');
+
+  const img = 'https://example.test/dev/_images/board.png';
+  let w = bootWorker({ runtimeImages: { [img]: 'cached bytes' },
+                       serve: () => ({ ct: 'image/png', body: 'fresh bytes' }) });
+  let a = w.ask('/dev/_images/board.png');
+  if (a) { await a; }
+  await Promise.all(w.seen.waited);
+  check('the cached copy answers, and the network is asked in the background',
+        w.seen.fetches.length === 1 && w.seen.puts.length === 1,
+        JSON.stringify({ fetches: w.seen.fetches, puts: w.seen.puts }));
+  a = w.ask('/dev/_images/board.png');
+  if (a) { await a; }
+  await Promise.all(w.seen.waited);
+  check('the same image is not re-asked twice in one session',
+        w.seen.fetches.length === 1, w.seen.fetches.length + ' fetches');
+
+  w = bootWorker({ networkFails: true, runtimeImages: { [img]: 'cached bytes' } });
+  a = w.ask('/dev/_images/board.png');
+  const answered = a ? await a.catch(() => 'REJECTED') : undefined;
+  await Promise.all(w.seen.waited).catch(() => {});
+  check('offline, the stored copy stands and the failure is silent',
+        !!answered && answered !== 'REJECTED', String(answered && answered.status));
+}
+
 // The kill switch: the opt-out, done to every reader.
 async function checkKillSwitch() {
   console.log('\nservice worker: the kill switch\n');
@@ -841,6 +875,7 @@ async function main() {
     await checkDirectoryRedirect();
     await checkNoFalseUpdateToast();
   await checkFullStorageFailsOpen();
+    await checkImageRevalidation();
     await checkFingerprintNotPinned();
     await checkKillSwitch();
     console.log(failures ? '\n' + failures + ' CHECK(S) FAILED\n'
@@ -960,6 +995,7 @@ async function main() {
   await checkDirectoryRedirect();
   await checkNoFalseUpdateToast();
   await checkFullStorageFailsOpen();
+  await checkImageRevalidation();
   await checkFingerprintNotPinned();
   await checkKillSwitch();
   await checkParamIndexFiltered();
