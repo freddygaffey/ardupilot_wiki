@@ -48,15 +48,26 @@
   align-items: center;
   gap: 14px;
   flex-wrap: wrap;
-  padding: 10px 14px;
+  padding: 12px 16px;
 }
-.apo .apo-title {
-  font-size: 1.05rem;
+/* Doubled class beats the theme's paragraph sizing; the buttons set the scale. */
+.apo .apo-title.apo-title {
+  font-size: 1rem;
   font-weight: 600;
+  line-height: 1.3;
   margin: 0;
+  flex: 0 1 auto;
+  min-width: 0;
   color: #fff;
 }
 .apo .apo-head .apo-spacer { flex: 1 1 auto; }
+/* One unit, so the buttons change rows together instead of shedding one. */
+.apo .apo-head .apo-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-left: auto;
+}
 
 /* ---- buttons ----------------------------------------------------------- */
 
@@ -142,6 +153,8 @@
   vertical-align: middle;
 }
 .apo table.apo-table tbody tr:last-child td { border-bottom: 0; }
+.apo table.apo-table th:last-child,
+.apo table.apo-table td:last-child { padding-right: 16px; }
 .apo table.apo-table tbody tr:hover td { background: var(--hover); }
 .apo .apo-num {
   text-align: right;
@@ -327,6 +340,10 @@
   .apo .apo-pages, .apo .apo-pages-h { display: none; }
   .apo .apo-head { gap: 8px; }
 }
+/* The badge says saved or not; the bar can go before the badge is clipped. */
+@media (max-width: 560px) {
+  .apo .apo-col-progress { display: none; }
+}
 
 /* ---- the install button --------------------------------------------------
  * Sits under the "Install as an app" section, which is ordinary page text, so
@@ -388,6 +405,8 @@
   line-height: 1.4;
 }
 .rst-content .apo table.apo-table tbody tr:last-child td { border-bottom: 0; }
+.apo table.apo-table th:last-child,
+.apo table.apo-table td:last-child { padding-right: 16px; }
 /* Numeric columns must not wrap: "433 MB" breaking over two lines looks broken.
    Qualified to out-specify the td rule above, which sets white-space: normal -
    without the extra element selectors this loses to it. */
@@ -590,5 +609,11 @@
 .apo .apo-switch input:checked + .apo-switch-track { background: var(--success); }
 .apo .apo-switch input:checked + .apo-switch-track::before { transform: translateX(20px); }
 .apo .apo-switch input:focus-visible + .apo-switch-track { outline: 2px solid var(--dark); outline-offset: 2px; }
-.rst-content .apo .apo-off-warning { margin: 12px 16px 0; }
+.rst-content .apo .apo-off-warning { margin: 12px 16px; padding-bottom: 18px; }
+/* The ghost button is drawn for the dark strip; on the cream note it needs ink. */
+.apo .apo-off-warning .apo-btn-ghost {
+  color: #6b5518;
+  border-color: #6b5518;
+  background: transparent;
+}
 .apo .apo-off-actions { display: flex; gap: 8px; margin-top: 10px; }

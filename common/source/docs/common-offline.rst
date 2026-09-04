@@ -90,11 +90,12 @@ developer documentation.
      </p>
 
      <div class="apo-head">
-       <p class="apo-title">Save Documentation for Offline Use</p>
-       <span class="apo-spacer"></span>
-       <button id="download-cache-btn" class="apo-btn apo-btn-primary">Save selected wikis</button>
-       <button id="check-btn" class="apo-btn apo-btn-ghost">Check for updates</button>
-       <button id="clear-btn" class="apo-btn apo-btn-danger">Remove all</button>
+       <p class="apo-title">Save for Offline Use</p>
+       <span class="apo-actions">
+         <button id="download-cache-btn" class="apo-btn apo-btn-primary">Save selected wikis</button>
+         <button id="check-btn" class="apo-btn apo-btn-ghost">Check for updates</button>
+         <button id="clear-btn" class="apo-btn apo-btn-danger">Remove all</button>
+       </span>
      </div>
 
      <table class="apo-table">
@@ -105,7 +106,7 @@ developer documentation.
                  aria-label="Select every wiki" /><span>Wiki</span></span></th>
            <th class="apo-num">Size</th>
            <th class="apo-num apo-pages-h">Pages</th>
-           <th class="apo-num">Progress</th>
+           <th class="apo-num apo-col-progress">Progress</th>
            <th class="apo-num">Status</th>
          </tr>
        </thead>

@@ -531,7 +531,7 @@
                  '<td class="apo-num">' + w.mb + ' MB</td>' +
                  '<td class="apo-num apo-pages">' + countCell(w) + '</td>' +
                  // From state: this tbody is rebuilt when a download finishes.
-                 '<td class="apo-num"><div class="apo-progress"' +
+                 '<td class="apo-num apo-col-progress"><div class="apo-progress"' +
                    (isStored ? '' : ' hidden') + '>' +
                    '<div class="apo-progress-bar" style="width:' +
                      (isStored ? '100%' : '0') + '"></div>' +
@@ -1295,7 +1295,8 @@
   function offerTurnOff() {
     var note = el('offline-off-warning');
     return storage().then(function (s) {
-      var used = s.estimate.usage || heldBytes();
+      // estimate() can lag what the manifest says is held; never claim 0 MB.
+      var used = Math.max(s.estimate.usage || 0, heldBytes());
       var holding = Object.keys(storedIds).length > 0 || used > 5 * 1048576;
       if (!note || !holding) { return turnOff(); }
       renderOfflineMode();
