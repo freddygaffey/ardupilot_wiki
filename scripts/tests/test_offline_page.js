@@ -940,7 +940,7 @@ async function main() {
           JSON.stringify(fetchCalls.filter(u => u.indexOf('.tar') !== -1)));
   }
   {
-    // A template edit: every page changed, no image did. Stays differential.
+    // A template edit: most of the wiki moved, so one archive request wins.
     const cachesObj = makeCaches();
     const files = {};
     for (let i = 0; i < 60; i++) { files['dev/docs/p' + i + '.html'] = ['h' + i, 'old ' + i]; }
@@ -961,8 +961,8 @@ async function main() {
     $(doc, 'check-btn').click();
     for (let i = 0; i < 40; i++) { await settle(); }
     const tagged = fetchCalls.filter(u => u.indexOf('ap-update=') !== -1).length;
-    check('every page changed but no image: still fetched file by file',
-          tagged > 0 && !fetchCalls.some(u => u.indexOf('.tar') !== -1),
+    check('most pages changed: the archive is fetched, not hundreds of files',
+          tagged === 0 && fetchCalls.some(u => u.indexOf('.tar') !== -1),
           tagged + ' file requests, archive fetched: ' +
           fetchCalls.some(u => u.indexOf('.tar') !== -1));
   }

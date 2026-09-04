@@ -18,8 +18,9 @@
   // Above these, re-download the archive instead. A template edit changes
   // every page but no images, 40% to 85% of a wiki's entries, and must stay
   // differential: about 20 MB of pages against a 74 MB archive for Copter.
-  var MAX_DIFF_FILES = 2000;
-  var MAX_DIFF_FRACTION = 0.9;
+  // Past either cap one archive request beats hundreds of file fetches.
+  var MAX_DIFF_FILES = 400;
+  var MAX_DIFF_FRACTION = 0.5;
   // Below this a proportion says nothing; only the absolute cap applies.
   var DIFF_FRACTION_MIN_FILES = 50;
 
