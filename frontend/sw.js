@@ -382,7 +382,8 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
         response.clone().text(),
       ]);
       if (oldText !== newText) {
-        notifyClients({ type: 'PAGE_UPDATED', url: request.url });
+        // Awaited, so the announcement cannot outlive the waitUntil promise.
+        await notifyClients({ type: 'PAGE_UPDATED', url: request.url });
       }
     }
     if (plausibleBody(request, response)) {

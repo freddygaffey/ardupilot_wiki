@@ -192,14 +192,15 @@ Cache Storage holds complete HTTP responses keyed by request URL, in named
 stores. It is separate from the browser's HTTP cache, is not cleared with
 browsing history, and is scoped to the origin.
 
-``ardupilot-pages-v3``, ``-images-v3``, ``-static-v3``
-   Populated while browsing. Discarded when ``CACHE_VERSION`` changes.
+``ardupilot-pages-<version>``, ``-images-<version>``, ``-static-<version>``
+   Populated while browsing. Discarded when ``CACHE_VERSION`` (declared once,
+   at the top of ``sw.js``) changes.
 
 ``ardupilot-offline-<wiki>``
    A saved wiki. Excluded from version-bump deletion, since it holds content
    the reader chose to store.
 
-``ardupilot-thirdparty-v3``
+``ardupilot-thirdparty-<version>``
    Cross-origin assets, so they are not re-fetched on every page.
 
 ``heldOffline()`` in ``sw.js`` decides whether a URL is held. It serves every

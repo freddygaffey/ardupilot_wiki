@@ -345,9 +345,11 @@ def setup():
         run_git("git checkout -f master", cwd=repo_path)
         # Release commits live on branches and tags, not master.
         run_git("git fetch origin master", cwd=repo_path)
-        run_git("git fetch origin --tags --force "
-                "+refs/heads/*:refs/remotes/origin/*", cwd=repo_path,
-                check=False)
+        release_branches = " ".join(
+            f"+refs/heads/{vehicle}-*:refs/remotes/origin/{vehicle}-*"
+            for vehicle in sorted(set(ALLVEHICLES + ["Tracker"])))
+        run_git("git fetch origin --tags --force " + release_branches,
+                cwd=repo_path, check=False)
         run_git("git reset --hard origin/master", cwd=repo_path)
         run_git("git pull", cwd=repo_path)
 
