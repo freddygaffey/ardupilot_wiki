@@ -126,6 +126,10 @@ echo ok
 # No --delete here, or it would erase the wiki directories just uploaded.
 printf '  %-16s' 'frontend (root)'
 rsync -az frontend/ "$TARGET:$WEBROOT/"
+# The mirror is a review demo: keep every crawler out, or bots pull the
+# 700 MB archive set on repeat and drain the droplet's bandwidth. Written
+# after the frontend rsync, which ships the site's allow-all robots.txt.
+printf 'User-agent: *\nDisallow: /\n' | ssh "$TARGET" "cat > '$WEBROOT/robots.txt'"
 echo ok
 
 echo
