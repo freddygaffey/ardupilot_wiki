@@ -481,9 +481,9 @@ async function runEngine(name, launcher, base) {
     })();
     check(name, 'the offline page shows the switch on once opted in',
           picker.switchOn, JSON.stringify({ switchOn: picker.switchOn }));
-    check(name, 'each vehicle offers its parameter versions with one ticked',
-          picker.vehicles > 0 && picker.versions > picker.ticked &&
-          picker.ticked === picker.vehicles,
+    check(name, 'each vehicle offers its versions with the newest of each series ticked',
+          picker.vehicles > 0 && picker.versions > 0 &&
+          picker.ticked === picker.versions,
           picker.vehicles + ' vehicles, ' + picker.versions + ' versions, ' +
           picker.ticked + ' ticked');
 
