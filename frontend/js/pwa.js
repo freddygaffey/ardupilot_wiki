@@ -530,18 +530,22 @@
   }
 
   // The OS can report online with no route to the video host; a probe of
-  // the host itself decides, so a dead iframe never replaces a good card.
-  var reachableUntil = 0;
+  // that host itself decides, so a dead iframe never replaces a good card.
+  // Cached per origin: YouTube answering says nothing about Vimeo.
+  var reachableUntil = {};
   function hostReachable(src) {
-    if (Date.now() < reachableUntil) { return Promise.resolve(true); }
+    var origin;
+    try { origin = new URL(src).origin; } catch (err) { return Promise.resolve(false); }
+    if (Date.now() < (reachableUntil[origin] || 0)) { return Promise.resolve(true); }
     return new Promise(function (resolve) {
-      var origin;
-      try { origin = new URL(src).origin; } catch (err) { resolve(false); return; }
-      var timer = setTimeout(function () { resolve(false); }, 2500);
+      var timedOut = false;
+      var timer = setTimeout(function () { timedOut = true; resolve(false); }, 2500);
       fetch(origin + '/favicon.ico', { mode: 'no-cors', cache: 'no-store' })
         .then(function () {
           clearTimeout(timer);
-          reachableUntil = Date.now() + 30000;
+          // An answer that limped in after the timeout proves nothing fresh.
+          if (timedOut) { return; }
+          reachableUntil[origin] = Date.now() + 30000;
           resolve(true);
         }, function () { clearTimeout(timer); resolve(false); });
     });
@@ -554,7 +558,8 @@
     a.dataset.apLive = '1';
     if (navigator.onLine === false) { a.dataset.apLive = ''; return; }
     hostReachable(embed.src).then(function (ok) {
-      if (!ok) { a.dataset.apLive = ''; return; }
+      // The connection can drop while the probe is in flight.
+      if (!ok || navigator.onLine === false) { a.dataset.apLive = ''; return; }
       mountEmbed(a, embed);
     });
   }
