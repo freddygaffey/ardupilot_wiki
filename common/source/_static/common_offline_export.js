@@ -270,12 +270,17 @@
                 return write(DOC.searchBlock(byWiki, stemSrc));
               });
             }).then(function () {
+              if (signal && signal.aborted) { throw bail(); }
               return write(DOC.tail(payload));
             });
-          }).then(function () { return sink.close(); })
+          }).then(function () {
+            if (signal && signal.aborted) { throw bail(); }
+            return sink.close();
+          })
             .then(function () { return { pages: done }; })
             .catch(function (err) {
-              if (err && err.name === 'AbortError' && sink.abort) {
+              // Cancelled or failed, the reader must not be handed the file.
+              if (sink.abort) {
                 return Promise.resolve(sink.abort()).then(
                   function () { throw err; }, function () { throw err; });
               }

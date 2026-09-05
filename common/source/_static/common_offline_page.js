@@ -224,7 +224,7 @@
       var clear = el('clear-btn');
       if (clear) {
         var anything = pages > 0 || Object.keys(storedIds).length > 0;
-        clear.disabled = !anything || checkBusy || !!activeDownload;
+        clear.disabled = !anything || checkBusy || !!activeDownload || !!activeExport;
         clear.title = !anything ? 'Nothing is stored on this device'
           : clear.disabled ? 'Wait for the update to finish'
           : 'Removes saved wikis and pages cached while reading';
@@ -613,7 +613,9 @@
       var clear = el('clear-btn');
       if (clear) {
         var anySaved = Object.keys(stored).length > 0;
-        if (anySaved) { clear.disabled = false; clear.title = ''; }
+        if (anySaved && !activeDownload && !activeExport) {
+          clear.disabled = false; clear.title = '';
+        }
       }
 
       syncSelectAll();
@@ -1173,7 +1175,7 @@
       })
       .then(function () {
         checkBusy = false;
-        if (checkBtn && !activeDownload) { checkBtn.disabled = false; }
+        if (checkBtn && !activeDownload && !activeExport) { checkBtn.disabled = false; }
         return renderStorage();
       });
   }
@@ -1268,6 +1270,7 @@
         activeExport = null;
         held.forEach(function (b) { if (b) { b.disabled = false; } });
         updateSaveState();
+        updateExportState();
       };
       link.disabled = false;
       return global.ArduPilotExport.exportHtml(ready.ids, name,
