@@ -1634,6 +1634,10 @@ async function main() {
     const enc = await attempt(tarBytes({ '%2e%2e/%2e%2e/sw.js': 'evil' }));
     check('a percent-encoded climb rejects the archive too',
           !enc.ok && /unsafe archive path/.test(enc.error), JSON.stringify(enc));
+    const odd = await attempt(tarBytes({ 'rover/_images/100%.png': 'png',
+                                         'rover/_images/50%25off.png': 'png' }));
+    check('names that are not valid percent-encoding still save',
+          odd.ok && odd.keys === 2, JSON.stringify(odd));
   }
 
   console.log('\nevery parameter version in one tick, or none');
