@@ -59,7 +59,7 @@ jobs:
       - name: Test build
         run: |
           export AP_SPHINXOPTS=-W
-          ./update.py --parallel 4 --verbose --destdir=/tmp/web 2>&1 | tee build_errors.txt; exit ${PIPESTATUS[0]}
+          ./update.py --parallel 4 --verbose 2>&1 | tee build_errors.txt; exit ${PIPESTATUS[0]}
       - name: Offline feature suites
         run: |
           npm install

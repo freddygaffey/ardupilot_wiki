@@ -1631,6 +1631,9 @@ async function main() {
     const abs = await attempt(tarBytes({ '/sw.js': 'evil' }));
     check('an absolute entry name rejects the archive',
           !abs.ok && /unsafe archive path/.test(abs.error), JSON.stringify(abs));
+    const enc = await attempt(tarBytes({ '%2e%2e/%2e%2e/sw.js': 'evil' }));
+    check('a percent-encoded climb rejects the archive too',
+          !enc.ok && /unsafe archive path/.test(enc.error), JSON.stringify(enc));
   }
 
   console.log('\nevery parameter version in one tick, or none');
