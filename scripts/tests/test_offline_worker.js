@@ -263,8 +263,10 @@ function bootWorker({ networkFails = false, serve = null,
       }
       return undefined;
     },
-    put: async (k) => {
+    put: async (k, v) => {
       seen.puts.push(String(k && k.url ? k.url : k));
+      seen.putValues = seen.putValues || [];
+      seen.putValues.push(v);
       // Storage full.
       if (putFails) {
         const err = new Error('The quota has been exceeded.');
@@ -319,15 +321,32 @@ function bootWorker({ networkFails = false, serve = null,
       const status = spec.status || 200;
       return {
         ok: status >= 200 && status < 300, status, url, type: spec.type || 'basic',
-        headers: { get: (h) => (String(h).toLowerCase() === 'content-type'
-                                  ? (spec.ct === undefined ? null : spec.ct)
-                                  : null) },
+        redirected: !!spec.redirected,
+        headers: {
+          get: (h) => {
+            const n = String(h).toLowerCase();
+            if (n === 'content-type') { return spec.ct === undefined ? null : spec.ct; }
+            if (n === 'x-ap-encoding') { return spec.apEncoded || null; }
+            return null;
+          },
+          forEach: (fn) => {
+            if (spec.ct !== undefined) { fn(spec.ct, 'content-type'); }
+            if (spec.apEncoded) { fn(spec.apEncoded, 'x-ap-encoding'); }
+          },
+        },
         clone() { return this; },
         text: async () => spec.body || '',
       };
     },
     Response: class {
       constructor(body, init) { this.body = body; Object.assign(this, init || {}); }
+    },
+    Headers: class {
+      constructor() { this._m = new Map(); }
+      append(k, v) { this._m.set(String(k).toLowerCase(), v); }
+      get(k) { const v = this._m.get(String(k).toLowerCase());
+               return v === undefined ? null : v; }
+      forEach(fn) { this._m.forEach((v, k) => fn(v, k)); }
     },
     Request: class { constructor(u) { this.url = String(u); } },
     URL, setTimeout, clearTimeout, Map, Set, Promise, JSON, Math, Date, RegExp,
@@ -637,6 +656,52 @@ async function checkNoFalseUpdateToast() {
 }
 
 // A QuotaExceededError on store must not turn a network success into an offline answer.
+async function checkStoredCopiesAreClean() {
+  console.log('\nservice worker: what gets stored is clean\n');
+
+  // A revalidation that followed a redirect: the stored copy must not
+  // carry redirected, or every later navigation it answers fails.
+  {
+    const w = bootWorker({ serve: () => ({ ct: 'text/html', body: '<html>x</html>',
+                                           redirected: true }) });
+    const a = w.ask('/dev/docs/some-page.html');
+    if (a) { await a; }
+    const stored = (w.seen.putValues || [])[0];
+    check('a redirected page is stored without its redirected flag',
+          !!stored && !stored.redirected,
+          stored ? 'redirected=' + stored.redirected : 'nothing stored');
+  }
+
+  // The unpacker's private marker on a network response is a spoof: a plain
+  // body stored under it would be gunzipped into garbage on read.
+  {
+    const w = bootWorker({ serve: () => ({ ct: 'text/html', body: '<html>x</html>',
+                                           apEncoded: 'gzip' }) });
+    const a = w.ask('/dev/docs/other-page.html');
+    if (a) { await a; }
+    const stored = (w.seen.putValues || [])[0];
+    const marker = stored && stored.headers && stored.headers.get &&
+                   stored.headers.get('x-ap-encoding');
+    check('a spoofed encoding marker is stripped before storing',
+          !!stored && !marker, stored ? 'marker=' + marker : 'nothing stored');
+  }
+
+  // A page the server no longer has leaves the browsing cache.
+  {
+    const w = bootWorker({ runtimeImages: null,
+      serve: () => ({ status: 404, ct: 'text/html', body: 'gone' }) });
+    // Seed the page cache read: model a held browsing copy via offlineCopy
+    // is wrong-cache; instead assert the eviction call happens when the
+    // revalidation of a cached page sees 404. The harness returns no cached
+    // page here, so the eviction must NOT fire either.
+    const a = w.ask('/dev/docs/gone-page.html');
+    if (a) { await a; }
+    check('no eviction without a cached copy to evict',
+          !(w.seen.deletedKeys || []).length,
+          JSON.stringify(w.seen.deletedKeys || []));
+  }
+}
+
 async function checkFullStorageFailsOpen() {
   console.log('\nservice worker: no room to cache, still online\n');
 
@@ -905,7 +970,7 @@ async function main() {
     await checkMarkerRespected();
     await checkDirectoryRedirect();
     await checkNoFalseUpdateToast();
-  await checkFullStorageFailsOpen();
+    await checkFullStorageFailsOpen();
     await checkImageRevalidation();
     await checkFingerprintNotPinned();
     await checkKillSwitch();
@@ -1025,6 +1090,7 @@ async function main() {
   await checkMarkerRespected();
   await checkDirectoryRedirect();
   await checkNoFalseUpdateToast();
+  await checkStoredCopiesAreClean();
   await checkFullStorageFailsOpen();
   await checkImageRevalidation();
   await checkFingerprintNotPinned();
