@@ -1098,9 +1098,9 @@
           }
           return;
         }
-        if (activeExport) {
-          // The exporter is reading these caches: even the differential
-          // update rewrites them, so everything waits for the export.
+        if (exportBusy || activeExport) {
+          // The exporter owns these caches for its whole span, the pre-save
+          // included: even the differential update rewrites them.
           report('Updates found; they will be fetched after the export finishes.');
           toast({ mode: 'hide' });
           updateDeferred = true;
@@ -1196,12 +1196,9 @@
         checkBusy = false;
         updateWriting = false;
         if (checkBtn && !activeDownload && !activeExport) { checkBtn.disabled = false; }
-        if (updateDeferred && !activeExport && !activeDownload) {
-          // The export ended in the microtask gap between the deferral and
-          // this tail; release() saw checkBusy and left the resume to us.
-          updateDeferred = false;
-          setTimeout(function () { checkForUpdates(true); }, 0);
-        }
+        // Covers the export ending in the gap between the deferral and this
+        // tail, when release() saw checkBusy and left the resume to us.
+        resumeDeferredUpdate();
         return renderStorage();
       });
   }
@@ -1256,6 +1253,16 @@
   // Anything selected but unsaved is downloaded first: one press, not two.
   var exportBusy = false;
 
+  // Runs the update that stood aside for an export, when nothing owns
+  // the caches any more.
+  function resumeDeferredUpdate() {
+    if (updateDeferred && !activeExport && !exportBusy &&
+        !activeDownload && !checkBusy) {
+      updateDeferred = false;
+      setTimeout(function () { checkForUpdates(true); }, 0);
+    }
+  }
+
   function buildExport(buttonId) {
     var link = el(buttonId);
     if (!link || !global.ArduPilotExport || !selected().length) { return; }
@@ -1264,7 +1271,8 @@
     if (updateWriting) {
       link.textContent = 'An update is being written; try again in a moment.';
       setTimeout(function () {
-        link.textContent = link.dataset.label || 'Save as .html';
+        // A later export owns the label by now.
+        if (!exportBusy) { link.textContent = link.dataset.label || 'Save as .html'; }
       }, 5000);
       return;
     }
@@ -1331,11 +1339,8 @@
       held.forEach(function (b) { if (b) { b.disabled = true; } });
       release = function () {
         activeExport = null;
-        if (updateDeferred && !activeDownload && !checkBusy) {
-          // The update that stood aside for this export runs now.
-          updateDeferred = false;
-          setTimeout(function () { checkForUpdates(true); }, 0);
-        }
+        exportBusy = false;
+        resumeDeferredUpdate();
         // Hand back only what nothing else still owns.
         if (!activeDownload) {
           held.forEach(function (b) { if (b) { b.disabled = false; } });
@@ -1358,7 +1363,7 @@
           done('Saved ' + name + ' (' + r.pages + ' pages)');
         });
     }).catch(function (err) {
-      if (release) { release(); } else { activeExport = null; }
+      if (release) { release(); } else { activeExport = null; resumeDeferredUpdate(); }
       done(err && err.name === 'AbortError'
         ? 'Export cancelled'
         : (err && err.message) || 'Export failed');

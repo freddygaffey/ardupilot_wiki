@@ -2152,14 +2152,14 @@ async function main() {
     check('the deferral says what will happen instead',
           /after the export/i.test($(doc, 'check-result').textContent || ''),
           JSON.stringify($(doc, 'check-result').textContent));
-    const manifests = () => fetchCalls.filter((u) =>
-      u.indexOf('offline-manifest.json') !== -1).length;
-    const beforeResume = manifests();
+    // Only the resumed check's differential can move this counter: the
+    // original check deferred before touching anything.
+    const beforeResume = updates();
     finishExport();
     for (let i = 0; i < 10; i++) { await settle(); }
     check('the deferred update resumes once the export finishes',
-          manifests() > beforeResume,
-          manifests() + ' manifest fetches, ' + beforeResume + ' before');
+          updates() > beforeResume,
+          updates() + ' update fetches, ' + beforeResume + ' before');
   }
 
   console.log('\nthe resume also fires when the export ends mid-check');
@@ -2185,17 +2185,68 @@ async function main() {
     w.ArduPilotExport = { exportHtml: () =>
       new Promise((res) => { finishExport = () => res({ pages: 1 }); }) };
     click('dl-single'); await settle();
-    const manifests = () => fetchCalls.filter((u) =>
-      u.indexOf('offline-manifest.json') !== -1).length;
-    const beforeResume = manifests();
+    // Only the resumed check can fetch an archive: the original deferred.
+    const tars = () => fetchCalls.filter((u) => u.indexOf('.tar') !== -1).length;
+    const beforeResume = tars();
     // The export finishes in the same breath the check is released, so the
     // check's own tail is what must carry the resume.
     released = true; pend.forEach((f) => f());
     finishExport();
     for (let i = 0; i < 12; i++) { await settle(); }
     check('the deferred update resumes when the export ends mid-check',
-          manifests() > beforeResume,
-          manifests() + ' manifest fetches, ' + beforeResume + ' before');
+          tars() > beforeResume,
+          tars() + ' tar fetches, ' + beforeResume + ' before');
+  }
+
+  console.log('\na check landing during the pre-save defers like any other');
+  {
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'dev', OLD_BUILD, { 'dev/index.html': ['h1', 'x'] });
+    // Broken common: the export must repair it first, and that window is
+    // exactly where the check's differential used to slip through.
+    (await cachesObj.open('ardupilot-offline-common')).put('/_common/_images/x.png',
+      new FakeResponse('png'));
+    const { doc, w, sandbox, fetchCalls } = load({ manifest: MANIFEST, caches: cachesObj,
+      archives: { '_images/shared.png': 'png' },
+      tables: { 'dev-files.json': { 'dev/index.html': 'h2' },
+                'common-files.json': { '_images/shared.png': 'ignored' } },
+      served: { '/dev/index.html': '<html>newer</html>' } });
+    await settle();
+    let released = false; const pendM = [];
+    let tarHeld = false; const pendT = [];
+    const orig = sandbox.fetch;
+    sandbox.fetch = (u, o) => {
+      if (!released && /offline-manifest\.json/.test(String(u))) {
+        return new Promise((res) => { pendM.push(() => orig(u, o).then(res)); });
+      }
+      if (!tarHeld && /common-offline\.tar/.test(String(u))) {
+        tarHeld = true;
+        return new Promise((res) => { pendT.push(() => orig(u, o).then(res)); });
+      }
+      return orig(u, o);
+    };
+    sandbox.window.fetch = sandbox.fetch;
+    const click = (id) => $(doc, id).dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    click('check-btn'); await settle();
+    let finishExport = null;
+    w.ArduPilotExport = { exportHtml: () =>
+      new Promise((res) => { finishExport = () => res({ pages: 1 }); }) };
+    // The export starts; its pre-save hangs on the held common archive.
+    click('dl-single'); await settle();
+    const updates = () => fetchCalls.filter((u) =>
+      u.indexOf('ap-update=') !== -1 || /\/files\//.test(u) ||
+      u.indexOf('dev-files.json') !== -1).length;
+    // The check lands while the pre-save is mid-download.
+    released = true; pendM.forEach((f) => f());
+    for (let i = 0; i < 8; i++) { await settle(); }
+    check('a check landing during the pre-save touches nothing',
+          updates() === 0, updates() + ' update fetches during the pre-save');
+    pendT.forEach((f) => f());
+    for (let i = 0; i < 12; i++) { await settle(); }
+    if (finishExport) { finishExport(); }
+    for (let i = 0; i < 12; i++) { await settle(); }
+    check('and the deferred update resumes after that export too',
+          updates() > 0, updates() + ' update fetches after completion');
   }
 
   console.log('\nan export cannot start while an update is writing the caches');

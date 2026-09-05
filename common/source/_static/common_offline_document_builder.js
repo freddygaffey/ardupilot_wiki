@@ -644,6 +644,14 @@
   /* ------------------------------------------------ rendering the sidebar */
 
   /** Fallback: a flat list of the wiki's pages, when no toctree was recovered. */
+  // Build-time twin of the shell's esc(): everything woven into nav HTML
+  // goes through here, whatever its source.
+  function escapeHtml(text) {
+    return String(text).replace(/[&<>"]/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c];
+    });
+  }
+
   function listNav(pages, wiki) {
     var items = pages.filter(function (p) {
       return p.path.split('/')[1] === wiki;
@@ -651,7 +659,7 @@
       var anchor = p.path.replace(/\.html?$/, '');
       var label = anchor.split('/').pop().replace(/[-_]/g, ' ');
       return '<li class="toctree-l1"><a class="reference internal" href="#' +
-             anchor + '">' + label + '</a></li>';
+             escapeHtml(anchor) + '">' + escapeHtml(label) + '</a></li>';
     });
     return '<ul>' + items.join('') + '</ul>';
   }
@@ -670,10 +678,10 @@
       var kids = n.children.length ? renderNodes(n.children, level + 1) : '';
       out += '<li class="toctree-l' + level + '">' +
              '<a class="reference ' + (n.external ? 'external' : 'internal') +
-             '" href="' + (n.external ? n.href : '#' + n.href) + '">' +
+             '" href="' + escapeHtml(n.external ? n.href : '#' + n.href) + '">' +
              (kids ? '<button class="toctree-expand" ' +
                      'title="Open/close menu"></button>' : '') +
-             n.label + '</a>' + kids + '</li>';
+             escapeHtml(n.label) + '</a>' + kids + '</li>';
     });
     return out + '</ul>';
   }
@@ -684,7 +692,7 @@
 
     wikis.forEach(function (wiki) {
       var tree = state.trees[wiki];
-      html += '<p class="caption">' + wiki + '</p>';
+      html += '<p class="caption">' + escapeHtml(wiki) + '</p>';
       if (!tree || !tree.length) {
         html += listNav(pages, wiki);
         listOrder(pages, wiki).forEach(function (p) {

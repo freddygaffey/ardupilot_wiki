@@ -566,6 +566,22 @@ async function main() {
           want.every((p) => carried.has(p)));
   }
 
+  // The nav builders weave reader-reachable text into HTML: prove inert.
+  const escFns = liftFunctions(['escapeHtml', 'listNav', 'renderNodes'], DOCUMENT);
+  check('nav templates lifted from the document module', escFns !== null);
+  if (escFns) {
+    const evil = '/rover/docs/x" onmouseover="alert(1)';
+    const list = escFns.listNav([{ path: evil + '.html' }], 'rover');
+    check('the fallback sidebar escapes hostile paths',
+          list.indexOf('onmouseover="alert') === -1 &&
+          list.indexOf('&quot;') !== -1, list.slice(0, 90));
+    const rn = escFns.renderNodes([{ external: false, href: evil,
+      label: '<img src=x onerror=alert(1)>', children: [] }], 1);
+    check('the toctree sidebar escapes hostile labels and hrefs',
+          rn.indexOf('<img') === -1 && rn.indexOf('onmouseover="alert') === -1,
+          rn.slice(0, 120));
+  }
+
   // Root-relative cross-wiki links exist only in archives.
   const navFns = liftFunctions(
     ['resolvePath', 'innerOf', 'topLevelLists', 'textOf', 'navHref', 'prune',
