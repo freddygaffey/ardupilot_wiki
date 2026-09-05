@@ -20,7 +20,7 @@ With AHRS AutoTrim the roll and pitch corrections are captured as you fly in a s
 .. image:: ../images/MP_SaveTrim_Ch7PWMCheck.png
     :target: ../_images/MP_SaveTrim_Ch7PWMCheck.png
 
-2. Set the CH7 Option to "AHRS AutoTrim" on the Software > Copter Pids screen and press the "Write Params" button.
+2. Set your chosen channel's ``RCx_OPTION`` to "AHRS AutoTrim" (182) using Mission Planner's Aux Function screen and press the "Write Params" button. See :ref:`common-auxiliary-functions` for details on assigning options to any RC channel.
 
 3. Find a wind free environment with sufficient space to fly your copter without crashing into something.
 
@@ -46,19 +46,19 @@ Save Trim
 ~~~~~~~~~
 .. note:: the above AHRS AutoTrim method is preferred since it does not involve moving transmitter trims after RC calibration.
 
-Save trim involves essentially transferring your radio transmitter's trims to correct the autopilot's accelerometer trim. Normally, once :ref:`common-accelerometer-calibration` is done, you never want to change the transmitter's trims, but in this case it is done **temporarily**. The "Save Trim" function ("5") is assigned to any free RC channel, usually a switch based one, using an :ref:`common-auxiliary-functions`. For the example below, Channel 7 will be used.
+Save trim involves essentially transferring your radio transmitter's trims into the autopilot's AHRS trim (the :ref:`AHRS_TRIM_X <AHRS_TRIM_X>` and :ref:`AHRS_TRIM_Y <AHRS_TRIM_Y>` parameters), the same values that the AHRS AutoTrim method above adjusts. Normally, once :ref:`common-accelerometer-calibration` is done, you never want to change the transmitter's trims, but in this case it is done **temporarily**. The "Save Trim" function ("5") is assigned to any free RC channel, usually a switch based one, using an :ref:`common-auxiliary-functions`. For the example below, Channel 7 will be used.
 
 1. Check that your CH7 switch goes above 1800 on the MissionPlanner's Setup > Mandatory Hardware > Radio Calibration screen
 
 .. image:: ../images/MP_SaveTrim_Ch7PWMCheck.png
     :target: ../_images/MP_SaveTrim_Ch7PWMCheck.png
 
-2. Set the RC7 Option to Save Trim in the Config > Extended Tuning screen and press the "Write Params" button
+2. Set your chosen channel's ``RCx_OPTION`` to "Save Trim" (5) using Mission Planner's Aux Function screen and press the "Write Params" button. See :ref:`common-auxiliary-functions` for details on assigning options to any RC channel.
 
 .. image:: ../images/MP_SaveTrim_Ch7.png
     :target: ../_images/MP_SaveTrim_Ch7.png
 
-3. With your CH7 switch in the off (Low) position, fly your copter in Stabilize mode and use your transmitters's roll and pitch trim to get it flying level
+3. With your CH7 switch in the off (Low) position, fly your copter in Stabilize or AltHold mode and use your transmitter's roll and pitch trim to get it flying level
 
 4. Land and put your throttle to zero
 

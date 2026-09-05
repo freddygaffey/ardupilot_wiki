@@ -36,6 +36,7 @@ tuning options for the vehicle.
 [site wiki="sub"]
     Autopilot Output Mapping <common-rcoutput-mapping>
     Auxiliary Functions <common-auxiliary-functions>
+    Actuators <actuators>
     Bootloader Update <common-bootloader-update>
 [/site]
     BLHeli ESCs <common-blheli32-passthru>
@@ -128,6 +129,7 @@ tuning options for the vehicle.
     OSD Parameter Editor <common-paramosd>
     Parameter List (Full) <parameters>
     Parameter Lockdown <common-parameter-lockdown>
+    Parameter Name Changes <common-param-name-changes>
     Parameter Reset <common-parameter-reset>
 [site wiki="copter"]
     Precision Landing and Loiter <precision-landing-and-loiter>
