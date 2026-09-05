@@ -1819,6 +1819,33 @@ async function main() {
           !/Incomplete/.test((doc.querySelector('tr[data-wiki="common"]') || {}).textContent || ''));
   }
 
+  console.log('\na running download owns the panel');
+  {
+    const cachesObj = makeCaches();
+    const { doc, w, sandbox } = load({ manifest: MANIFEST, caches: cachesObj });
+    await settle();
+    // An archive fetch that never resolves keeps the download active.
+    sandbox.fetch = () => new Promise(() => {});
+    doc.querySelector('.wiki-check[value="copter"]').click(); await settle();
+    $(doc, 'download-cache-btn').click(); await settle();
+    const click = (id) => doc.getElementById(id)
+      .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    check('check and export are disabled while a download runs',
+          $(doc, 'check-btn').disabled && $(doc, 'dl-single').disabled);
+    click('check-btn'); await settle();
+    check('a forced check refuses politely and cancels nothing',
+          /download is running/i.test($(doc, 'check-result').textContent || '') &&
+          /Cancel/.test($(doc, 'download-cache-btn').textContent),
+          JSON.stringify($(doc, 'check-result').textContent));
+    // The harness does not load the exporter; the guard fires before it is used.
+    w.ArduPilotExport = { exportHtml: () => Promise.resolve({ pages: 0 }) };
+    click('dl-single'); await settle(); await settle();
+    check('a forced export refuses politely and cancels nothing',
+          /already running/i.test($(doc, 'dl-single').textContent || '') &&
+          /Cancel/.test($(doc, 'download-cache-btn').textContent),
+          JSON.stringify($(doc, 'dl-single').textContent));
+  }
+
   console.log('\noffline mode switch: off removes everything, after a warning');
   {
     const cachesObj = makeCaches();

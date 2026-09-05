@@ -163,13 +163,19 @@ def collect_embeds(wikis):
     return wanted
 
 
+def looks_like_still(data: bytes) -> bool:
+    """JPEG or PNG magic; a consent page cached as a still poisons every build."""
+    return data.startswith(b"\xff\xd8\xff") or data.startswith(b"\x89PNG\r\n\x1a\n")
+
+
 def fetch_thumbnails(specs, cache: Path):
     """A still per video, cached across builds; a missing one is not fatal."""
     cache.mkdir(parents=True, exist_ok=True)
     have, failed = {}, []
     for key in sorted(specs):
         path = cache / f"{key}.jpg"
-        if not path.is_file():
+        cached = path.read_bytes() if path.is_file() else b""
+        if not looks_like_still(cached):
             try:
                 url = specs[key]
                 # Vimeo publishes no fixed still URL; its oEmbed answer names one.
@@ -180,9 +186,9 @@ def fetch_thumbnails(specs, cache: Path):
                         raise ValueError("no thumbnail_url")
                 with urllib.request.urlopen(url, timeout=15) as r:
                     data = r.read()
-                if not data:
-                    raise ValueError("empty")
-                path.write_bytes(data)
+                if not looks_like_still(data):
+                    raise ValueError("not an image")
+                publish(path, data)
             except (urllib.error.URLError, OSError, ValueError):
                 failed.append(key)
                 continue
