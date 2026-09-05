@@ -170,8 +170,8 @@
     'function showPicker(){',
     'miss.style.display="none";',
     'var rows=D.homes.map(function(h){',
-    'return \'<li><a href="#\'+h.path+\'"><span>\'+(h.name||h.id)+\'</span>\'',
-    '+\'<small>\'+h.pages+\' pages</small></a></li>\';}).join("");',
+    'return \'<li><a href="#\'+esc(h.path)+\'"><span>\'+esc(h.name||h.id)+\'</span>\'',
+    '+\'<small>\'+esc(h.pages)+\' pages</small></a></li>\';}).join("");',
     'doc.innerHTML="<h1>Offline copy</h1><p>This file contains "+D.homes.length',
     '+" wikis. Choose one to start reading.</p><ul id=\\"ap-pick\\">"+rows+"</ul>";',
     'crumb.textContent="";',
@@ -299,7 +299,9 @@
     'return;}',
     'var frag="";var h=href;var hi=h.indexOf("#");',
     'if(hi>=0){frag=h.slice(hi);h=h.slice(0,hi);}',
-    'var target=resolve(current(),h);',
+    // Root-relative is already a site path; only relative links resolve
+    // against the page being read.
+    'var target=h.charAt(0)==="/"?h.replace(/\\.html?$/,""):resolve(current(),h);',
     // A relative link must never leave the file.
     'e.preventDefault();',
     'var found=lookup(target);',
