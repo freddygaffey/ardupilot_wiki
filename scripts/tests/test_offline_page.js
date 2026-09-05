@@ -2113,7 +2113,11 @@ async function main() {
     await seedSaved(cachesObj, 'dev', OLD_BUILD, { 'dev/index.html': ['h1', 'x'] });
     (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
       completeMarker(MANIFEST.generated, 'common'));
-    const { doc, w, sandbox, fetchCalls } = load({ manifest: MANIFEST, caches: cachesObj });
+    // A differential is genuinely possible: new table and file are served,
+    // so only the deferral stands between the check and a cache write.
+    const { doc, w, sandbox, fetchCalls } = load({ manifest: MANIFEST, caches: cachesObj,
+      tables: { 'dev-files.json': { 'dev/index.html': 'h2' } },
+      served: { '/dev/index.html': '<html>newer</html>' } });
     await settle();
     let released = false; const pend = [];
     const orig = sandbox.fetch;
@@ -2137,7 +2141,8 @@ async function main() {
     released = true; pend.forEach((f) => f());
     for (let i = 0; i < 8; i++) { await settle(); }
     const updates = () => fetchCalls.filter((u) =>
-      u.indexOf('ap-update=') !== -1 || /\/files\//.test(u)).length;
+      u.indexOf('ap-update=') !== -1 || /\/files\//.test(u) ||
+      u.indexOf('-files.json') !== -1).length;
     check('a stale wiki found mid-pack starts no download', tars() === before,
           tars() + ' tar fetches, ' + before + ' before');
     check('not even the differential touches the caches mid-pack',
@@ -2155,6 +2160,81 @@ async function main() {
     check('the deferred update resumes once the export finishes',
           manifests() > beforeResume,
           manifests() + ' manifest fetches, ' + beforeResume + ' before');
+  }
+
+  console.log('\nthe resume also fires when the export ends mid-check');
+  {
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'dev', OLD_BUILD, { 'dev/index.html': ['h1', 'x'] });
+    (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'common'));
+    const { doc, w, sandbox, fetchCalls } = load({ manifest: MANIFEST, caches: cachesObj });
+    await settle();
+    let released = false; const pend = [];
+    const orig = sandbox.fetch;
+    sandbox.fetch = (u, o) => {
+      if (!released && /offline-manifest\.json/.test(String(u))) {
+        return new Promise((res) => { pend.push(() => orig(u, o).then(res)); });
+      }
+      return orig(u, o);
+    };
+    sandbox.window.fetch = sandbox.fetch;
+    const click = (id) => $(doc, id).dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    click('check-btn'); await settle();
+    let finishExport = null;
+    w.ArduPilotExport = { exportHtml: () =>
+      new Promise((res) => { finishExport = () => res({ pages: 1 }); }) };
+    click('dl-single'); await settle();
+    const manifests = () => fetchCalls.filter((u) =>
+      u.indexOf('offline-manifest.json') !== -1).length;
+    const beforeResume = manifests();
+    // The export finishes in the same breath the check is released, so the
+    // check's own tail is what must carry the resume.
+    released = true; pend.forEach((f) => f());
+    finishExport();
+    for (let i = 0; i < 12; i++) { await settle(); }
+    check('the deferred update resumes when the export ends mid-check',
+          manifests() > beforeResume,
+          manifests() + ' manifest fetches, ' + beforeResume + ' before');
+  }
+
+  console.log('\nan export cannot start while an update is writing the caches');
+  {
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'dev', OLD_BUILD, { 'dev/index.html': ['h1', 'x'] });
+    (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'common'));
+    const { doc, w, sandbox } = load({ manifest: MANIFEST, caches: cachesObj,
+      tables: { 'dev-files.json': { 'dev/index.html': 'h2' } },
+      served: { '/dev/index.html': '<html>newer</html>' } });
+    await settle();
+    // The differential's file fetches are held mid-write until released.
+    let released = false; const pend = [];
+    const orig = sandbox.fetch;
+    sandbox.fetch = (u, o) => {
+      if (!released && /\/files\/|ap-update=/.test(String(u))) {
+        return new Promise((res) => { pend.push(() => orig(u, o).then(res)); });
+      }
+      return orig(u, o);
+    };
+    sandbox.window.fetch = sandbox.fetch;
+    const releaseFile = () => { released = true; pend.forEach((f) => f()); };
+    const click = (id) => $(doc, id).dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    click('check-btn');
+    for (let i = 0; i < 6; i++) { await settle(); }
+    let calls = 0;
+    w.ArduPilotExport = { exportHtml: () => { calls++;
+      return Promise.resolve({ pages: 1 }); } };
+    click('dl-single'); await settle();
+    check('the export refuses while the update writes',
+          calls === 0 && /update is being written/i.test($(doc, 'dl-single').textContent || ''),
+          calls + ' exports, ' + JSON.stringify($(doc, 'dl-single').textContent));
+    releaseFile();
+    for (let i = 0; i < 10; i++) { await settle(); }
+    click('dl-single');
+    for (let i = 0; i < 10; i++) { await settle(); }
+    check('the export runs once the update has finished', calls === 1,
+          calls + ' exports, ' + JSON.stringify($(doc, 'dl-single').textContent));
   }
 
   console.log('\nan export finishing under a busy check withholds only its button');
