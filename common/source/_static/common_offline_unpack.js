@@ -173,30 +173,33 @@
     );
   }
 
+  // Kept in step with FOLD_INTO_COMMON (build) and FOLDED_INTO_COMMON
+  // (sw.js, page): the wikis whose pages the common archive carries.
+  var FOLDED_INTO_COMMON = ['ardupilot'];
+
+  // The trees an archive may write into. Anything else in a common archive
+  // is refused; a wiki archive may only fill its own tree.
+  function allowedPrefixes(id) {
+    if (id !== 'common') { return ['/' + id + '/']; }
+    return ['/_common/_images/'].concat(FOLDED_INTO_COMMON.map(function (w) {
+      return '/' + w + '/';
+    }));
+  }
+
   // Where an entry is stored; shared with the differential update. Names come
-  // off the network, so nothing may climb out of the archive's own tree.
+  // off the network, so the URL the cache will really use, with encoded dots
+  // decoded, tabs stripped and backslashes turned into slashes, must stay
+  // inside the archive's own tree. The parser decides that, not this code.
   function cachePathFor(id, name) {
-    // The URL parser decodes %2e, so the check runs on the decoded form. A
-    // URIError means the name is not valid percent-encoding, so it cannot be
-    // an encoded climb; the literal checks run on what decoded so far.
-    // Neither is legal in a Sphinx output path, and a fragment or query
-    // would let the URL parser see a different path than this guard checks.
-    if (name.indexOf('#') !== -1 || name.indexOf('?') !== -1) {
-      throw new Error('unsafe archive path ' + name);
-    }
-    var probe = name;
-    try {
-      var next = decodeURIComponent(probe);
-      while (next !== probe) { probe = next; next = decodeURIComponent(probe); }
-    } catch (err) { /* checked as-is below */ }
-    if (probe.charAt(0) === '/' || probe.indexOf('\\') !== -1 ||
-        probe.split('/').indexOf('..') !== -1) {
-      throw new Error('unsafe archive path ' + name);
-    }
-    if (id === 'common' && name.indexOf('_images/') === 0) {
-      return '/_common/' + name;
-    }
-    return '/' + name;
+    var path = (id === 'common' && name.indexOf('_images/') === 0)
+      ? '/_common/' + name : '/' + name;
+    var url = new URL(path, 'https://a');
+    var inTree = url.origin === 'https://a' && !url.search && !url.hash &&
+      allowedPrefixes(id).some(function (prefix) {
+        return url.pathname.indexOf(prefix) === 0;
+      });
+    if (!inTree) { throw new Error('unsafe archive path ' + name); }
+    return url.pathname;
   }
 
   /** cache.match, but readable. */

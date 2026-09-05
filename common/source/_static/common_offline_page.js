@@ -36,7 +36,8 @@
   var PAGE_CACHE_PREFIX = 'ardupilot-pages-';
   var OFFLINE_CACHE_PREFIX = 'ardupilot-offline-';
   var COMPLETE_MARKER = '/__ap_complete__';
-  // Kept in step with FOLD_INTO_COMMON (build) and FOLDED_INTO_COMMON (sw.js).
+  // Kept in step with FOLD_INTO_COMMON (build) and FOLDED_INTO_COMMON
+  // (sw.js, common_offline_unpack.js).
   var FOLDED_INTO_COMMON = ['ardupilot'];
   var AUTOUPDATE_KEY = 'ap-autoupdate';
   // Quota estimates are fuzzed, and unpacking needs working room.
@@ -932,6 +933,16 @@
                     if (!have[n]) { missing.push(n); }
                     else if (have[n] !== true && have[n] !== table[n]) { damaged.push(n); }
                   });
+                  // An entry the table does not name has no hash standing
+                  // behind it, so it is refused rather than kept.
+                  var unlisted = (unpacked || []).filter(function (e) {
+                    return !Object.prototype.hasOwnProperty.call(table, e.name);
+                  });
+                  if (unlisted.length) {
+                    throw new Error('the archive for ' + entry.name +
+                                    ' held a file the server does not list (' +
+                                    unlisted[0].name + '); nothing was marked saved. Try again.');
+                  }
                   if (missing.length) {
                     throw new Error('the server published a new build while saving ' +
                                     entry.name + '; try again in a moment');

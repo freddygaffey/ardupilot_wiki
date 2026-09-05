@@ -182,7 +182,8 @@ function storedShapes(url) {
 }
 
 
-// Kept in step with FOLD_INTO_COMMON in scripts/build_offline_artifacts.py.
+// Kept in step with FOLD_INTO_COMMON (build), and the copies in
+// common_offline_page.js and common_offline_unpack.js.
 const FOLDED_INTO_COMMON = new Set(['ardupilot']);
 
 function likelyCacheName(path) {
