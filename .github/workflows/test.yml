@@ -11,7 +11,7 @@ jobs:
   pre-commit:
     runs-on: ubuntu-slim
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - uses: actions/setup-python@v6
       with:
         python-version: "3.10"
@@ -20,7 +20,7 @@ jobs:
   shellcheck:
     runs-on: ubuntu-slim
     steps:
-    - uses: actions/checkout@v6
+    - uses: actions/checkout@v7
     - run: find . -type f -name "*.sh" -exec shellcheck {} +
 
   build-linux:
@@ -32,7 +32,7 @@ jobs:
         python-version: ["3.10"]
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@v6
         with:
@@ -78,7 +78,7 @@ jobs:
       - name: Surface suite failures as annotations
         if: failure()
         run: |
-          for f in suite_output.txt browser_output.txt build_errors.txt; do
+          for f in suite_output.txt browser_output.txt; do
             if [ -f "$f" ]; then
               grep -aE "FAIL |CHECK\(S\) FAILED|Error:" "$f" | tail -15 | while read -r line; do
                 echo "::error::${f}: ${line}"
@@ -88,9 +88,10 @@ jobs:
       - name: Report build errors
         if: failure()
         run: |
-          if [ -s build_errors.txt ]; then
-            echo "## Build errors (tail)" >> "$GITHUB_STEP_SUMMARY"
+          grep -iE '\[error\]|warning' build_errors.txt > filtered_errors.txt || true
+          if [ -s filtered_errors.txt ]; then
+            echo "## Build errors" >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
-            tail -c 900000 build_errors.txt >> "$GITHUB_STEP_SUMMARY"
+            tail -c 900000 filtered_errors.txt | tail -n 500 >> "$GITHUB_STEP_SUMMARY"
             echo '```' >> "$GITHUB_STEP_SUMMARY"
           fi
