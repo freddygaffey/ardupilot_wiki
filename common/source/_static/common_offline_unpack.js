@@ -13,7 +13,7 @@
     html: 'text/html; charset=utf-8', js: 'text/javascript', css: 'text/css',
     json: 'application/json', png: 'image/png', jpg: 'image/jpeg',
     jpeg: 'image/jpeg', gif: 'image/gif', svg: 'image/svg+xml',
-    webp: 'image/webp', ico: 'image/x-icon', woff: 'font/woff',
+    webp: 'image/webp', bmp: 'image/bmp', ico: 'image/x-icon', woff: 'font/woff',
     woff2: 'font/woff2', ttf: 'font/ttf', inv: 'application/octet-stream'
   };
 
@@ -34,28 +34,46 @@
   // Minimal tar reader: 512-byte headers, data padded to 512. `pathFor` maps
   // an entry name to the exact cache key; storing anything else would let a
   // name the guard approved land somewhere it did not.
+  // No page or image comes close; a hostile archive must not balloon memory.
+  var MAX_ENTRY = 64 * 1024 * 1024;
+
   function untarToCache(stream, cache, pathFor, onEntry) {
     var reader = stream.getReader();
-    var buf = new Uint8Array(0);
+    var chunks = [];
+    var buffered = 0;
     var done = false;
 
     function pull() {
       return reader.read().then(function (r) {
         if (r.done) { done = true; return; }
-        var next = new Uint8Array(buf.length + r.value.length);
-        next.set(buf); next.set(r.value, buf.length);
-        buf = next;
+        chunks.push(r.value);
+        buffered += r.value.length;
       });
     }
 
     function need(n) {
-      if (buf.length >= n || done) { return Promise.resolve(buf.length >= n); }
+      if (buffered >= n || done) { return Promise.resolve(buffered >= n); }
       return pull().then(function () { return need(n); });
     }
 
+    // One allocation per read, never a rolling copy of the whole tail.
     function take(n) {
-      var out = buf.subarray(0, n);
-      buf = buf.slice(n);
+      var out = new Uint8Array(n);
+      var off = 0;
+      while (off < n) {
+        var head = chunks[0];
+        var want = n - off;
+        if (head.length <= want) {
+          out.set(head, off);
+          off += head.length;
+          chunks.shift();
+        } else {
+          out.set(head.subarray(0, want), off);
+          chunks[0] = head.subarray(want);
+          off = n;
+        }
+      }
+      buffered -= n;
       return out;
     }
 
@@ -75,7 +93,7 @@
     function step() {
       return need(512).then(function (ok) {
         if (!ok) {
-          if (buf.length || !sawEnd) { throw new Error('archive truncated'); }
+          if (buffered || !sawEnd) { throw new Error('archive truncated'); }
           return;
         }
         var header = take(512);
@@ -87,6 +105,9 @@
         if (pfx) { name = pfx + '/' + name; }
 
         var size = parseInt(textField(header, 124, 12).trim(), 8) || 0;
+        if (size > MAX_ENTRY) {
+          throw new Error('archive entry too large: ' + name);
+        }
         var type = String.fromCharCode(header[156] || 48);
         var padded = Math.ceil(size / 512) * 512;
 

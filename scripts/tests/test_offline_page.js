@@ -1702,6 +1702,22 @@ async function main() {
           verdict('rover', 'rover/.\r./copter/index.html') === 'refused');
     check('an entry for another wiki is refused with no trickery at all',
           verdict('rover', 'copter/index.html') === 'refused');
+    check('a prefix must anchor at the start, not appear anywhere',
+          verdict('rover', 'evilwiki/rover/x.html') === 'refused');
+    check('a fragment on an otherwise-fine name is refused',
+          verdict('rover', 'rover/ok.html#sec') === 'refused');
+    // 65 MB in the size field with no body: the header check must fire
+    // before any allocation, not a truncation error after buffering.
+    const hugeHead = Buffer.alloc(512);
+    hugeHead.write('rover/huge.bin', 0, 100);
+    hugeHead.write((65 * 1024 * 1024).toString(8).padStart(11, '0') + '\0', 124, 12);
+    hugeHead.write('0', 156, 1);
+    hugeHead.write('        ', 148, 8);
+    { let sum = 0; for (const b of hugeHead) { sum += b; }
+      hugeHead.write(sum.toString(8).padStart(6, '0') + '\0 ', 148, 8); }
+    const huge = await attempt(Buffer.concat([hugeHead, Buffer.alloc(1024)]));
+    check('an oversized entry is refused before it allocates',
+          !huge.ok && /too large/.test(huge.error), JSON.stringify(huge));
     check('a protocol-relative name cannot change origin',
           verdict('rover', '/rover/rover/index.html') === 'refused');
     check('backslashes resolve like slashes and are judged after that',

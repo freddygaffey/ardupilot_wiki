@@ -156,9 +156,17 @@
     'function fillVersions(path){',
     'var sel=doc.querySelector("#selectPicker");if(!sel)return;',
     'var box=sel.parentNode;',
-    'var list=(D.params||{})[path.split("/")[1]]||[];',
+    'var wik=path.split("/")[1];',
+    'var list=(D.params||{})[wik]||[];',
     'if(!list.length){if(box)box.style.display="none";return;}',
     'sel.innerHTML="";',
+    // The unversioned page leads the list, so there is a way back to it.
+    'var latest="/"+wik+"/docs/parameters";',
+    'if(byPath[latest]!==undefined){',
+    'var lo=document.createElement("option");',
+    'lo.value=latest;lo.textContent="Latest";',
+    'if(path===latest)lo.selected=true;',
+    'sel.appendChild(lo);}',
     'list.forEach(function(v){',
     'var o=document.createElement("option");',
     'o.value=v.p;o.textContent=v.n;',
@@ -229,6 +237,11 @@
     'var raw=current();',
     'if(!raw||raw==="/"){',
     'return D.home?show(D.home):showPicker();}',
+    // Not a path: an in-page anchor reached the hash; scroll, keep the page.
+    'if(raw.charAt(0)!=="/"){',
+    'var at=document.getElementById(raw);',
+    'if(at&&at.scrollIntoView)at.scrollIntoView();',
+    'return;}',
     'show(raw);}',
     'window.addEventListener("hashchange",route);',
     // A browser will not navigate to a data: URL, so linked images open here.
@@ -286,7 +299,15 @@
     'var a=e.target.closest?e.target.closest("a[href]"):null;if(!a)return;',
     'var href=a.getAttribute("href");',
     'if(a.getAttribute("data-ap-external")!==null)return;',
-    'if(!href||/^(mailto:|#)/.test(href))return;',
+    'if(!href||/^mailto:/.test(href))return;',
+    // A bare fragment is an in-page anchor: scroll to it, never route.
+    'if(href.charAt(0)==="#"){',
+    'e.preventDefault();',
+    'var fid=href.slice(1);',
+    'if(fid){var ft=document.getElementById(fid)||',
+    'doc.querySelector(\'[id="\'+fid.replace(/"/g,"")+\'"]\');',
+    'if(ft&&ft.scrollIntoView)ft.scrollIntoView();}',
+    'return;}',
     'if(/^https?:/i.test(href)){',
     'var mapped=siteHref(href);',
     // Another host: not wiki content, so no offline copy to route to.
@@ -720,15 +741,16 @@
   /* -------------------------------------- versioned parameter pages */
 
   // Parameter-list history to carry: SERIES major.minor lines, PER_SERIES each.
-  var PARAM_SERIES = 3;
-  var PARAM_PER_SERIES = 1;
+
 
   // The plain /rover/docs/parameters is the latest, unversioned, always kept.
   var PARAM_PAGE = /^\/([^/]+)\/docs\/parameters-([^/]+)$/;
 
   /** The versioned parameter pages the file carries, labelled from filenames. */
+  // Every saved version is carried: the reader chose each one at save time,
+  // and silently thinning them here would lose pages they asked for.
   function parameterVersions(paths) {
-    var found = {}, byWiki = {}, drop = {};
+    var found = {}, byWiki = {};
 
     paths.forEach(function (p) {
       var m = PARAM_PAGE.exec(p);
@@ -739,30 +761,18 @@
       found[m[1]].push({
         p: p,
         n: m[2].split('-').join(' '),
-        s: v[1] + '.' + v[2],
         v: [+v[1], +v[2], +v[3]]
       });
     });
 
     Object.keys(found).forEach(function (w) {
-      var list = found[w].sort(function (a, b) {
-        return b.v[0] - a.v[0] || b.v[1] - a.v[1] || b.v[2] - a.v[2];
-      });
-      var series = [], perSeries = {}, kept = [];
-      list.forEach(function (e) {
-        if (series.indexOf(e.s) === -1) {
-          if (series.length >= PARAM_SERIES) { drop[e.p] = 1; return; }
-          series.push(e.s);
-          perSeries[e.s] = 0;
-        }
-        if (perSeries[e.s] >= PARAM_PER_SERIES) { drop[e.p] = 1; return; }
-        perSeries[e.s]++;
-        kept.push({ n: e.n, p: e.p });
-      });
-      if (kept.length) { byWiki[w] = kept; }
+      byWiki[w] = found[w].sort(function (a, b) {
+        return b.v[0] - a.v[0] || b.v[1] - a.v[1] || b.v[2] - a.v[2] ||
+               (a.n < b.n ? -1 : 1);
+      }).map(function (e) { return { n: e.n, p: e.p }; });
     });
 
-    return { byWiki: byWiki, drop: drop };
+    return { byWiki: byWiki, drop: {} };
   }
 
   /* -------------------------------------------------------- the front page */
