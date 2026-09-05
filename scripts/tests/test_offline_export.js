@@ -19,7 +19,7 @@ const WIKIS_ARG = ARGS.filter((a) => !a.startsWith('--'));
 const WIKI = WIKIS_ARG[0] || 'rover';
 const ALL_WIKIS = ['copter', 'plane', 'rover', 'sub', 'blimp', 'dev',
                    'antennatracker', 'planner', 'planner2', 'ardupilot', 'mavproxy'];
-const OUT = '/tmp/ap-export-test';
+const OUT = path.join(require('os').tmpdir(), 'ap-export-test');
 
 const EXPORTER = path.join(REPO, 'common/source/_static/common_offline_export.js');
 const DOCUMENT = path.join(REPO, 'common/source/_static/common_offline_document_builder.js');
@@ -371,20 +371,22 @@ async function main() {
   {
     let aborted = false; let writes = 0;
     const flag = { aborted: false };
-    const sink = { write: () => { writes++; return Promise.resolve(); },
+    // Tripped by the third write, so the test holds on any cache size.
+    const sink = { write: () => { writes++;
+                     if (writes === 3) { flag.aborted = true; }
+                     return Promise.resolve(); },
                    close: () => Promise.resolve(),
                    abort: () => { aborted = true; return Promise.resolve(); } };
-    const outcome = await api.exportHtml(wikis, 'x.html',
-      () => { flag.aborted = true; }, sink, flag)
+    const outcome = await api.exportHtml(wikis, 'x.html', null, sink, flag)
       .then(() => 'resolved', (e) => e);
     check('a cancelled export rejects with AbortError',
           !!outcome && outcome !== 'resolved' && outcome.name === 'AbortError',
           String(outcome && (outcome.name || outcome)));
     check('the cancelled export aborts its sink', aborted);
-    // Cancelled at the first progress call (10 pages in): the pack must stop
-    // there, not run every remaining page and reject at the end.
-    check('the cancel stops the work where it lands', writes <= 15,
-          writes + ' writes for a ' + '44-page fixture');
+    // Cancelled at the third write: the pack must stop there, not run every
+    // remaining page and notice at the end.
+    check('the cancel stops the work where it lands', writes <= 5,
+          writes + ' writes after a cancel at the third');
   }
 
   // A cancel after the last page must still cancel, not quietly save.
