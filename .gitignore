@@ -28,8 +28,10 @@ old_params_mversion/
 # Generated offline artefacts (archives + manifest), rebuilt by update.py
 /offline/
 /offline.new/
-/.thumbs/
 /offline.old/
+
+# Thumbnail cache for the offline archives, kept across builds
+/offline.cache/
 
 # Lossless PNG results, keyed by content hash. Safe to delete; the next
 # build refills it.

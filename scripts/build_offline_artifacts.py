@@ -527,8 +527,10 @@ def build(wikis, destdir: Path) -> Path:
 
     embeds = collect_embeds(built)
     log(f"fetching stills for {len(embeds)} embedded videos")
-    # Cached at the repo root, out of the published tree.
-    thumbs = fetch_thumbnails(embeds, Path(".thumbs"))
+    # Cached under destdir, which on the build server is outside the git
+    # checkout (update.sh runs git clean -x there) and outside the promoted
+    # offline/ generation, so it is neither wiped nightly nor published.
+    thumbs = fetch_thumbnails(embeds, Path(destdir) / "offline.cache" / "thumbs")
 
     folded = [w for w in built if w in FOLD_INTO_COMMON]
     log(f"writing common archive ({len(common_names)} shared images, "

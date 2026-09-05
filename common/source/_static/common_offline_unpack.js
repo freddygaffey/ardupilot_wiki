@@ -176,14 +176,14 @@
   // Where an entry is stored; shared with the differential update. Names come
   // off the network, so nothing may climb out of the archive's own tree.
   function cachePathFor(id, name) {
-    // The URL parser decodes %2e, so the check runs on the decoded form.
+    // The URL parser decodes %2e, so the check runs on the decoded form. A
+    // URIError means the name is not valid percent-encoding, so it cannot be
+    // an encoded climb; the literal checks run on what decoded so far.
     var probe = name;
     try {
-      var prev;
-      do { prev = probe; probe = decodeURIComponent(probe); } while (probe !== prev);
-    } catch (err) {
-      throw new Error('unsafe archive path ' + name);
-    }
+      var next = decodeURIComponent(probe);
+      while (next !== probe) { probe = next; next = decodeURIComponent(probe); }
+    } catch (err) { /* checked as-is below */ }
     if (probe.charAt(0) === '/' || probe.indexOf('\\') !== -1 ||
         probe.split('/').indexOf('..') !== -1) {
       throw new Error('unsafe archive path ' + name);

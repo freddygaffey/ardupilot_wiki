@@ -338,6 +338,10 @@ writing into ``<destdir>/offline/``:
    complete only once the archive's contents have been checked off against
    this table, so a build published mid-save cannot be frozen in as current.
 
+``offline.cache/``
+   The video-thumbnail cache, kept beside the destination across builds and
+   never published or promoted.
+
 ``files/``
    The rewritten pages and generated video stills, published individually and
    gzipped. The archive holds a rewritten copy of each page (the donate button
