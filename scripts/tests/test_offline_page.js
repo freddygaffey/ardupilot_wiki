@@ -155,7 +155,7 @@ function panelMarkup() {
 function load({ manifest = null, caches = makeCaches(), persisted = false,
                 usage = 0, quota = 10e9, archives = null,
                 tables = null, served = null, rateLimit = false,
-                loose = null, offline = false } = {}) {
+                loose = null, offline = false, estimateDelay = 0 } = {}) {
   const vc = new VirtualConsole();
   vc.on('jsdomError', (e) => { console.log('    [page error] ' + e.message);
                                if (e.stack) console.log('    ' + e.stack.split('\n')[1]); });
@@ -186,7 +186,9 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
     location: w.location,
     navigator: {
       storage: {
-        estimate: () => Promise.resolve({ usage, quota }),
+        estimate: () => (estimateDelay
+          ? new Promise((r) => setTimeout(() => r({ usage, quota }), estimateDelay))
+          : Promise.resolve({ usage, quota })),
         persisted: () => Promise.resolve(persisted),
         persist: () => Promise.resolve(persisted)
       },
@@ -2162,19 +2164,21 @@ async function main() {
           updates() + ' update fetches, ' + beforeResume + ' before');
   }
 
-  console.log('\nthe resume also fires when the export ends mid-check');
+  console.log('\nthe check tail carries the resume release() had to skip');
   {
     const cachesObj = makeCaches();
     await seedSaved(cachesObj, 'dev', OLD_BUILD, { 'dev/index.html': ['h1', 'x'] });
     (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
       completeMarker(MANIFEST.generated, 'common'));
-    const { doc, w, sandbox, fetchCalls } = load({ manifest: MANIFEST, caches: cachesObj });
+    const { doc, w, sandbox, fetchCalls } = load({ manifest: MANIFEST, caches: cachesObj,
+      tables: { 'dev-files.json': { 'dev/index.html': 'h2' } },
+      served: { '/dev/index.html': '<html>newer</html>' } });
     await settle();
-    let released = false; const pend = [];
+    let released = false; const pendM = [];
     const orig = sandbox.fetch;
     sandbox.fetch = (u, o) => {
       if (!released && /offline-manifest\.json/.test(String(u))) {
-        return new Promise((res) => { pend.push(() => orig(u, o).then(res)); });
+        return new Promise((res) => { pendM.push(() => orig(u, o).then(res)); });
       }
       return orig(u, o);
     };
@@ -2185,17 +2189,108 @@ async function main() {
     w.ArduPilotExport = { exportHtml: () =>
       new Promise((res) => { finishExport = () => res({ pages: 1 }); }) };
     click('dl-single'); await settle();
-    // Only the resumed check can fetch an archive: the original deferred.
-    const tars = () => fetchCalls.filter((u) => u.indexOf('.tar') !== -1).length;
-    const beforeResume = tars();
-    // The export finishes in the same breath the check is released, so the
-    // check's own tail is what must carry the resume.
-    released = true; pend.forEach((f) => f());
-    finishExport();
+    const updates = () => fetchCalls.filter((u) =>
+      u.indexOf('ap-update=') !== -1 || /\/files\//.test(u) ||
+      u.indexOf('dev-files.json') !== -1).length;
+    // The export ends the instant the deferral text lands, so release()
+    // runs before the check tail: the tail must carry the resume.
+    let firedAtDeferral = false;
+    const mo = new w.MutationObserver(() => {
+      if (!firedAtDeferral &&
+          /after the export/i.test($(doc, 'check-result').textContent || '')) {
+        firedAtDeferral = true;
+        finishExport();
+      }
+    });
+    mo.observe($(doc, 'check-result'), { childList: true, characterData: true, subtree: true });
+    released = true; pendM.forEach((f) => f());
+    for (let i = 0; i < 15; i++) { await settle(); }
+    mo.disconnect();
+    check('the export ended exactly at the deferral', firedAtDeferral);
+    check('the check tail carries the resume release() had to skip',
+          updates() > 0, updates() + ' update fetches');
+    const devTables = fetchCalls.filter((u) => u.indexOf('dev-files.json') !== -1).length;
+    check('and the resumed update runs exactly once', devTables === 1,
+          devTables + ' table fetches');
+  }
+
+  console.log('\na deferred update survives a failing pre-save');
+  {
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'dev', OLD_BUILD, { 'dev/index.html': ['h1', 'x'] });
+    (await cachesObj.open('ardupilot-offline-common')).put('/_common/_images/x.png',
+      new FakeResponse('png'));
+    const { doc, w, sandbox, fetchCalls } = load({ manifest: MANIFEST, caches: cachesObj,
+      tables: { 'dev-files.json': { 'dev/index.html': 'h2' } },
+      served: { '/dev/index.html': '<html>newer</html>' } });
+    await settle();
+    let released = false; const pendM = [];
+    let failTar = null;
+    const orig = sandbox.fetch;
+    sandbox.fetch = (u, o) => {
+      if (!released && /offline-manifest\.json/.test(String(u))) {
+        return new Promise((res) => { pendM.push(() => orig(u, o).then(res)); });
+      }
+      if (/common-offline\.tar/.test(String(u))) {
+        return new Promise((res, rej) => { failTar = () => rej(new Error('gone')); });
+      }
+      return orig(u, o);
+    };
+    sandbox.window.fetch = sandbox.fetch;
+    const click = (id) => $(doc, id).dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    click('check-btn'); await settle();
+    w.ArduPilotExport = { exportHtml: () => Promise.resolve({ pages: 1 }) };
+    click('dl-single'); await settle();
+    released = true; pendM.forEach((f) => f());
+    for (let i = 0; i < 6; i++) { await settle(); }
+    const updates = () => fetchCalls.filter((u) =>
+      u.indexOf('ap-update=') !== -1 || /\/files\//.test(u) ||
+      u.indexOf('dev-files.json') !== -1).length;
+    check('the check deferred while the pre-save ran', updates() === 0,
+          updates() + ' update fetches');
+    // The pre-save now fails outright; the deferred update must still run.
+    failTar();
     for (let i = 0; i < 12; i++) { await settle(); }
-    check('the deferred update resumes when the export ends mid-check',
-          tars() > beforeResume,
-          tars() + ' tar fetches, ' + beforeResume + ' before');
+    check('the deferred update survives the failed pre-save',
+          updates() > 0, updates() + ' update fetches after the failure');
+  }
+
+  console.log('\nthe span between pre-save and pack is owned too');
+  {
+    const cachesObj = makeCaches();
+    (await cachesObj.open('ardupilot-offline-copter')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'copter'));
+    (await cachesObj.open('ardupilot-offline-common')).put('/_common/_images/x.png',
+      new FakeResponse('png'));
+    // Estimates resolve on a timer, as in a real browser, so the renders
+    // from the pre-save cleanup land in the gap before packing starts.
+    const { doc, w, sandbox } = load({ manifest: MANIFEST, caches: cachesObj,
+      archives: { '_images/shared.png': 'png' }, estimateDelay: 10 });
+    await settle();
+    let finishExport = null;
+    w.ArduPilotExport = { exportHtml: () =>
+      new Promise((res) => { finishExport = () => res({ pages: 1 }); }) };
+    // A MutationObserver sees even a one-microtask window where the
+    // buttons come back; polling at settle granularity cannot.
+    let clearSeenLive = false; let checkSeenLive = false;
+    const mo = new w.MutationObserver(() => {
+      if (!$(doc, 'clear-btn').disabled) { clearSeenLive = true; }
+      if (!$(doc, 'check-btn').disabled) { checkSeenLive = true; }
+    });
+    mo.observe($(doc, 'clear-btn'), { attributes: true });
+    mo.observe($(doc, 'check-btn'), { attributes: true });
+    $(doc, 'dl-single').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    for (let i = 0; i < 20; i++) {
+      await settle();
+      if (finishExport) { break; }
+    }
+    mo.disconnect();
+    check('Remove all is never live between pre-save and pack',
+          !clearSeenLive && !checkSeenLive,
+          'clear ' + clearSeenLive + ' check ' + checkSeenLive);
+    if (finishExport) { finishExport(); }
+    for (let i = 0; i < 10; i++) { await settle(); }
+    check('and it comes back at rest', !$(doc, 'clear-btn').disabled);
   }
 
   console.log('\na check landing during the pre-save defers like any other');
