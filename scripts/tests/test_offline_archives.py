@@ -135,6 +135,29 @@ def check_shared_images_agree():
           else f"{len(shared)} shared images checked across {holders} holdings")
 
 
+def check_folded_lists_agree():
+    """The four literal FOLDED_INTO_COMMON copies must name the same wikis."""
+    root = Path(__file__).resolve().parents[2]
+    sources = {
+        "scripts/build_offline_artifacts.py":
+            r"FOLD_INTO_COMMON\s*=\s*\{([^}]*)\}",
+        "frontend/sw.js":
+            r"FOLDED_INTO_COMMON\s*=\s*new Set\(\[([^\]]*)\]\)",
+        "common/source/_static/common_offline_page.js":
+            r"FOLDED_INTO_COMMON\s*=\s*\[([^\]]*)\]",
+        "common/source/_static/common_offline_unpack.js":
+            r"FOLDED_INTO_COMMON\s*=\s*\[([^\]]*)\]",
+    }
+    lists = {}
+    for rel, pattern in sources.items():
+        m = re.search(pattern, (root / rel).read_text())
+        lists[rel] = sorted(re.findall(r"['\"]([^'\"]+)['\"]", m.group(1))) if m else None
+    values = set(map(str, lists.values()))
+    check("every FOLDED_INTO_COMMON copy names the same wikis",
+          None not in lists.values() and len(values) == 1,
+          "; ".join(f"{k}: {v}" for k, v in lists.items()))
+
+
 def check_assets_follow_pages():
     """Wherever the offline page went, its assets must have gone too."""
     ASSETS = ["common_offline.css", "common_offline_page.js",
@@ -265,6 +288,7 @@ def main():
     check_still_validation()
     check_embed_rewrite()
     check_shared_images_agree()
+    check_folded_lists_agree()
 
     checked = 0
     for wiki in wikis:
