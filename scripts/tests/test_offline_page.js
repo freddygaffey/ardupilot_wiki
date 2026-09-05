@@ -1961,6 +1961,49 @@ async function main() {
           JSON.stringify($(doc, 'dl-single').textContent));
   }
 
+  console.log('\na running export can be cancelled from its own button');
+  {
+    const cachesObj = makeCaches();
+    for (const id of ['common', 'copter']) {
+      (await cachesObj.open('ardupilot-offline-' + id)).put('/__ap_complete__',
+        completeMarker(MANIFEST.generated, id));
+    }
+    const { doc, w } = load({ manifest: MANIFEST, caches: cachesObj });
+    await settle();
+    // An export that runs until told to stop, honouring the abort signal.
+    let rejected = null;
+    w.ArduPilotExport = { exportHtml: (ids, name, cb, sink, signal) =>
+      new Promise((resolve, reject) => {
+        cb(10, 100);
+        const tick = () => {
+          if (signal && signal.aborted) {
+            const e = new Error('cancelled'); e.name = 'AbortError';
+            rejected = e; reject(e); return;
+          }
+          setTimeout(tick, 5);
+        };
+        tick();
+      }) };
+    const click = () => $(doc, 'dl-single')
+      .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    click(); await settle();
+    check('while packing, the button offers to cancel and stays clickable',
+          !$(doc, 'dl-single').disabled &&
+          /click to cancel/i.test($(doc, 'dl-single').textContent || ''),
+          JSON.stringify($(doc, 'dl-single').textContent));
+    check('while packing, the export owns the panel',
+          $(doc, 'download-cache-btn').disabled && $(doc, 'check-btn').disabled &&
+          $(doc, 'clear-btn').disabled);
+    click(); await settle(); await settle();
+    check('a second click cancels the export gracefully',
+          rejected !== null && /cancelled/i.test($(doc, 'dl-single').textContent || ''),
+          JSON.stringify($(doc, 'dl-single').textContent));
+    check('the button is usable again after cancelling',
+          !$(doc, 'dl-single').disabled);
+    check('cancelling hands the panel back',
+          !$(doc, 'check-btn').disabled && !$(doc, 'clear-btn').disabled);
+  }
+
   console.log('\noffline mode switch: off removes everything, after a warning');
   {
     const cachesObj = makeCaches();

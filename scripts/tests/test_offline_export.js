@@ -367,6 +367,22 @@ async function main() {
   console.log('single-file HTML');
   const htmlPath = path.join(OUT, 'test.html');
   const t0 = Date.now();
+  // Cancellation: the abort signal stops the export and aborts the sink.
+  {
+    let aborted = false;
+    const flag = { aborted: false };
+    const sink = { write: () => Promise.resolve(),
+                   close: () => Promise.resolve(),
+                   abort: () => { aborted = true; return Promise.resolve(); } };
+    const outcome = await api.exportHtml(wikis, 'x.html',
+      () => { flag.aborted = true; }, sink, flag)
+      .then(() => 'resolved', (e) => e);
+    check('a cancelled export rejects with AbortError',
+          !!outcome && outcome !== 'resolved' && outcome.name === 'AbortError',
+          String(outcome && (outcome.name || outcome)));
+    check('the cancelled export aborts its sink', aborted);
+  }
+
   const htmlRes = await api.exportHtml(wikis, 'test.html', null, fileSink(htmlPath));
   console.log('  generated in ' + ((Date.now() - t0) / 1000).toFixed(0) + 's');
   // A full export exceeds V8's maximum string length.
