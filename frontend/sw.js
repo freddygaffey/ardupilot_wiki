@@ -34,6 +34,7 @@ const SHELL = [
   '/manifest.json',
   '/android-icon-192x192.png',
   '/icon-512x512.png',
+  '/apple-icon.png',
   '/js/pwa.js',
 ];
 
@@ -315,7 +316,8 @@ async function paramIndex(request, url) {
 
   const held = await heldOffline(request);
   if (!held) {
-    return undefined;
+    // Nothing stored: hand back the server's real answer, 404s included.
+    return fetch(request);
   }
 
   let index;
@@ -629,7 +631,7 @@ self.addEventListener('fetch', (event) => {
   if (url.origin !== self.location.origin) {
     // User alerts must stay current.
     if (THIRD_PARTY_STATIC.test(url.href)) {
-      event.respondWith(safely(cacheFirst(request, THIRD_PARTY_CACHE), request));
+      event.respondWith(safely(cacheFirst(request, THIRD_PARTY_CACHE, event), request));
     } else if (THIRD_PARTY_FRESH.test(url.href)) {
       event.respondWith(safely(freshBehind(request, THIRD_PARTY_CACHE, event), request));
     }
@@ -691,7 +693,7 @@ self.addEventListener('fetch', (event) => {
 
   if (isStatic(url)) {
     // Fingerprinted (?v=5d32c60e), so a stored copy is never the wrong one.
-    event.respondWith(safely(cacheFirst(request, STATIC_CACHE), request));
+    event.respondWith(safely(cacheFirst(request, STATIC_CACHE, event), request));
     return;
   }
 

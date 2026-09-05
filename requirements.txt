@@ -16,7 +16,7 @@ Pillow
 # Install sphinx theme from ArduPilot repository, pinned to the revision
 # carrying the offline_hooks option this wiki sets (sphinx_rtd_theme PR 24).
 # Re-pin to the ArduPilot merge commit when that PR lands.
-git+https://github.com/freddygaffey/sphinx_rtd_theme.git@d42d9726fea7ecf7263f293d51fcde47e3dc09bf
+git+https://github.com/freddygaffey/sphinx_rtd_theme.git@46f063fd46d6e6ef40df52e2fce04d41828cbaef
 
 # Sphinx youtube and video plugins:
 # This package will require a --force option if you have an older extension installed

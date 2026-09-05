@@ -117,10 +117,10 @@ def classify_images(wikis):
 # Any iframe is a dead box offline, so each one becomes a card.
 WRAPPED_IFRAME_RE = re.compile(
     r'<div class="video_wrapper[^"]*"[^>]*>\s*'
-    r'<iframe[^>]*src="([^"]+)"[^>]*>\s*</iframe>\s*</div>',
+    r'<iframe[^>]*src=["\']([^"\']+)["\'][^>]*>\s*</iframe>\s*</div>',
     re.IGNORECASE)
 BARE_IFRAME_RE = re.compile(
-    r'<iframe[^>]*src="([^"]+)"[^>]*>(?:\s*</iframe>)?', re.IGNORECASE)
+    r'<iframe[^>]*src=["\']([^"\']+)["\'][^>]*>(?:\s*</iframe>)?', re.IGNORECASE)
 
 YOUTUBE_SRC_RE = re.compile(
     r'https?://(?:www\.)?(?:youtube(?:-nocookie)?\.com/embed/|youtu\.be/)'
@@ -494,7 +494,7 @@ def refresh_static(wikis) -> int:
 
 
 def promote(staging: Path, live: Path) -> None:
-    """The finished set becomes live in one rename, never file by file."""
+    """The finished set swaps in by rename, never file by file."""
     old = live.with_name(live.name + ".old")
     if old.exists():
         shutil.rmtree(old)
@@ -518,8 +518,6 @@ def build(wikis, destdir: Path) -> Path:
     if out_dir.exists():
         shutil.rmtree(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    if (live_dir / ".thumbs").is_dir():
-        shutil.copytree(live_dir / ".thumbs", out_dir / ".thumbs")
 
     # An archive is only as current as the tree it is read from.
     refresh_static(built)
@@ -529,7 +527,8 @@ def build(wikis, destdir: Path) -> Path:
 
     embeds = collect_embeds(built)
     log(f"fetching stills for {len(embeds)} embedded videos")
-    thumbs = fetch_thumbnails(embeds, out_dir / ".thumbs")
+    # Cached at the repo root, out of the published tree.
+    thumbs = fetch_thumbnails(embeds, Path(".thumbs"))
 
     folded = [w for w in built if w in FOLD_INTO_COMMON]
     log(f"writing common archive ({len(common_names)} shared images, "

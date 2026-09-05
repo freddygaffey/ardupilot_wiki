@@ -176,8 +176,16 @@
   // Where an entry is stored; shared with the differential update. Names come
   // off the network, so nothing may climb out of the archive's own tree.
   function cachePathFor(id, name) {
-    if (name.charAt(0) === '/' || name.indexOf('\\') !== -1 ||
-        name.split('/').indexOf('..') !== -1) {
+    // The URL parser decodes %2e, so the check runs on the decoded form.
+    var probe = name;
+    try {
+      var prev;
+      do { prev = probe; probe = decodeURIComponent(probe); } while (probe !== prev);
+    } catch (err) {
+      throw new Error('unsafe archive path ' + name);
+    }
+    if (probe.charAt(0) === '/' || probe.indexOf('\\') !== -1 ||
+        probe.split('/').indexOf('..') !== -1) {
       throw new Error('unsafe archive path ' + name);
     }
     if (id === 'common' && name.indexOf('_images/') === 0) {
