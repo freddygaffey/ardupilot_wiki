@@ -529,11 +529,37 @@
     return null;
   }
 
+  // The OS can report online with no route to the video host; a probe of
+  // the host itself decides, so a dead iframe never replaces a good card.
+  var reachableUntil = 0;
+  function hostReachable(src) {
+    if (Date.now() < reachableUntil) { return Promise.resolve(true); }
+    return new Promise(function (resolve) {
+      var origin;
+      try { origin = new URL(src).origin; } catch (err) { resolve(false); return; }
+      var timer = setTimeout(function () { resolve(false); }, 2500);
+      fetch(origin + '/favicon.ico', { mode: 'no-cors', cache: 'no-store' })
+        .then(function () {
+          clearTimeout(timer);
+          reachableUntil = Date.now() + 30000;
+          resolve(true);
+        }, function () { clearTimeout(timer); resolve(false); });
+    });
+  }
+
   function upgrade(a) {
     if (a.dataset.apLive) { return; }
     var embed = embedFor(a.getAttribute('href'));
     if (!embed) { return; }
     a.dataset.apLive = '1';
+    if (navigator.onLine === false) { a.dataset.apLive = ''; return; }
+    hostReachable(embed.src).then(function (ok) {
+      if (!ok) { a.dataset.apLive = ''; return; }
+      mountEmbed(a, embed);
+    });
+  }
+
+  function mountEmbed(a, embed) {
 
     var img = a.querySelector('img');
     var still = img ? img.getAttribute('src') : null;
@@ -616,6 +642,30 @@
 
   // A reader who was offline and comes back should get the players too.
   window.addEventListener('online', start);
+
+  // An external link followed offline dies on a browser error page and
+  // takes the reader with it; the click waits with a note instead.
+  document.addEventListener('click', function (event) {
+    var a = event.target && event.target.closest
+      ? event.target.closest('a[data-ap-external]') : null;
+    if (!a || navigator.onLine !== false) { return; }
+    event.preventDefault();
+    var note = document.getElementById('ap-offline-note');
+    if (!note) {
+      note = document.createElement('div');
+      note.id = 'ap-offline-note';
+      note.setAttribute('role', 'status');
+      note.style.cssText = 'position:fixed;left:50%;bottom:24px;' +
+        'transform:translateX(-50%);background:#2f2f2f;color:#fff;' +
+        'padding:10px 16px;border-radius:6px;font-size:.95em;z-index:9999;' +
+        'box-shadow:0 2px 12px rgba(0,0,0,.4)';
+      document.body.appendChild(note);
+    }
+    note.textContent = 'This link needs a connection; it will work once you are back online.';
+    note.hidden = false;
+    clearTimeout(note._apTimer);
+    note._apTimer = setTimeout(function () { note.hidden = true; }, 4000);
+  }, true);
 
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', start);
