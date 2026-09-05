@@ -383,6 +383,42 @@ async function main() {
     check('the cancelled export aborts its sink', aborted);
   }
 
+  // A cancel after the last page must still cancel, not quietly save.
+  {
+    let aborted = false;
+    const flag = { aborted: false };
+    const dec = new TextDecoder();
+    const sink = { write: (c) => {
+                     if (dec.decode(c).indexOf('ap-fts') !== -1) { flag.aborted = true; }
+                     return Promise.resolve();
+                   },
+                   close: () => Promise.resolve(),
+                   abort: () => { aborted = true; return Promise.resolve(); } };
+    const outcome = await api.exportHtml(wikis, 'x.html', null, sink, flag)
+      .then(() => 'resolved', (e) => e);
+    check('a cancel after the last page still cancels',
+          outcome !== 'resolved' && outcome.name === 'AbortError',
+          String(outcome && (outcome.name || outcome)));
+    check('and it aborts the sink', aborted);
+  }
+
+  // A sink that fails is told to discard what it holds.
+  {
+    let aborted = false; let wrote = 0;
+    const sink = { write: () => {
+                     wrote++;
+                     return wrote > 3 ? Promise.reject(new Error('disk full'))
+                                      : Promise.resolve();
+                   },
+                   close: () => Promise.resolve(),
+                   abort: () => { aborted = true; return Promise.resolve(); } };
+    const outcome = await api.exportHtml(wikis, 'x.html', null, sink, null)
+      .then(() => 'resolved', (e) => e);
+    check('a failing sink aborts the download it cannot finish',
+          outcome !== 'resolved' && aborted,
+          String(outcome && outcome.message) + ', abort ' + aborted);
+  }
+
   const htmlRes = await api.exportHtml(wikis, 'test.html', null, fileSink(htmlPath));
   console.log('  generated in ' + ((Date.now() - t0) / 1000).toFixed(0) + 's');
   // A full export exceeds V8's maximum string length.
@@ -395,6 +431,7 @@ async function main() {
       'go.target="_blank"',
       // The picker builds from manifest names; every interpolation escaped.
       '+esc(h.name||h.id)+',
+      '+esc(h.pages)+',
       'href="#\'+esc(h.path)+',
       // A single backslash in a SHELL_JS literal vanishes from the built file.
       '.replace(/\\s+/g," ")',
@@ -431,6 +468,9 @@ async function main() {
   check('the parameter switcher reaches the file as the theme wrote it',
         html.includes('id="selectPicker"'));
   check('path anchors', html.includes('#/' + wikis[0] + '/'));
+  check('the picker escapes every interpolation',
+        html.includes('+esc(h.name||h.id)+') && html.includes('+esc(h.pages)+') &&
+        html.includes('href="#\'+esc(h.path)+'), 'picker esc literals');
   check('no unresolved relative image srcs', scan.counts[4] === 0,
         scan.counts[4] + ' left');
 

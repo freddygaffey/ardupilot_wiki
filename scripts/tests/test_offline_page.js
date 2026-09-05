@@ -2019,6 +2019,60 @@ async function main() {
           $(doc, 'check-btn').disabled);
   }
 
+  console.log('\na finishing check cannot take the panel from a packing export');
+  {
+    const cachesObj = makeCaches();
+    // Current build: the check must stay a check, not become a re-download.
+    await seedSaved(cachesObj, 'dev', MANIFEST.generated, { 'dev/index.html': ['h1', 'x'] });
+    (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'common'));
+    const { doc, w, sandbox } = load({ manifest: MANIFEST, caches: cachesObj });
+    await settle();
+    // The check's own manifest fetch is held until released, so the check is
+    // provably still running when the export starts, and provably finishes.
+    let released = false;
+    const pend = [];
+    const orig = sandbox.fetch;
+    sandbox.fetch = (u, o) => {
+      if (/offline-manifest\.json/.test(String(u))) {
+        if (released) { return orig(u, o); }
+        return new Promise((res) => { pend.push(() => orig(u, o).then(res)); });
+      }
+      return orig(u, o);
+    };
+    sandbox.window.fetch = sandbox.fetch;
+    const releaseTable = () => { released = true; pend.forEach((f) => f()); };
+    const click = (id) => $(doc, id).dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    click('check-btn'); await settle();
+    // The export starts while the check is still on the network.
+    let finishExport = null;
+    w.ArduPilotExport = { exportHtml: () =>
+      new Promise((res) => { finishExport = () => res({ pages: 1 }); }) };
+    click('dl-single'); await settle();
+    check('packing holds the panel while a check is in flight',
+          $(doc, 'check-btn').disabled && $(doc, 'clear-btn').disabled &&
+          $(doc, 'download-cache-btn').disabled);
+    doc.querySelector('.wiki-check[value="copter"]').click(); await settle();
+    check('ticking an unsaved wiki mid-pack does not re-arm Save',
+          $(doc, 'download-cache-btn').disabled);
+    doc.querySelectorAll('.wiki-check').forEach((c) => { if (c.checked) { c.click(); } });
+    await settle();
+    check('unticking everything mid-pack keeps the cancel button alive',
+          !$(doc, 'dl-single').disabled);
+    doc.querySelector('.wiki-check[value="dev"]').click(); await settle();
+    releaseTable();
+    for (let i = 0; i < 8; i++) { await settle(); }
+    check('the check provably finished while the export packed',
+          !!($(doc, 'check-result').textContent || '').trim(),
+          JSON.stringify($(doc, 'check-result').textContent));
+    check('the finishing check leaves the panel with the export that owns it',
+          $(doc, 'check-btn').disabled && $(doc, 'clear-btn').disabled,
+          'check ' + $(doc, 'check-btn').disabled + ' clear ' + $(doc, 'clear-btn').disabled);
+    finishExport(); await settle(); await settle();
+    check('completion hands the panel back',
+          !$(doc, 'check-btn').disabled && !$(doc, 'dl-single').disabled);
+  }
+
   console.log('\na running export can be cancelled from its own button');
   {
     const cachesObj = makeCaches();
