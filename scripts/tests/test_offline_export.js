@@ -393,6 +393,9 @@ async function main() {
       '#ap-toast.on{display:flex}',
       'if(mapped===null){e.preventDefault();toast(a.href);return;}',
       'go.target="_blank"',
+      // The picker builds from manifest names; every interpolation escaped.
+      '+esc(h.name||h.id)+',
+      'href="#\'+esc(h.path)+',
       // A single backslash in a SHELL_JS literal vanishes from the built file.
       '.replace(/\\s+/g," ")',
       'id="selectPicker"',
@@ -725,6 +728,35 @@ async function main() {
         sel.dispatchEvent(new win.Event('change'));
         check('choosing a version opens it',
               win.location.hash === '#' + versions[0].p, win.location.hash);
+      }
+
+      // The mirror rewrites cross-wiki links root-relative; a click on one
+      // must keep its own path, never gain the current wiki as a prefix.
+      {
+        const dest = D.pages[0];
+        const from = D.pages.find((p) => p.p !== dest.p);
+        const bodies2 = {};
+        bodies2[from.p] = '<a id="xw" href="/copter9/index.html">Copter</a>' +
+                          '<a id="sw" href="' + dest.p + '.html">Same site</a>';
+        const w2 = bootShell(D, bodies2);
+        if (w2) {
+          shellGo(w2, from.p);
+          w2.document.getElementById('xw').dispatchEvent(
+            new w2.MouseEvent('click', { bubbles: true, cancelable: true }));
+          const miss = w2.document.getElementById('ap-doc').textContent || '';
+          check('a root-relative link to an absent wiki keeps its own path',
+                miss.indexOf('/copter9/index is not included') !== -1 &&
+                miss.indexOf('docs/copter9') === -1,
+                JSON.stringify(miss.slice(0, 120)));
+          shellGo(w2, from.p);
+          w2.document.getElementById('sw').dispatchEvent(
+            new w2.MouseEvent('click', { bubbles: true, cancelable: true }));
+          check('a root-relative link to a held page opens it',
+                w2.location.hash === '#' + dest.p,
+                w2.location.hash + ' wanted #' + dest.p);
+        } else {
+          check('root-relative link shell booted', false);
+        }
       }
 
       const bare = bootShell(Object.assign({}, D, { params: {} }), paramBodies);
