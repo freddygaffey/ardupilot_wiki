@@ -185,11 +185,11 @@
     'var held=D.homes.map(function(h){return h.name||h.id;}).join(", ");',
     'var live="https://ardupilot.org"+(raw==="/"?"":raw+".html");',
     'doc.innerHTML="<h1>Not in this offline copy</h1>"',
-    '+"<p><code>"+raw+"</code> is not included in this download.</p>"',
+    '+"<p><code>"+esc(raw)+"</code> is not included in this download.</p>"',
     '+"<p>This file contains: "+held+".</p>"',
     '+"<p class=\\"ap-actions\\">"',
     // data-ap-external keeps the click handler off it, or it loops back here.
-    '+"<a href=\\""+live+"\\" data-ap-external=\\"1\\">Open it on ardupilot.org</a>"',
+    '+"<a href=\\""+esc(live)+"\\" data-ap-external=\\"1\\">Open it on ardupilot.org</a>"',
     '+"<a href=\\"#\\" id=\\"ap-back\\">Go back</a>"',
     '+(D.homes.length>1?"<a href=\\"#/\\">Choose a wiki</a>":"")+"</p>"',
     '+"<p><small>Opening the live wiki needs a connection. '

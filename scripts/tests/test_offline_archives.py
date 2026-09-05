@@ -70,6 +70,16 @@ def check_image_classification():
           "own.png" in per_wiki[alpha] and "own.png" not in per_wiki[beta])
 
 
+def check_still_validation():
+    """Only real image bytes may enter the thumbnail cache."""
+    sys.path.insert(0, str(REPO / "scripts"))
+    from build_offline_artifacts import looks_like_still
+    check("a JPEG passes", looks_like_still(b"\xff\xd8\xff\xe0rest"))
+    check("a PNG passes", looks_like_still(b"\x89PNG\r\n\x1a\nrest"))
+    check("an HTML consent page does not", not looks_like_still(b"<!DOCTYPE html><html>"))
+    check("an empty answer does not", not looks_like_still(b""))
+
+
 def check_embed_rewrite():
     """No iframe survives into a page bound for an archive."""
     sys.path.insert(0, str(REPO / "scripts"))
@@ -252,6 +262,7 @@ def main():
           not (OFFLINE.with_name("offline.new")).exists() and
           not (OFFLINE.with_name("offline.old")).exists())
     check_image_classification()
+    check_still_validation()
     check_embed_rewrite()
     check_shared_images_agree()
 

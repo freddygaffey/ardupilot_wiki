@@ -24,8 +24,16 @@
       });
       return Promise.all(wanted.map(function (name) {
         return caches.open(name).then(function (cache) {
-          return cache.keys().then(function (reqs) {
-            return { cache: cache, reqs: reqs };
+          // An aborted download must not export as if it were whole.
+          return cache.match('/__ap_complete__').then(function (marker) {
+            if (!marker) {
+              var id = name.slice(OFFLINE_CACHE_PREFIX.length);
+              throw new Error((id === 'common' ? 'The shared images are' : id + ' is') +
+                              ' incomplete in this browser. Save again, then export.');
+            }
+            return cache.keys().then(function (reqs) {
+              return { cache: cache, reqs: reqs };
+            });
           });
         });
       }));

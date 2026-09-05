@@ -832,9 +832,13 @@
   }
 
   /** Download what is selected and not held; `refreshIds` re-fetches stored wikis. */
-  function saveSelectedReal(refreshIds) {
-    // The same button becomes Cancel.
-    if (activeDownload) { return cancelDownload(); }
+  function saveSelectedReal(refreshIds, fromButton) {
+    // The same button becomes Cancel; nothing else may cancel a download.
+    if (activeDownload) {
+      if (fromButton) { return cancelDownload(); }
+      return Promise.reject(new Error('A download is already running; ' +
+                                      'try again when it finishes.'));
+    }
 
     var refresh = refreshIds || [];
     var chosen = selected().map(function (c) { return c.value; });
@@ -862,8 +866,9 @@
 
     progress.hidden = false;
     activeDownload = new AbortController();
-    var clearBtn = el('clear-btn');
-    if (clearBtn) { clearBtn.disabled = true; }
+    // The download owns the panel: nothing else may write these caches.
+    var heldButtons = ['clear-btn', 'check-btn', 'dl-single'].map(el);
+    heldButtons.forEach(function (b) { if (b) { b.disabled = true; } });
     button.classList.add('busy');
     setLabel('Cancel');
 
@@ -986,6 +991,7 @@
         activeDownload = null;
         button.classList.remove('busy');
         setLabel('Save selected');
+        heldButtons.forEach(function (b) { if (b) { b.disabled = false; } });
         // Only unfinished bars are cleared.
         queue.forEach(function (w) {
           if (!storedIds[w.id]) { rowProgress(w.id, null); }
@@ -1000,6 +1006,13 @@
   function checkForUpdates(quiet) {
     var out = el('check-result');
     if (checkBusy) { return Promise.resolve(); }
+    if (activeDownload) {
+      if (out) {
+        out.hidden = false;
+        out.textContent = 'A download is running; check again when it finishes.';
+      }
+      return Promise.resolve();
+    }
     checkBusy = true;
     var checkBtn = el('check-btn');
     if (checkBtn) { checkBtn.disabled = true; }
@@ -1415,7 +1428,7 @@
     if (hit.id === 'download-cache-btn') {
       // Saving opts in to offline mode (pwa.js).
       if (window.ApOffline) { window.ApOffline.enable(); renderOfflineMode(); }
-      saveSelectedReal();
+      saveSelectedReal(undefined, true);
     }
     if (hit.id === 'check-btn') { checkForUpdates(); }
     if (hit.id === 'dl-single') { e.preventDefault(); exportHtmlFile(); }
