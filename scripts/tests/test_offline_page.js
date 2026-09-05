@@ -1927,6 +1927,38 @@ async function main() {
           /already running/i.test($(doc, 'dl-single').textContent || '') &&
           /Cancel/.test($(doc, 'download-cache-btn').textContent),
           JSON.stringify($(doc, 'dl-single').textContent));
+    check('the refused export leaves the button disabled, not re-armed',
+          $(doc, 'dl-single').disabled);
+    // Changing the selection mid-download must not hand the buttons back.
+    doc.querySelector('.wiki-check[value="rover"]').click(); await settle();
+    check('reselecting mid-download does not re-enable export',
+          $(doc, 'dl-single').disabled && $(doc, 'check-btn').disabled);
+  }
+
+  console.log('\nexport repairs a broken shared-images cache first');
+  {
+    const cachesObj = makeCaches();
+    (await cachesObj.open('ardupilot-offline-copter')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'copter'));
+    // Entries but no marker: a cancelled common download left behind.
+    (await cachesObj.open('ardupilot-offline-common')).put('/_common/_images/x.png',
+      new FakeResponse('png'));
+    const { doc, w, fetchCalls } = load({ manifest: MANIFEST, caches: cachesObj,
+      archives: { '_images/shared.png': 'png bytes' } });
+    await settle();
+    w.ArduPilotExport = { exportHtml: () => Promise.resolve({ pages: 3 }) };
+    // The saved wiki renders pre-ticked; the export needs no clicks but its own.
+    $(doc, 'dl-single').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    for (let i = 0; i < 15; i++) { await settle(); }
+    check('the export first re-downloads the shared images',
+          fetchCalls.some((u) => u.indexOf('common-offline.tar') !== -1),
+          JSON.stringify(fetchCalls.filter((u) => u.indexOf('.tar') !== -1)));
+    const common = await cachesObj.open('ardupilot-offline-common');
+    check('the repaired common cache is marked complete',
+          !!(await common.match('/__ap_complete__')));
+    check('and the export then completes',
+          /Saved .*copter/.test($(doc, 'dl-single').textContent || ''),
+          JSON.stringify($(doc, 'dl-single').textContent));
   }
 
   console.log('\noffline mode switch: off removes everything, after a warning');

@@ -362,7 +362,9 @@
     return Promise.all(wikis.map(function (w) {
       return caches.open(OFFLINE_CACHE_PREFIX + w.id).then(function (cache) {
         return Promise.all(paramsOf(w).map(function (v) {
-          return cache.match(paramCacheKey(w, v)).then(function (hit) {
+          var key;
+          try { key = paramCacheKey(w, v); } catch (err) { return null; }
+          return cache.match(key).then(function (hit) {
             return hit ? v.file : null;
           });
         }));
@@ -467,8 +469,9 @@
                       .sort(compareVersions);
   }
 
+  // Through the guard like every other cache write, so one rule names keys.
   function paramCacheKey(w, v) {
-    return '/' + w.id + '/' + v.file;
+    return ApUnpack.cachePathFor(w.id, w.id + '/' + v.file);
   }
 
   // The disclosure row under a wiki.
@@ -1163,7 +1166,7 @@
       })
       .then(function () {
         checkBusy = false;
-        if (checkBtn) { checkBtn.disabled = false; }
+        if (checkBtn && !activeDownload) { checkBtn.disabled = false; }
         return renderStorage();
       });
   }
@@ -1184,6 +1187,8 @@
   }
 
   function updateExportState() {
+    // While a download owns the panel, only its cleanup may re-enable.
+    if (activeDownload) { return; }
     var chosen = selected().length;
     var b = el('dl-single');
     if (!b) { return; }
@@ -1224,16 +1229,21 @@
 
     var done = function (text, keep) {
       link.textContent = text;
-      link.disabled = false;
+      // A running download owns the button; its cleanup re-enables it.
+      if (!activeDownload) { link.disabled = false; }
       if (!keep) { setTimeout(function () { link.textContent = original; }, 8000); }
     };
 
     var sel = exportSelection();
-    link.textContent = sel.missing.length
-      ? 'Saving ' + sel.missing.join(', ') + '…'
+    // The shared images are required and carry no checkbox, so a broken
+    // common cache is repaired here or the export could never succeed.
+    var toSave = sel.missing.slice();
+    if (!storedIds.common) { toSave.push('shared images'); }
+    link.textContent = toSave.length
+      ? 'Saving ' + toSave.join(', ') + '…'
       : 'Preparing…';
 
-    var first = sel.missing.length ? saveSelectedReal() : Promise.resolve();
+    var first = toSave.length ? saveSelectedReal() : Promise.resolve();
 
     return first.then(function () {
       var ready = exportSelection();
