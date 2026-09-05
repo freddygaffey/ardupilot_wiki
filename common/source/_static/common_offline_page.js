@@ -130,7 +130,7 @@
       var offline = names.filter(function (n) { return n.indexOf(OFFLINE_CACHE_PREFIX) === 0; });
       return Promise.all(offline.map(function (name) {
         return caches.open(name).then(function (cache) {
-          var id = name.slice(OFFLINE_CACHE_PREFIX.length).split('-')[0];
+          var id = name.slice(OFFLINE_CACHE_PREFIX.length);
           // Without the completion marker it is an aborted download.
           return cache.match(COMPLETE_MARKER).then(function (marker) {
             if (marker) { stored[id] = true; } else { partial[id] = true; }
@@ -862,6 +862,13 @@
       return Promise.reject(new Error('An export is being written; ' +
                                       'try again when it finishes.'));
     }
+    // A running check owns the caches too; its own refresh call carries
+    // refreshIds, and an export's pre-save runs under exportBusy, which the
+    // check defers to. A reader's plain Save is what waits.
+    if ((checkBusy || updateWriting) && !refreshIds && !exportBusy) {
+      return Promise.reject(new Error('An update check is running; ' +
+                                      'try again when it finishes.'));
+    }
 
     var refresh = refreshIds || [];
     var chosen = selected().map(function (c) { return c.value; });
@@ -953,7 +960,8 @@
                   var damaged = [];
                   Object.keys(table).forEach(function (n) {
                     if (!have[n]) { missing.push(n); }
-                    else if (have[n] !== true && have[n] !== table[n]) { damaged.push(n); }
+                    else if (!table[n] ||
+                             (have[n] !== true && have[n] !== table[n])) { damaged.push(n); }
                   });
                   // An entry the table does not name has no hash standing
                   // behind it, so it is refused rather than kept.
@@ -1025,8 +1033,11 @@
         button.classList.remove('busy');
         setLabel('Save selected');
         heldButtons.forEach(function (b) {
-          // During an export's span only its own button comes back.
-          if (b && (b.id === 'dl-single' || !exportBusy)) { b.disabled = false; }
+          if (!b) { return; }
+          // During an export's span only its own button comes back, and a
+          // still-running check keeps its own button until its tail.
+          if (b.id === 'check-btn' && checkBusy) { return; }
+          if (b.id === 'dl-single' || !exportBusy) { b.disabled = false; }
         });
         resumeDeferredUpdate();
         // Only unfinished bars are cleared.
@@ -1080,7 +1091,13 @@
           });
           return Promise.all(offline.map(function (name) {
             // The cache name gives the id even when the marker is unreadable.
-            var id = name.slice(OFFLINE_CACHE_PREFIX.length).split('-')[0];
+            var id = name.slice(OFFLINE_CACHE_PREFIX.length);
+            // A folded wiki's own cache is a leftover: common carries its
+            // pages now, so it is retired rather than endlessly "updated".
+            if (FOLDED_INTO_COMMON.indexOf(id) !== -1) {
+              if (storedIds.common) { dropFoldedCaches(COMMON); }
+              return null;
+            }
             return caches.open(name).then(function (c) {
               return c.match(COMPLETE_MARKER).then(function (m) {
                 if (!m) { return null; }
@@ -1566,7 +1583,13 @@
     if (hit.id === 'download-cache-btn') {
       // Saving opts in to offline mode (pwa.js).
       if (window.ApOffline) { window.ApOffline.enable(); renderOfflineMode(); }
-      saveSelectedReal(undefined, true);
+      saveSelectedReal(undefined, true).catch(function (err) {
+        var out = el('cache-progress');
+        if (out) {
+          out.hidden = false;
+          out.textContent = (err && err.message) || 'Could not start the download.';
+        }
+      });
     }
     if (hit.id === 'check-btn') { checkForUpdates(); }
     if (hit.id === 'dl-single') {
@@ -1576,7 +1599,25 @@
   });
 
   // Off removes everything held, so say how much first, unless it is nothing.
+  function busyWithWhat() {
+    if (activeDownload) { return 'a download'; }
+    if (exportBusy || activeExport) { return 'an export'; }
+    if (checkBusy || updateWriting) { return 'an update check'; }
+    return null;
+  }
+
   function offerTurnOff() {
+    var busy = busyWithWhat();
+    if (busy) {
+      renderOfflineMode();
+      var out = el('check-result');
+      if (out) {
+        out.hidden = false;
+        out.textContent = 'Still running: ' + busy +
+          '. Wait for it or cancel it, then turn off.';
+      }
+      return Promise.resolve();
+    }
     var note = el('offline-off-warning');
     return storage().then(function (s) {
       // estimate() can lag what the manifest says is held; never claim 0 MB.
@@ -1596,6 +1637,7 @@
 
   // pwa.js does the removing; this redraws what is left, which is nothing.
   function turnOff() {
+    if (busyWithWhat()) { hideTurnOff(); renderOfflineMode(); return Promise.resolve(); }
     hideTurnOff();
     return Promise.resolve(global.ApOffline.disable()).then(function () {
       notifyWorkerCachesChanged();

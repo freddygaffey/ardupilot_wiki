@@ -2008,6 +2008,117 @@ async function main() {
           !(await dev.match('/evil.html')) && !(await dev.match('/dev/../evil.html')));
   }
 
+  console.log('\nthree ways the panel used to lie');
+  {
+    // A legacy folded cache: healed by the check, never "updated" forever.
+    const cachesObj = makeCaches();
+    (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'common'));
+    (await cachesObj.open('ardupilot-offline-ardupilot')).put('/__ap_complete__',
+      completeMarker(OLD_BUILD, 'ardupilot'));
+    const { doc, w } = load({ manifest: MANIFEST, caches: cachesObj });
+    await settle();
+    $(doc, 'check-btn').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    for (let i = 0; i < 8; i++) { await settle(); }
+    check('a legacy folded cache is retired by the check, not updated forever',
+          !cachesObj._all.has('ardupilot-offline-ardupilot') &&
+          !/Downloading again: .*ardupilot/i.test($(doc, 'check-result').textContent || ''),
+          [...cachesObj._all.keys()].join(','));
+  }
+  {
+    // A table hash the build tool left empty vouches for nothing.
+    const cachesObj = makeCaches();
+    const { doc } = load({ manifest: MANIFEST, caches: cachesObj,
+      archives: { 'copter/index.html': '<html>a</html>' },
+      tables: { 'copter-files.json': { 'copter/index.html': '' } } });
+    await settle();
+    doc.querySelector('.wiki-check[value="copter"]').click(); await settle();
+    $(doc, 'download-cache-btn').click();
+    for (let i = 0; i < 12; i++) { await settle(); }
+    check('a falsy table hash is damage, not a free pass',
+          !(await (await cachesObj.open('ardupilot-offline-copter')).match('/__ap_complete__')) &&
+          /damaged/.test($(doc, 'cache-progress').textContent || ''),
+          JSON.stringify($(doc, 'cache-progress').textContent));
+  }
+  {
+    // The differential path: a hashless table row must not smuggle bytes in.
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'dev', OLD_BUILD, { 'dev/index.html': ['h1', 'old body'] });
+    const { doc, w } = load({ manifest: MANIFEST, caches: cachesObj,
+      tables: { 'dev-files.json': { 'dev/index.html': '' } },
+      served: { '/dev/index.html': '<html>unvouched</html>' } });
+    await settle();
+    $(doc, 'check-btn').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    for (let i = 0; i < 10; i++) { await settle(); }
+    const held = await (await cachesObj.open('ardupilot-offline-dev'))
+      .match('/dev/index.html');
+    const body = held ? await held.text() : 'gone';
+    check('the differential refuses a body no hash vouches for',
+          body.indexOf('unvouched') === -1, JSON.stringify(body.slice(0, 40)));
+  }
+  {
+    // Turning off mid-check must refuse, not orphan what the check writes.
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'dev', MANIFEST.generated, { 'dev/index.html': ['h1', 'x'] });
+    const { doc, w, sandbox } = load({ manifest: MANIFEST, caches: cachesObj, offline: true });
+    await settle();
+    let released = false; const pend = [];
+    const orig = sandbox.fetch;
+    sandbox.fetch = (u, o) => {
+      if (!released && /offline-manifest\.json/.test(String(u))) {
+        return new Promise((res) => { pend.push(() => orig(u, o).then(res)); });
+      }
+      return orig(u, o);
+    };
+    sandbox.window.fetch = sandbox.fetch;
+    $(doc, 'check-btn').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    await settle();
+    const box = doc.getElementById('offline-mode');
+    box.checked = false;
+    box.dispatchEvent(new w.Event('change', { bubbles: true }));
+    await settle();
+    check('turning off mid-check refuses and keeps everything',
+          cachesObj._all.has('ardupilot-offline-dev') &&
+          /still running/i.test($(doc, 'check-result').textContent || ''),
+          JSON.stringify($(doc, 'check-result').textContent));
+    released = true; pend.forEach((f) => f());
+    for (let i = 0; i < 6; i++) { await settle(); }
+  }
+
+  console.log('\na Save clicked mid-check is refused politely');
+  {
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'dev', MANIFEST.generated, { 'dev/index.html': ['h1', 'x'] });
+    const { doc, w, sandbox, fetchCalls } = load({ manifest: MANIFEST, caches: cachesObj,
+      archives: { 'copter/index.html': '<html>c</html>' } });
+    await settle();
+    // The check's manifest fetch is held open, keeping it on the network.
+    let released = false; const pend = [];
+    const orig = sandbox.fetch;
+    sandbox.fetch = (u, o) => {
+      if (!released && /offline-manifest\.json/.test(String(u))) {
+        return new Promise((res) => { pend.push(() => orig(u, o).then(res)); });
+      }
+      return orig(u, o);
+    };
+    sandbox.window.fetch = sandbox.fetch;
+    $(doc, 'check-btn').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    await settle();
+    doc.querySelector('.wiki-check[value="copter"]').click(); await settle();
+    const tars = () => fetchCalls.filter((u) => u.indexOf('.tar') !== -1).length;
+    $(doc, 'download-cache-btn').click(); await settle();
+    check('a Save mid-check starts nothing and says why',
+          tars() === 0 &&
+          /update check is running/i.test($(doc, 'cache-progress').textContent || ''),
+          tars() + ' tars, ' + JSON.stringify($(doc, 'cache-progress').textContent));
+    released = true; pend.forEach((f) => f());
+    for (let i = 0; i < 8; i++) { await settle(); }
+    $(doc, 'download-cache-btn').click();
+    for (let i = 0; i < 10; i++) { await settle(); }
+    check('the same click works once the check has finished', tars() > 0,
+          tars() + ' tar fetches');
+  }
+
   console.log('\na finishing check leaves the buttons with the download that owns them');
   {
     const cachesObj = makeCaches();

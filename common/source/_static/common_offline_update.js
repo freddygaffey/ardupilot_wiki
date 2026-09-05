@@ -108,11 +108,10 @@
         }
         if (!r.ok) { return attempt(i + 1); }
         return r.arrayBuffer().then(function (body) {
-          // A body that does not hash to the table's value is refused.
+          // A body that does not hash to the table's value is refused, and
+          // a table row with no hash cannot vouch for any body at all.
           if (!expected) {
-            return cache.put(new Request(key), new Response(body, {
-              headers: { 'Content-Type': cfg.mimeFor(name) }
-            }));
+            return attempt(i + 1);
           }
           return hashBytes(body).then(function (got) {
             if (got !== expected) { return attempt(i + 1); }
