@@ -71,8 +71,12 @@ class FakeResponse {
     return Promise.resolve(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength));
   }
 }
-// Keys normalise to bare paths both ways, as real Cache Storage matching does.
-const cacheKey = (k) => String(k && k.url ? k.url : k).replace(/^https?:\/\/[^/]+/, '');
+// Keys normalise through the real URL parser, as Cache Storage matching does:
+// encoded dots collapse, tabs vanish, fragments drop, the origin is stripped.
+const cacheKey = (k) => {
+  const u = new URL(String(k && k.url ? k.url : k), 'https://x');
+  return u.pathname + u.search;
+};
 class FakeCache {
   constructor() { this.map = new Map(); }
   put(k, v) { this.map.set(cacheKey(k), v); return Promise.resolve(); }
@@ -194,7 +198,10 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
     setTimeout: w.setTimeout.bind(w), clearTimeout: w.clearTimeout.bind(w),
     console,
     Response: FakeResponse,
-    Request: class { constructor(u) { this.url = u; } },
+    URL,
+    // The url is the parsed form, as in a real browser, so traversal tests
+    // exercise the same normalisation the live cache applies.
+    Request: class { constructor(u) { this.url = new URL(String(u), 'https://x').href; } },
     AbortController: w.AbortController,
     TransformStream, ReadableStream, Uint8Array,
     fetch: (u, o) => {
@@ -251,8 +258,14 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
         }
       }
       if (archives) {
-        // A real archive, so the unpack runs and the marker gets written.
-        return Promise.resolve({ ok: true, body: streamOf(tarBytes(archives)) });
+        // A real archive holding the fixture entries that belong to the wiki
+        // asked for, so the unpack runs and the marker gets written.
+        const m = String(u).split('?')[0].match(/([a-z0-9]+)-offline\.tar/);
+        const id = m ? m[1] : '';
+        const own = Object.fromEntries(Object.entries(archives).filter(([n]) =>
+          id === 'common' ? (n.startsWith('_images/') || n.startsWith('ardupilot/'))
+                          : n.startsWith(id + '/')));
+        return Promise.resolve({ ok: true, body: streamOf(tarBytes(own)) });
       }
       return Promise.reject(new Error('archive fetch blocked by harness'));
     }
@@ -1645,6 +1658,38 @@ async function main() {
     const qs = await attempt(tarBytes({ 'rover/x.html?%': 'evil' }));
     check('a query in an entry name rejects the archive',
           !qs.ok && /unsafe archive path/.test(qs.error), JSON.stringify(qs));
+    const zz = await attempt(tarBytes({ '%zz/%2e%2e/%2e%2e/sw.js': 'evil' }));
+    check('a malformed escape cannot smuggle a climb through an unpack',
+          !zz.ok && /unsafe archive path/.test(zz.error), JSON.stringify(zz));
+
+    // The URL parser, not the guard, decides what a name means; every route
+    // to a path outside the archive's own tree must come back refused.
+    const verdict = (id, name) => {
+      try { ApUnpack.cachePathFor(id, name); return 'accepted'; }
+      catch (e) { return /unsafe archive path/.test(e.message) ? 'refused' : e.message; }
+    };
+    check('a malformed escape cannot hide an encoded climb',
+          verdict('rover', 'rover/%/%2e%2e/%2e%2e/copter/index.html') === 'refused');
+    check('invalid UTF-8 in an escape cannot either',
+          verdict('rover', 'rover/%FF/%2e%2e/%2e%2e/copter/index.html') === 'refused');
+    check('a tab inside a dot-dot pair is stripped by the parser, not missed',
+          verdict('rover', 'rover/.\t./copter/index.html') === 'refused');
+    check('so are a newline and a carriage return',
+          verdict('rover', 'rover/.\n./copter/index.html') === 'refused' &&
+          verdict('rover', 'rover/.\r./copter/index.html') === 'refused');
+    check('an entry for another wiki is refused with no trickery at all',
+          verdict('rover', 'copter/index.html') === 'refused');
+    check('a protocol-relative name cannot change origin',
+          verdict('rover', '/rover/rover/index.html') === 'refused');
+    check('backslashes resolve like slashes and are judged after that',
+          verdict('rover', 'rover\\..\\..\\sw.js') === 'refused');
+    check('an ordinary page inside its own wiki still saves',
+          verdict('rover', 'rover/docs/a.html') === 'accepted');
+    check('the common archive holds images and folded wikis, nothing else',
+          verdict('common', '_images/x.png') === 'accepted' &&
+          verdict('common', 'ardupilot/docs/about.html') === 'accepted' &&
+          verdict('common', 'sw.js') === 'refused' &&
+          verdict('common', '_common/sw.js') === 'refused');
   }
 
   console.log('\nevery parameter version in one tick, or none');
@@ -1729,6 +1774,23 @@ async function main() {
           !(await badCache.match('/__ap_complete__')) &&
           /damaged/.test($(bad.doc, 'cache-progress').textContent || ''),
           JSON.stringify($(bad.doc, 'cache-progress').textContent));
+
+    // The archive carries a file the table does not name: refused, not kept.
+    const strayCaches = makeCaches();
+    const stray = load({ manifest: MANIFEST, caches: strayCaches,
+      archives: { 'copter/index.html': '<html>a</html>',
+                  'copter/stray.html': '<html>s</html>' },
+      tables: { 'copter-files.json': { 'copter/index.html': await fileHash('<html>a</html>') } } });
+    await settle();
+    stray.doc.querySelector('.wiki-check[value="copter"]').click();
+    await settle();
+    $(stray.doc, 'download-cache-btn').click();
+    for (let i = 0; i < 12; i++) { await settle(); }
+    const strayCache = await strayCaches.open('ardupilot-offline-copter');
+    check('an entry the table does not name is refused, not marked saved',
+          !(await strayCache.match('/__ap_complete__')) &&
+          /does not list/.test($(stray.doc, 'cache-progress').textContent || ''),
+          JSON.stringify($(stray.doc, 'cache-progress').textContent));
 
     // The same save with a table the archive satisfies completes.
     const okCaches = makeCaches();
