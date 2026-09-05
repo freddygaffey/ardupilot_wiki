@@ -22,7 +22,6 @@ old_params_mversion/
 # static html pages
 !/frontend/*.html
 !/frontend/includes/*.html
-!/frontend/offline/*.html
 
 
 # Generated offline artefacts (archives + manifest), rebuilt by update.py

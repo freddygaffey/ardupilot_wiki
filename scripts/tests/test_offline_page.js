@@ -74,7 +74,9 @@ class FakeResponse {
 // Keys normalise through the real URL parser, as Cache Storage matching does:
 // encoded dots collapse, tabs vanish, fragments drop, the origin is stripped.
 const cacheKey = (k) => {
-  const u = new URL(String(k && k.url ? k.url : k), 'https://x');
+  // The base is a page deep in the site, as in a real browser, so a relative
+  // key resolves away from the root and a path bug cannot hide behind '/'.
+  const u = new URL(String(k && k.url ? k.url : k), 'https://x/ardupilot/docs/p.html');
   return u.pathname + u.search;
 };
 class FakeCache {
@@ -1661,6 +1663,25 @@ async function main() {
     const zz = await attempt(tarBytes({ '%zz/%2e%2e/%2e%2e/sw.js': 'evil' }));
     check('a malformed escape cannot smuggle a climb through an unpack',
           !zz.ok && /unsafe archive path/.test(zz.error), JSON.stringify(zz));
+    // A name the parser shortens or encodes must be STORED at the very key
+    // the guard approved, never rebuilt from the raw name's length.
+    const shifty = await attempt(tarBytes({ 'rover/a\tb2.html': 'tabbed',
+                                            'rover/a b.html': 'spaced' }));
+    check('a normalised name is stored at the key the guard approved',
+          shifty.ok && shifty.keys === 2, JSON.stringify(shifty));
+    if (shifty.ok) {
+      const c2 = await sandbox.caches.open('shifty-check');
+      sandbox.fetch = () => Promise.resolve({ ok: true, body: streamOf(
+        tarBytes({ 'rover/a\tb2.html': 'tabbed', 'rover/a b.html': 'spaced' })) });
+      await sandbox.ApUnpack.fetchArchive(
+        { id: 'rover', name: 'Rover', archive: 'rover-offline.tar' },
+        c2, () => {}, { base: '/offline' });
+      check('the tab-stripped page sits under its own wiki, not the reader\'s page',
+            !!(await c2.match('/rover/ab2.html')) &&
+            !(await c2.match('/ardupilot/docs/rover/ab2.html')));
+      check('the spaced name sits at its encoded key',
+            !!(await c2.match('/rover/a%20b.html')));
+    }
 
     // The URL parser, not the guard, decides what a name means; every route
     // to a path outside the archive's own tree must come back refused.

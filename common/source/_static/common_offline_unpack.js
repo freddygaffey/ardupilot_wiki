@@ -31,8 +31,10 @@
     return out;
   }
 
-  // Minimal tar reader: 512-byte headers, data padded to 512.
-  function untarToCache(stream, cache, prefix, onEntry) {
+  // Minimal tar reader: 512-byte headers, data padded to 512. `pathFor` maps
+  // an entry name to the exact cache key; storing anything else would let a
+  // name the guard approved land somewhere it did not.
+  function untarToCache(stream, cache, pathFor, onEntry) {
     var reader = stream.getReader();
     var buf = new Uint8Array(0);
     var done = false;
@@ -108,8 +110,7 @@
 
           var entryName = override || name;
           override = null;
-          var path = (typeof prefix === 'function' ? prefix(entryName) : prefix) +
-                     entryName;
+          var path = pathFor(entryName);
           return storeEntry(cache, path, entryName, body).then(function () {
             if (onEntry) {
               // Awaited, so a hashing onEntry finishes before the next read.
@@ -235,8 +236,7 @@
       // check them off against the published table by name and by content.
       var names = [];
       return untarToCache(stream, cache, function (entryName) {
-        var full = cachePathFor(entry.id, entryName);
-        return full.slice(0, full.length - entryName.length);
+        return cachePathFor(entry.id, entryName);
       }, function (_path, entryName, body) {
         if (!opts.hash) { names.push({ name: entryName }); return undefined; }
         return opts.hash(body).then(function (digest) {

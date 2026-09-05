@@ -836,7 +836,9 @@
       JSON.stringify(byWiki).split('</').join('<\\/') +
       '<\/script>' +
       (stemmerSrc
-        ? '<script>' + stemmerSrc.split('<\/script>').join('<\\/script>') +
+        ? '<script>' +
+          // The HTML parser ends a script on "</script" in any case.
+          stemmerSrc.replace(/<\/script/gi, '<\\/script') +
           '<\/script>'
         : '');
   }
