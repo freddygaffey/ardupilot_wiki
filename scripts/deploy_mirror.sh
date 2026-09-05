@@ -80,6 +80,7 @@ if [ -n "$FRONTEND_ONLY" ]; then
     echo ok
     echo
     echo "verifying, on the server:"
+    # shellcheck disable=SC2029  # $WEBROOT expands here, into the remote command
     ssh "$TARGET" "
         echo -n '  worker at root:  '; [ -f $WEBROOT/sw.js ] && echo yes || echo 'NO - scope will not cover the wikis'
         echo -n '  worker version:  '; grep -o \"CACHE_VERSION = '[^']*'\" $WEBROOT/sw.js || echo unknown
@@ -129,11 +130,13 @@ rsync -az frontend/ "$TARGET:$WEBROOT/"
 # The mirror is a review demo: keep every crawler out, or bots pull the
 # 700 MB archive set on repeat and drain the droplet's bandwidth. Written
 # after the frontend rsync, which ships the site's allow-all robots.txt.
+# shellcheck disable=SC2029  # $WEBROOT expands here, into the remote command
 printf 'User-agent: *\nDisallow: /\n' | ssh "$TARGET" "cat > '$WEBROOT/robots.txt'"
 echo ok
 
 echo
 echo "verifying, on the server:"
+# shellcheck disable=SC2029  # $WEBROOT expands here, into the remote command
 ssh "$TARGET" "
     echo -n '  wikis present:   '; ls $WEBROOT | grep -cE '^(copter|plane|rover|sub|blimp|dev|antennatracker|planner|planner2|ardupilot|mavproxy)\$'
     echo -n '  archives:        '; ls $WEBROOT/offline/*.tar.gz 2>/dev/null | wc -l
