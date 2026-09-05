@@ -81,7 +81,10 @@ function loadWiki(wiki, limit) {
 
       if (rel.endsWith('.html')) {
         var isIndex = /\/index\.html$/.test(rel);
-        if (pages >= limit && !isIndex) { continue; }
+        // The unversioned parameters page rides along like an index: the
+        // switcher's Latest option needs it whatever the cap.
+        const isLatestParams = /\/docs\/parameters\.html$/.test(rel);
+        if (pages >= limit && !isIndex && !isLatestParams) { continue; }
         pages++;
         wikiCache.put(rel, new FakeResponse(buf));
       } else if (/\.(png|jpe?g|gif|svg|ico|woff2?|ttf|eot)$/i.test(rel)) {
@@ -346,14 +349,13 @@ async function main() {
     const r = loadWiki(w, cap);
     totals.pages += r.pages; totals.images += r.images; totals.css += r.css;
   }
-  // Six releases across four lines, so the window bites at both ends.
-  const PARAM_KEPT = ['V4.7.1', 'V4.6.0', 'V4.5.2'];
-  const PARAM_DROPPED = ['V4.7.0', 'V4.4.0', 'V4.3.0'];
+  // Six releases across four lines: the reader saved every one of them,
+  // and every one of them must survive into the file.
+  const PARAM_ALL = ['V4.7.1', 'V4.7.0', 'V4.6.0', 'V4.5.2', 'V4.4.0', 'V4.3.0'];
   const paramWiki = wikis.includes('rover') ? 'rover' : wikis[0];
   const paramVehicle = paramWiki.charAt(0).toUpperCase() + paramWiki.slice(1);
-  const paramPages = loadParameterVersions(
-    paramWiki, paramVehicle, PARAM_KEPT.concat(PARAM_DROPPED));
-  totals.pages += PARAM_KEPT.length;
+  const paramPages = loadParameterVersions(paramWiki, paramVehicle, PARAM_ALL);
+  totals.pages += PARAM_ALL.length;
   const paramBodies = {};
   paramPages.forEach((p) => { paramBodies[p.path] = p.body; });
 
@@ -545,25 +547,21 @@ async function main() {
     check('image index built', Object.keys(D.imgs || {}).length > 0,
           Object.keys(D.imgs || {}).length + ' image paths');
 
-    // The switcher offers exactly the window the file carries.
+    // Every saved version is offered, newest first: what the reader chose
+    // to save is not thinned behind their back.
     const offered = (D.params || {})[paramWiki] || [];
-    const want = PARAM_KEPT.map((v) =>
+    const want = PARAM_ALL.map((v) =>
       '/' + paramWiki + '/docs/parameters-' + paramVehicle + '-stable-' + v);
-    check('the switcher offers one release per major line, newest first',
+    check('the switcher offers every saved version, newest first',
           offered.map((v) => v.p).join() === want.join(),
           offered.map((v) => v.p).join(' ') || 'none');
     check('the labels are the ones the site shows',
           offered.length > 0 &&
-          offered[0].n === paramVehicle + ' stable ' + PARAM_KEPT[0],
+          offered[0].n === paramVehicle + ' stable ' + PARAM_ALL[0],
           offered.length ? offered[0].n : 'none');
     const carried = new Set(D.pages.map((p) => p.p));
-    check('versions outside the window are not carried at all',
-          PARAM_DROPPED.every((v) => !carried.has(
-            '/' + paramWiki + '/docs/parameters-' + paramVehicle +
-            '-stable-' + v)),
-          PARAM_DROPPED.join(' '));
-    check('versions inside it are',
-          want.every((p) => carried.has(p)));
+    check('every saved version is carried into the file',
+          want.every((p) => carried.has(p)), want.length + ' versions');
   }
 
   // The nav builders weave reader-reachable text into HTML: prove inert.
@@ -806,15 +804,16 @@ async function main() {
     if (versions.length > 1) {
       shellGo(win, versions[1].p);
       const sel = doc.querySelector('#selectPicker');
+      // Latest leads, then every saved version.
       check('the version switcher is filled in', !!sel && sel.options.length ===
-            versions.length,
+            versions.length + 1,
             sel ? sel.options.length + ' options' : 'no select');
       if (sel) {
         check('the version being read is the one selected',
               sel.value === versions[1].p, sel.value);
         check('the options are labelled as the site labels them',
               [].map.call(sel.options, (o) => o.textContent).join() ===
-              versions.map((v) => v.n).join(),
+              ['Latest'].concat(versions.map((v) => v.n)).join(),
               [].map.call(sel.options, (o) => o.textContent).join(' '));
 
         // Elements, not text: a swallowed page still contains the words.
@@ -857,6 +856,56 @@ async function main() {
                 w2.location.hash + ' wanted #' + dest.p);
         } else {
           check('root-relative link shell booted', false);
+        }
+      }
+
+      // In-page anchors scroll; they never route to the missing panel.
+      {
+        const from = D.pages[0];
+        const anchorBodies = {};
+        anchorBodies[from.p] =
+          '<h2 id="a-section">Section<a id="pl" class="headerlink" href="#a-section">P</a></h2>' +
+          '<p>body text</p>';
+        const w3 = bootShell(D, anchorBodies);
+        if (w3) {
+          shellGo(w3, from.p);
+          const before = w3.document.getElementById('ap-doc').textContent;
+          w3.document.getElementById('pl').dispatchEvent(
+            new w3.MouseEvent('click', { bubbles: true, cancelable: true }));
+          const after = w3.document.getElementById('ap-doc').textContent;
+          check('clicking a headerlink keeps the page',
+                after === before && after.indexOf('body text') !== -1 &&
+                after.indexOf('Not in this offline copy') === -1,
+                JSON.stringify(after.slice(0, 60)));
+          // A fragment typed straight into the hash scrolls too, never routes.
+          shellGo(w3, 'a-section');
+          const typed = w3.document.getElementById('ap-doc').textContent;
+          check('a bare fragment hash never shows the missing panel',
+                typed.indexOf('Not in this offline copy') === -1,
+                JSON.stringify(typed.slice(0, 60)));
+        } else {
+          check('anchor shell booted', false);
+        }
+      }
+
+      // The switcher offers a way back to the latest parameters page.
+      {
+        const latest = '/' + paramWiki + '/docs/parameters';
+        const anyVersion = ((D.params || {})[paramWiki] || [])[1];
+        if (anyVersion && D.pages.some((pp) => pp.p === latest)) {
+          const w4 = bootShell(D, paramBodies);
+          if (w4) {
+            shellGo(w4, anyVersion.p);
+            const opts = [].slice.call(
+              w4.document.querySelectorAll('#selectPicker option'));
+            check('the switcher leads back to Latest',
+                  opts.length > 0 && opts[0].value === latest &&
+                  opts[0].textContent === 'Latest',
+                  opts.length ? opts[0].value : 'no options');
+          }
+        } else {
+          check('the switcher leads back to Latest',
+                true, 'no unversioned parameters page in this fixture');
         }
       }
 

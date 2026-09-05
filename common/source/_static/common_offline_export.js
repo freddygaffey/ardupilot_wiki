@@ -107,12 +107,13 @@
 
   /* --------------------------------------------------- exports: single HTML */
 
-  var BINARY = /\.(png|jpe?g|gif|webp|svg|ico|woff2?|ttf)$/i;
+  var BINARY = /\.(png|jpe?g|gif|webp|svg|ico|bmp|woff2?|ttf)$/i;
 
   function mimeFor(path) {
     var ext = (path.split('.').pop() || '').toLowerCase();
     return ({ png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
               gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+              bmp: 'image/bmp',
               ico: 'image/x-icon', woff: 'font/woff', woff2: 'font/woff2',
               ttf: 'font/ttf' })[ext] || 'application/octet-stream';
   }
