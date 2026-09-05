@@ -841,6 +841,8 @@
   var activeExport = null;
   // An update found while packing waits here for the export to finish.
   var updateDeferred = false;
+  // Set while an update check is rewriting caches; exports wait for it.
+  var updateWriting = false;
 
   function cancelDownload() {
     if (activeDownload) { activeDownload.abort(); }
@@ -1115,6 +1117,7 @@
         [COMMON].concat(WIKIS).forEach(function (w) { byId[w.id] = w; });
 
         var moved = 0, full = [];
+        updateWriting = true;
         return stale.reduce(function (chain, id) {
           return chain.then(function () {
             var entry = byId[id];
@@ -1133,6 +1136,7 @@
             });
           });
         }, Promise.resolve()).then(function () {
+          updateWriting = false;
           if (!full.length) {
             if (moved) {
               announce('Updated ' + moved + ' file' + (moved === 1 ? '' : 's') + '.');
@@ -1190,9 +1194,11 @@
       })
       .then(function () {
         checkBusy = false;
+        updateWriting = false;
         if (checkBtn && !activeDownload && !activeExport) { checkBtn.disabled = false; }
         if (updateDeferred && !activeExport && !activeDownload) {
-          // The export ended while this check was unwinding.
+          // The export ended in the microtask gap between the deferral and
+          // this tail; release() saw checkBusy and left the resume to us.
           updateDeferred = false;
           setTimeout(function () { checkForUpdates(true); }, 0);
         }
@@ -1255,6 +1261,13 @@
     if (!link || !global.ArduPilotExport || !selected().length) { return; }
     // One export at a time, over its whole span including the pre-save.
     if (exportBusy) { return; }
+    if (updateWriting) {
+      link.textContent = 'An update is being written; try again in a moment.';
+      setTimeout(function () {
+        link.textContent = link.dataset.label || 'Save as .html';
+      }, 5000);
+      return;
+    }
     exportBusy = true;
 
     var original = link.dataset.label || link.textContent;

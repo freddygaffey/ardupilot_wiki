@@ -466,6 +466,10 @@ async function main() {
       '+esc(h.name||h.id)+',
       '+esc(h.pages)+',
       'href="#\'+esc(h.path)+',
+      '<li><a href="#\'+esc(h.pg.p)+\'"><span>',
+      '<li class="toctree-l1"><a href="#\'+esc(h.pg.p)+\'">',
+      'href="#\'+esc(p)+\'" class="btn btn-neutral float-left"',
+      'href="#\'+esc(p)+\'" class="btn btn-neutral float-right"',
       // A single backslash in a SHELL_JS literal vanishes from the built file.
       '.replace(/\\s+/g," ")',
       'id="selectPicker"',
@@ -504,6 +508,14 @@ async function main() {
   check('the picker escapes every interpolation',
         html.includes('+esc(h.name||h.id)+') && html.includes('+esc(h.pages)+') &&
         html.includes('href="#\'+esc(h.path)+'), 'picker esc literals');
+  check('search and sidebar results escape their hrefs',
+        html.includes('<li><a href="#\'+esc(h.pg.p)+\'"><span>') &&
+        html.includes('<li class="toctree-l1"><a href="#\'+esc(h.pg.p)+\'">'),
+        'result href esc literals');
+  check('the footer buttons escape their hrefs',
+        html.includes('href="#\'+esc(p)+\'" class="btn btn-neutral float-left"') &&
+        html.includes('href="#\'+esc(p)+\'" class="btn btn-neutral float-right"'),
+        'navButton esc literals');
   check('no unresolved relative image srcs', scan.counts[4] === 0,
         scan.counts[4] + ' left');
 
