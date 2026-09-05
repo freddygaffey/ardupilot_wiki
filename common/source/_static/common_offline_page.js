@@ -852,6 +852,11 @@
       return Promise.reject(new Error('A download is already running; ' +
                                       'try again when it finishes.'));
     }
+    // Packing reads these caches; nothing may rewrite them underneath it.
+    if (activeExport && !fromButton) {
+      return Promise.reject(new Error('An export is being written; ' +
+                                      'try again when it finishes.'));
+    }
 
     var refresh = refreshIds || [];
     var chosen = selected().map(function (c) { return c.value; });
@@ -1137,6 +1142,12 @@
           // These cannot be updated in place, so they are downloaded again,
           // on a timer too: an out-of-date saved copy is worse than a download.
           var nameOf = function (id) { return (byId[id] && byId[id].name) || id; };
+          if (activeExport) {
+            // The exporter is reading these caches; touch nothing, say so.
+            report('Updates found; they will be fetched after the export finishes.');
+            toast({ mode: 'hide' });
+            return undefined;
+          }
           announce('Downloading again: ' + full.map(nameOf).join(', ') + '\u2026');
           toast({ title: 'Updating saved wikis',
                   msg: 'Downloading again: ' + full.map(nameOf).join(', ') + '.',
@@ -1228,9 +1239,14 @@
   }
 
   // Anything selected but unsaved is downloaded first: one press, not two.
+  var exportBusy = false;
+
   function buildExport(buttonId) {
     var link = el(buttonId);
     if (!link || !global.ArduPilotExport || !selected().length) { return; }
+    // One export at a time, over its whole span including the pre-save.
+    if (exportBusy) { return; }
+    exportBusy = true;
 
     var original = link.dataset.label || link.textContent;
     link.dataset.label = original;
@@ -1238,10 +1254,16 @@
     var release = null;
 
     var done = function (text, keep) {
+      exportBusy = false;
       link.textContent = text;
       // A running download owns the button; its cleanup re-enables it.
       if (!activeDownload) { link.disabled = false; }
-      if (!keep) { setTimeout(function () { link.textContent = original; }, 8000); }
+      if (!keep) {
+        setTimeout(function () {
+          // A later export owns the label by now.
+          if (!exportBusy) { link.textContent = original; }
+        }, 8000);
+      }
     };
 
     var sel = exportSelection();
@@ -1255,8 +1277,26 @@
 
     var first = toSave.length ? saveSelectedReal() : Promise.resolve();
 
+    // The repair re-renders the rows with every saved wiki ticked and syncs
+    // the parameter picks to the cache; the reader's own choices are what
+    // the export honours and puts back.
+    var chosenBefore = sel.chosen.slice();
+    // The picks map is the source of truth; the boxes are only its view.
+    var paramsBefore = JSON.parse(JSON.stringify(paramPicks));
     return first.then(function () {
-      var ready = exportSelection();
+      paramPicks = paramsBefore;
+      var boxes = document.querySelectorAll('.wiki-check');
+      for (var bi = 0; bi < boxes.length; bi++) {
+        boxes[bi].checked = chosenBefore.indexOf(boxes[bi].value) !== -1;
+      }
+      document.querySelectorAll('.param-check').forEach(function (b) {
+        var picks = paramPicks[b.getAttribute('data-wiki')] || {};
+        b.checked = !!picks[b.value];
+      });
+      syncSelectAll();
+      syncAllParamsHeader();
+      updateTotal();
+      var ready = { ids: chosenBefore.filter(function (id) { return storedIds[id]; }) };
       if (!ready.ids.length) {
         throw new Error('Nothing was saved - check your connection');
       }
@@ -1268,9 +1308,17 @@
       held.forEach(function (b) { if (b) { b.disabled = true; } });
       release = function () {
         activeExport = null;
-        held.forEach(function (b) { if (b) { b.disabled = false; } });
+        // Hand back only what nothing else still owns.
+        if (!activeDownload) {
+          held.forEach(function (b) { if (b) { b.disabled = false; } });
+          if (checkBusy) {
+            var cb = el('check-btn');
+            if (cb) { cb.disabled = true; }
+          }
+        }
         updateSaveState();
         updateExportState();
+        renderStorage();
       };
       link.disabled = false;
       return global.ArduPilotExport.exportHtml(ready.ids, name,
