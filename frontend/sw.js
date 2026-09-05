@@ -75,7 +75,9 @@ async function warmThirdParty() {
     try {
       if (await cache.match(url)) { return; }
       const response = await fetch(url, { mode: 'no-cors' });
-      if (response) { await cache.put(url, response.clone()); }
+      // An opaque response is stored with megabytes of padded quota;
+      // decoration is not worth that, so only real responses are kept.
+      if (response && response.ok) { await cache.put(url, response.clone()); }
     } catch (err) { /* decoration; never worth failing activation for */ }
   }));
 }
@@ -377,6 +379,13 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
 
   const network = fetch(refresh).then(async (response) => {
     if (!response || !response.ok) {
+      if (response && (response.status === 404 || response.status === 410) &&
+          fromPageCache) {
+        // Gone from the server: the browsing copy goes too. Saved wikis
+        // live in their own caches and are never touched here.
+        const evict = await caches.open(cacheName);
+        await evict.delete(request);
+      }
       return response;
     }
     if (cachedForCompare) {
@@ -401,7 +410,7 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
   keepAlive(event, network, request.url);
 
   if (cached) {
-    return cached;
+    return unredirect(cached);
   }
 
   const timeout = new Promise((resolve) => setTimeout(resolve, NETWORK_TIMEOUT_MS));
@@ -566,10 +575,31 @@ function keepAlive(event, promise, url) {
 }
 
 // A failed store (QuotaExceededError) must not change what the reader gets.
+// A network response never carries the unpacker's private encoding marker,
+// and a stored redirected response would fail every navigation it answers.
+function sanitizeForCache(response) {
+  const marked = response.headers && response.headers.get &&
+                 response.headers.get('x-ap-encoding');
+  if (!response.redirected && !marked) {
+    return response;
+  }
+  const headers = new Headers();
+  if (response.headers && response.headers.forEach) {
+    response.headers.forEach((value, name) => {
+      if (name.toLowerCase() !== 'x-ap-encoding') { headers.append(name, value); }
+    });
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 async function keep(cacheName, key, response) {
   try {
     const cache = await caches.open(cacheName);
-    await cache.put(key, response.clone());
+    await cache.put(key, sanitizeForCache(response.clone()));
   } catch (err) {
     console.warn('[sw] could not store', String(key && key.url ? key.url : key),
                  err && err.name);
@@ -621,7 +651,11 @@ self.addEventListener('fetch', (event) => {
         headers: {
           'Content-Type': 'application/octet-stream',
           'Content-Disposition':
-            'attachment; filename="' + entry.filename.replace(/"/g, '') + '"'
+            // Header values are Latin-1 and single-line; anything else in a
+            // name would make the Response constructor throw the export away.
+            'attachment; filename="' +
+            String(entry.filename).replace(/[^\x20-\x7e]/g, '_')
+              .replace(/"/g, '') + '"'
         }
       }));
     } else {
