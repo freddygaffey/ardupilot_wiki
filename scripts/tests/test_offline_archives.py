@@ -135,6 +135,31 @@ def check_shared_images_agree():
           else f"{len(shared)} shared images checked across {holders} holdings")
 
 
+def check_offline_only_rewrites():
+    """Archived pages neither phone home nor lose their place in a video."""
+    sys.path.insert(0, str(REPO / "scripts"))
+    from build_offline_artifacts import classify_embed, rewrite_offline_only
+
+    _, watch, _ = classify_embed("https://www.youtube.com/embed/abc123?start=90")
+    check("a timestamped embed keeps its place in the watch link",
+          watch == "https://www.youtube.com/watch?v=abc123&t=90s", watch)
+    _, plain, _ = classify_embed("https://www.youtube.com/embed/abc123")
+    check("an untimestamped embed gets a plain watch link",
+          plain == "https://www.youtube.com/watch?v=abc123", plain)
+
+    page = ('<script defer data-domain="x" '
+            'src="https://plausible.ardupilot.org/js/script.js"></script>'
+            '<a href="https://creativecommons.org/licenses/by-sa/3.0/">'
+            '<img alt="CC" src="https://i.creativecommons.org/l/by-sa/3.0/88x31.png"/>'
+            '</a><p>body</p>')
+    out = rewrite_offline_only(page)
+    check("the analytics beacon is stripped from archived pages",
+          "plausible" not in out, out[:80])
+    check("the licence badge becomes local text, attribution kept",
+          "i.creativecommons.org" not in out and "CC BY-SA 3.0" in out and
+          "creativecommons.org/licenses" in out, out[:120])
+
+
 def check_folded_lists_agree():
     """The four literal FOLDED_INTO_COMMON copies must name the same wikis."""
     root = Path(__file__).resolve().parents[2]
@@ -289,6 +314,7 @@ def main():
     check_embed_rewrite()
     check_shared_images_agree()
     check_folded_lists_agree()
+    check_offline_only_rewrites()
 
     checked = 0
     for wiki in wikis:
@@ -297,6 +323,7 @@ def main():
             continue
 
         remote_donate = []
+        phones_home = []
         live_iframes = []
         local_donate = 0
         pages = 0
@@ -305,6 +332,9 @@ def main():
             pages += 1
             if "paypalobjects" in html:
                 remote_donate.append(name)
+            if ("plausible.ardupilot.org" in html or
+                    "i.creativecommons.org" in html):
+                phones_home.append(name)
             if "<iframe" in html.lower():
                 live_iframes.append(name)
             if 'href="https://ardupilot.org/donate"' in html and ">Donate</a>" in html:
@@ -317,6 +347,10 @@ def main():
         check(f"{wiki}: no page ships a live iframe",
               not live_iframes,
               f"{len(live_iframes)} pages, e.g. {live_iframes[0]}" if live_iframes
+              else f"{pages} pages sampled")
+        check(f"{wiki}: no page phones home for analytics or the badge",
+              not phones_home,
+              f"{len(phones_home)} of {pages}, e.g. {phones_home[0]}" if phones_home
               else f"{pages} pages sampled")
         check(f"{wiki}: no page ships a remote donate image",
               not remote_donate,
