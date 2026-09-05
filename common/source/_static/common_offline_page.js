@@ -830,6 +830,8 @@
   }
 
   var activeDownload = null;
+  // Set while the exporter is packing pages; its button then cancels.
+  var activeExport = null;
 
   function cancelDownload() {
     if (activeDownload) { activeDownload.abort(); }
@@ -1174,7 +1176,7 @@
   /** Save is offered only when it has something to fetch. */
   function updateSaveState() {
     var button = el('download-cache-btn');
-    if (!button || activeDownload) { return; }
+    if (!button || activeDownload || activeExport) { return; }
     var b = selectionBytes();
     // Common alone is images with no pages to view them in.
     var anyWiki = selected().length > 0;
@@ -1187,8 +1189,8 @@
   }
 
   function updateExportState() {
-    // While a download owns the panel, only its cleanup may re-enable.
-    if (activeDownload) { return; }
+    // While a download or an export owns the button, only they may write it.
+    if (activeDownload || activeExport) { return; }
     var chosen = selected().length;
     var b = el('dl-single');
     if (!b) { return; }
@@ -1226,6 +1228,7 @@
     var original = link.dataset.label || link.textContent;
     link.dataset.label = original;
     link.disabled = true;
+    var release = null;
 
     var done = function (text, keep) {
       link.textContent = text;
@@ -1251,14 +1254,30 @@
         throw new Error('Nothing was saved - check your connection');
       }
       var name = exportName(ready.ids, '.html');
+      // Packing reads the caches for a while: it owns the panel just as a
+      // download does, and its own button becomes the way out.
+      activeExport = new AbortController();
+      var held = ['clear-btn', 'check-btn', 'download-cache-btn'].map(el);
+      held.forEach(function (b) { if (b) { b.disabled = true; } });
+      release = function () {
+        activeExport = null;
+        held.forEach(function (b) { if (b) { b.disabled = false; } });
+        updateSaveState();
+      };
+      link.disabled = false;
       return global.ArduPilotExport.exportHtml(ready.ids, name,
         function (n, total) {
-          link.textContent = 'Writing ' + n + ' / ' + total + ' pages…';
-        }).then(function (r) {
+          link.textContent = 'Writing ' + n + ' / ' + total +
+                             ' pages… (click to cancel)';
+        }, undefined, activeExport.signal).then(function (r) {
+          release();
           done('Saved ' + name + ' (' + r.pages + ' pages)');
         });
     }).catch(function (err) {
-      done((err && err.message) || 'Export failed');
+      if (release) { release(); } else { activeExport = null; }
+      done(err && err.name === 'AbortError'
+        ? 'Export cancelled'
+        : (err && err.message) || 'Export failed');
     });
   }
 
@@ -1275,8 +1294,8 @@
 
   function autoUpdateTick() {
     if (!autoUpdateOn()) { return; }
-    // A running check or download owns the panel and the network.
-    if (autoBusy || activeDownload) { return; }
+    // A running check, download or export owns the panel and the network.
+    if (autoBusy || activeDownload || activeExport) { return; }
     // Nothing saved means nothing to update and no reason to touch the network.
     if (!Object.keys(storedIds).length) { return; }
     // Not skipped while hidden: a background tab is the copy most likely behind.
@@ -1452,7 +1471,10 @@
       saveSelectedReal(undefined, true);
     }
     if (hit.id === 'check-btn') { checkForUpdates(); }
-    if (hit.id === 'dl-single') { e.preventDefault(); exportHtmlFile(); }
+    if (hit.id === 'dl-single') {
+      e.preventDefault();
+      if (activeExport) { activeExport.abort(); } else { exportHtmlFile(); }
+    }
   });
 
   // Off removes everything held, so say how much first, unless it is nothing.

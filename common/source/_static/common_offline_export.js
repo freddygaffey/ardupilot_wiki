@@ -67,6 +67,11 @@
           return writer.close().then(function () {
             setTimeout(function () { frame.remove(); }, 2000);
           });
+        },
+        // Erroring the stream cancels the browser-side download outright.
+        abort: function () {
+          frame.remove();
+          return writer.abort(new Error('cancelled')).catch(function () {});
         }
       });
     }
@@ -78,13 +83,15 @@
         .then(function (w) {
           return {
             write: function (chunk) { return w.write(chunk); },
-            close: function () { return w.close(); }
+            close: function () { return w.close(); },
+            abort: function () { return w.abort().catch(function () {}); }
           };
         });
     }
 
     var parts = [];
     return Promise.resolve({
+      abort: function () { parts.length = 0; return Promise.resolve(); },
       write: function (chunk) { parts.push(chunk); return Promise.resolve(); },
       close: function () {
         var url = URL.createObjectURL(new Blob(parts));
@@ -139,7 +146,7 @@
   }
 
   /** Write one self-contained HTML file from the cached pages, page by page. */
-  function exportHtml(wikiIds, filename, onProgress, sink) {
+  function exportHtml(wikiIds, filename, onProgress, sink, signal) {
     var enc = new TextEncoder();
     var DOC = global.ArduPilotOfflineDocument;
     if (!DOC) {
@@ -193,6 +200,12 @@
       return buildThemeCss(styles, assets).then(function (themeCss) {
         return (sink ? Promise.resolve(sink) : openDownload(filename))
         .then(function (sink) {
+          // Checked between pages: a cancel stops the work, not mid-write.
+          var bail = function () {
+            var e = new Error('Export cancelled.');
+            e.name = 'AbortError';
+            return e;
+          };
           var done = 0, index = [];
           // Each image is emitted once and referenced by id.
           var imgIds = { __next: 0 };
@@ -205,6 +218,7 @@
             var chain = Promise.resolve();
             pages.forEach(function (p, i) {
               chain = chain.then(function () {
+                if (signal && signal.aborted) { throw bail(); }
                 return ApUnpack.readFrom(p.cache, p.path)
                   .then(function (res) { return res.text(); })
                   .then(function (html) {
@@ -229,6 +243,7 @@
             });
             return chain;
           }).then(function () {
+            if (signal && signal.aborted) { throw bail(); }
             // One wiki opens directly; several show the list.
             var homes = DOC.wikiHomes(index, wikis);
             // Sidebar and reading order from one call, so they agree.
@@ -258,7 +273,14 @@
               return write(DOC.tail(payload));
             });
           }).then(function () { return sink.close(); })
-            .then(function () { return { pages: done }; });
+            .then(function () { return { pages: done }; })
+            .catch(function (err) {
+              if (err && err.name === 'AbortError' && sink.abort) {
+                return Promise.resolve(sink.abort()).then(
+                  function () { throw err; }, function () { throw err; });
+              }
+              throw err;
+            });
         });
       });
     });
