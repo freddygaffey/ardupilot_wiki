@@ -389,13 +389,19 @@ async function main() {
           writes + ' writes after a cancel at the third');
   }
 
-  // A cancel after the last page must still cancel, not quietly save.
+  // A cancel after the last page must still cancel, not quietly save,
+  // and it must be noticed WHERE it lands, not at the next-but-one check.
   {
-    let aborted = false;
+    let aborted = false; let tailWritten = false;
     const flag = { aborted: false };
     const dec = new TextDecoder();
     const sink = { write: (c) => {
-                     if (dec.decode(c).indexOf('ap-fts') !== -1) { flag.aborted = true; }
+                     const text = dec.decode(c);
+                     // The tail contains both markers; test it before tripping.
+                     if (flag.aborted && text.indexOf('ap-index') !== -1) {
+                       tailWritten = true;
+                     }
+                     if (text.indexOf('ap-fts') !== -1) { flag.aborted = true; }
                      return Promise.resolve();
                    },
                    close: () => Promise.resolve(),
@@ -406,6 +412,27 @@ async function main() {
           outcome !== 'resolved' && outcome.name === 'AbortError',
           String(outcome && (outcome.name || outcome)));
     check('and it aborts the sink', aborted);
+    check('a cancel during the search block stops before the tail',
+          !tailWritten);
+  }
+
+  // A cancel landing in the very last write is caught before close().
+  {
+    let aborted = false; let closed = false;
+    const flag = { aborted: false };
+    const dec = new TextDecoder();
+    const sink = { write: (c) => {
+                     if (dec.decode(c).indexOf('ap-index') !== -1) { flag.aborted = true; }
+                     return Promise.resolve();
+                   },
+                   close: () => { closed = true; return Promise.resolve(); },
+                   abort: () => { aborted = true; return Promise.resolve(); } };
+    const outcome = await api.exportHtml(wikis, 'x.html', null, sink, flag)
+      .then(() => 'resolved', (e) => e);
+    check('a cancel during the tail write is caught before close',
+          outcome !== 'resolved' && outcome.name === 'AbortError' &&
+          aborted && !closed,
+          String(outcome && (outcome.name || outcome)) + ', closed ' + closed);
   }
 
   // A sink that fails is told to discard what it holds.

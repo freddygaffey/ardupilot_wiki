@@ -613,7 +613,7 @@
       var clear = el('clear-btn');
       if (clear) {
         var anySaved = Object.keys(stored).length > 0;
-        if (anySaved && !activeDownload && !activeExport) {
+        if (anySaved && !activeDownload && !activeExport && !checkBusy) {
           clear.disabled = false; clear.title = '';
         }
       }
@@ -839,6 +839,8 @@
   var activeDownload = null;
   // Set while the exporter is packing pages; its button then cancels.
   var activeExport = null;
+  // An update found while packing waits here for the export to finish.
+  var updateDeferred = false;
 
   function cancelDownload() {
     if (activeDownload) { activeDownload.abort(); }
@@ -1094,6 +1096,14 @@
           }
           return;
         }
+        if (activeExport) {
+          // The exporter is reading these caches: even the differential
+          // update rewrites them, so everything waits for the export.
+          report('Updates found; they will be fetched after the export finishes.');
+          toast({ mode: 'hide' });
+          updateDeferred = true;
+          return undefined;
+        }
         // Real news, announced even on an automatic run.
         announce('Updating ' + stale.length + ' item' +
                  (stale.length === 1 ? '' : 's') + '…');
@@ -1142,12 +1152,6 @@
           // These cannot be updated in place, so they are downloaded again,
           // on a timer too: an out-of-date saved copy is worse than a download.
           var nameOf = function (id) { return (byId[id] && byId[id].name) || id; };
-          if (activeExport) {
-            // The exporter is reading these caches; touch nothing, say so.
-            report('Updates found; they will be fetched after the export finishes.');
-            toast({ mode: 'hide' });
-            return undefined;
-          }
           announce('Downloading again: ' + full.map(nameOf).join(', ') + '\u2026');
           toast({ title: 'Updating saved wikis',
                   msg: 'Downloading again: ' + full.map(nameOf).join(', ') + '.',
@@ -1187,6 +1191,11 @@
       .then(function () {
         checkBusy = false;
         if (checkBtn && !activeDownload && !activeExport) { checkBtn.disabled = false; }
+        if (updateDeferred && !activeExport && !activeDownload) {
+          // The export ended while this check was unwinding.
+          updateDeferred = false;
+          setTimeout(function () { checkForUpdates(true); }, 0);
+        }
         return renderStorage();
       });
   }
@@ -1293,6 +1302,7 @@
         var picks = paramPicks[b.getAttribute('data-wiki')] || {};
         b.checked = !!picks[b.value];
       });
+      WIKIS.forEach(function (w) { syncParamAll(w.id); });
       syncSelectAll();
       syncAllParamsHeader();
       updateTotal();
@@ -1308,6 +1318,11 @@
       held.forEach(function (b) { if (b) { b.disabled = true; } });
       release = function () {
         activeExport = null;
+        if (updateDeferred && !activeDownload && !checkBusy) {
+          // The update that stood aside for this export runs now.
+          updateDeferred = false;
+          setTimeout(function () { checkForUpdates(true); }, 0);
+        }
         // Hand back only what nothing else still owns.
         if (!activeDownload) {
           held.forEach(function (b) { if (b) { b.disabled = false; } });

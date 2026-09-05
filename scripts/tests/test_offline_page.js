@@ -2064,25 +2064,35 @@ async function main() {
       archives: { '_images/shared.png': 'png' } });
     for (let i = 0; i < 8; i++) { await settle(); }
     w.ArduPilotExport = { exportHtml: () => Promise.resolve({ pages: 1 }) };
-    // The reader picks an extra version beyond the default head.
-    const extra = doc.querySelector('.param-check[value*="4.6.3"]');
-    extra.checked = true;
-    extra.dispatchEvent(new w.Event('change', { bubbles: true })); await settle();
+    // The reader picks both versions by hand; the stored wiki's cache sync
+    // has already cleared the un-downloaded default.
+    for (const ver of ['4.7.0', '4.6.3']) {
+      const box = doc.querySelector('.param-check[value*="' + ver + '"]');
+      box.checked = true;
+      box.dispatchEvent(new w.Event('change', { bubbles: true }));
+    }
+    await settle();
     $(doc, 'dl-single').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
     for (let i = 0; i < 15; i++) { await settle(); }
     check('a picked parameter version survives the repair',
           doc.querySelector('.param-check[value*="4.6.3"]').checked);
+    check('the wiki\'s own All versions box follows the restored picks',
+          !!doc.querySelector('.param-all[data-wiki="copter"]') &&
+          doc.querySelector('.param-all[data-wiki="copter"]').checked,
+          'present ' + !!doc.querySelector('.param-all[data-wiki="copter"]') +
+          ' checked ' + (doc.querySelector('.param-all[data-wiki="copter"]') || {}).checked);
   }
 
   console.log('\nthe export button cannot start a second export mid-flight');
   {
     const cachesObj = makeCaches();
-    (await cachesObj.open('ardupilot-offline-copter')).put('/__ap_complete__',
-      completeMarker(MANIFEST.generated, 'copter'));
-    (await cachesObj.open('ardupilot-offline-common')).put('/_common/_images/x.png',
-      new FakeResponse('png'));
-    const { doc, w } = load({ manifest: MANIFEST, caches: cachesObj,
-      archives: { '_images/shared.png': 'png' } });
+    // Everything already saved: no repair stands between click and pack, so
+    // only the re-entry guard separates one export from two.
+    for (const id of ['common', 'copter']) {
+      (await cachesObj.open('ardupilot-offline-' + id)).put('/__ap_complete__',
+        completeMarker(MANIFEST.generated, id));
+    }
+    const { doc, w } = load({ manifest: MANIFEST, caches: cachesObj });
     await settle();
     let calls = 0; let finish = null;
     w.ArduPilotExport = { exportHtml: () => { calls++;
@@ -2126,19 +2136,25 @@ async function main() {
     const before = tars();
     released = true; pend.forEach((f) => f());
     for (let i = 0; i < 8; i++) { await settle(); }
+    const updates = () => fetchCalls.filter((u) =>
+      u.indexOf('ap-update=') !== -1 || /\/files\//.test(u)).length;
     check('a stale wiki found mid-pack starts no download', tars() === before,
           tars() + ' tar fetches, ' + before + ' before');
+    check('not even the differential touches the caches mid-pack',
+          updates() === 0, updates() + ' update fetches while packing');
     check('the deferral does not rewrite the selection',
           doc.querySelector('.wiki-check[value="copter"]').checked);
     check('the deferral says what will happen instead',
           /after the export/i.test($(doc, 'check-result').textContent || ''),
           JSON.stringify($(doc, 'check-result').textContent));
-    finishExport(); await settle(); await settle();
-    check('the deferred update leaves the panel usable after the export',
-          !$(doc, 'check-btn').disabled && !$(doc, 'dl-single').disabled &&
-          !$(doc, 'clear-btn').disabled,
-          'check ' + $(doc, 'check-btn').disabled + ' export ' +
-          $(doc, 'dl-single').disabled + ' clear ' + $(doc, 'clear-btn').disabled);
+    const manifests = () => fetchCalls.filter((u) =>
+      u.indexOf('offline-manifest.json') !== -1).length;
+    const beforeResume = manifests();
+    finishExport();
+    for (let i = 0; i < 10; i++) { await settle(); }
+    check('the deferred update resumes once the export finishes',
+          manifests() > beforeResume,
+          manifests() + ' manifest fetches, ' + beforeResume + ' before');
   }
 
   console.log('\nan export finishing under a busy check withholds only its button');
