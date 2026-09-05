@@ -224,7 +224,8 @@
       var clear = el('clear-btn');
       if (clear) {
         var anything = pages > 0 || Object.keys(storedIds).length > 0;
-        clear.disabled = !anything || checkBusy || !!activeDownload || !!activeExport;
+        clear.disabled = !anything || checkBusy || !!activeDownload ||
+          !!activeExport || exportBusy;
         clear.title = !anything ? 'Nothing is stored on this device'
           : clear.disabled ? 'Wait for the update to finish'
           : 'Removes saved wikis and pages cached while reading';
@@ -613,7 +614,7 @@
       var clear = el('clear-btn');
       if (clear) {
         var anySaved = Object.keys(stored).length > 0;
-        if (anySaved && !activeDownload && !activeExport && !checkBusy) {
+        if (anySaved && !activeDownload && !activeExport && !exportBusy && !checkBusy) {
           clear.disabled = false; clear.title = '';
         }
       }
@@ -1023,7 +1024,11 @@
         activeDownload = null;
         button.classList.remove('busy');
         setLabel('Save selected');
-        heldButtons.forEach(function (b) { if (b) { b.disabled = false; } });
+        heldButtons.forEach(function (b) {
+          // During an export's span only its own button comes back.
+          if (b && (b.id === 'dl-single' || !exportBusy)) { b.disabled = false; }
+        });
+        resumeDeferredUpdate();
         // Only unfinished bars are cleared.
         queue.forEach(function (w) {
           if (!storedIds[w.id]) { rowProgress(w.id, null); }
@@ -1196,9 +1201,6 @@
         checkBusy = false;
         updateWriting = false;
         if (checkBtn && !activeDownload && !activeExport) { checkBtn.disabled = false; }
-        // Covers the export ending in the gap between the deferral and this
-        // tail, when release() saw checkBusy and left the resume to us.
-        resumeDeferredUpdate();
         return renderStorage();
       });
   }
@@ -1206,7 +1208,7 @@
   /** Save is offered only when it has something to fetch. */
   function updateSaveState() {
     var button = el('download-cache-btn');
-    if (!button || activeDownload || activeExport) { return; }
+    if (!button || activeDownload || activeExport || exportBusy) { return; }
     var b = selectionBytes();
     // Common alone is images with no pages to view them in.
     var anyWiki = selected().length > 0;
@@ -1220,7 +1222,7 @@
 
   function updateExportState() {
     // While a download or an export owns the button, only they may write it.
-    if (activeDownload || activeExport) { return; }
+    if (activeDownload || activeExport || exportBusy) { return; }
     var chosen = selected().length;
     var b = el('dl-single');
     if (!b) { return; }
@@ -1254,13 +1256,18 @@
   var exportBusy = false;
 
   // Runs the update that stood aside for an export, when nothing owns
-  // the caches any more.
+  // the caches any more. The flag survives a blocked attempt, so whichever
+  // owner finishes last finds it and tries again.
   function resumeDeferredUpdate() {
-    if (updateDeferred && !activeExport && !exportBusy &&
-        !activeDownload && !checkBusy) {
+    if (!updateDeferred) { return; }
+    setTimeout(function () {
+      // Re-checked here: an owner can claim the panel in the timer window,
+      // narrower than the harness can produce; the flag then waits for it.
+      if (!updateDeferred || activeExport || exportBusy ||
+          activeDownload || checkBusy) { return; }
       updateDeferred = false;
-      setTimeout(function () { checkForUpdates(true); }, 0);
-    }
+      checkForUpdates(true);
+    }, 0);
   }
 
   function buildExport(buttonId) {
@@ -1269,6 +1276,7 @@
     // One export at a time, over its whole span including the pre-save.
     if (exportBusy) { return; }
     if (updateWriting) {
+      if (!link.dataset.label) { link.dataset.label = link.textContent; }
       link.textContent = 'An update is being written; try again in a moment.';
       setTimeout(function () {
         // A later export owns the label by now.
@@ -1363,7 +1371,8 @@
           done('Saved ' + name + ' (' + r.pages + ' pages)');
         });
     }).catch(function (err) {
-      if (release) { release(); } else { activeExport = null; resumeDeferredUpdate(); }
+      if (release) { release(); }
+      else { activeExport = null; resumeDeferredUpdate(); }
       done(err && err.name === 'AbortError'
         ? 'Export cancelled'
         : (err && err.message) || 'Export failed');
