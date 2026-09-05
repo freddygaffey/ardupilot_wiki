@@ -22,7 +22,9 @@ import pathlib
 import re
 import sys
 
-RAW_HTML_RE = re.compile(r"^(\s*)\.\.\s+raw::\s+html\s*$")
+# Case-insensitive, and the substitution form renders too.
+RAW_HTML_RE = re.compile(r"^(\s*)\.\.\s+(?:\|[^|]+\|\s+)?raw::\s+html\s*$",
+                         re.IGNORECASE)
 CODE_RE = re.compile(r"^\.\.\s+(?:code|code-block|parsed-literal)::")
 VIDEO_RE = re.compile(
     r"<iframe[^>]*\b(?:youtube(?:-nocookie)?\.com|youtu\.be|vimeo\.com|peertube)", re.IGNORECASE)
@@ -32,11 +34,20 @@ def indent_of(line: str) -> int:
     return len(line) - len(line.lstrip())
 
 
+DIRECTIVE_RE = re.compile(r"^\.\.\s+(?:\|[^|]+\|\s+)?[\w.-]+::")
+
+
 def opens_literal(line: str) -> bool:
-    """A paragraph ending in :: or a code directive: its body is shown, not built."""
+    """A block whose body never reaches the built page: a code directive or
+    a true comment. Other directives still build, nested raw included."""
     text = line.strip()
+    if text == "..":
+        return True
     if text.startswith(".. "):
-        return bool(CODE_RE.match(text))
+        if CODE_RE.match(text):
+            return True
+        # No directive marker makes it a comment; a directive's body builds.
+        return not DIRECTIVE_RE.match(text)
     return text.endswith("::")
 
 

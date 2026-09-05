@@ -136,8 +136,12 @@ def classify_embed(src: str):
     """(still key, watch link, verb) for an iframe src; key None when unknown."""
     m = YOUTUBE_SRC_RE.match(src)
     if m:
-        return (f"yt-{m.group(1)}",
-                f"https://www.youtube.com/watch?v={m.group(1)}", "Watch on YouTube")
+        watch = f"https://www.youtube.com/watch?v={m.group(1)}"
+        # A timestamped embed keeps its place in the video.
+        t = re.search(r"[?&](?:start|t)=(\d+)", src)
+        if t:
+            watch += f"&t={t.group(1)}s"
+        return (f"yt-{m.group(1)}", watch, "Watch on YouTube")
     m = VIMEO_SRC_RE.match(src)
     if m:
         return (f"vimeo-{m.group(1)}", f"https://vimeo.com/{m.group(1)}",
@@ -249,6 +253,18 @@ DONATE_LINK = (
     'Donate</a>'
     '<div style="margin-top:6px;font-size:12px;opacity:.75">needs a connection</div>'
 )
+
+
+# Saved pages must not call home: the analytics beacon goes, and the
+# licence badge becomes text since its image lives on a remote host.
+ANALYTICS_RE = re.compile(
+    r'<script[^>]*\bsrc="[^"]*plausible[^"]*"[^>]*>\s*</script>\s*', re.IGNORECASE)
+CC_BADGE_RE = re.compile(r'<img[^>]*i\.creativecommons\.org[^>]*/?>', re.IGNORECASE)
+
+
+def rewrite_offline_only(html: str) -> str:
+    html = ANALYTICS_RE.sub("", html)
+    return CC_BADGE_RE.sub('<span class="cc-license">CC BY-SA 3.0</span>', html)
 
 
 def rewrite_donate(html: str) -> str:
@@ -447,7 +463,8 @@ def add_wiki_tree(tar, wiki: str, exclusive: set, out_dir: Path, thumbs,
         if path.suffix == ".html":
             html = path.read_text(encoding="utf-8", errors="replace")
             rewritten = rewrite_site_links(
-                rewrite_donate(rewrite_embeds(html, wiki, thumbs)), wikis)
+                rewrite_donate(rewrite_offline_only(
+                    rewrite_embeds(html, wiki, thumbs))), wikis)
             if rewritten != html:
                 add_bytes(tar, arcname, rewritten.encode("utf-8"), files,
                           loose_dir=out_dir / "files")
