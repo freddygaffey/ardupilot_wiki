@@ -1095,7 +1095,8 @@
             // A folded wiki's own cache is a leftover: common carries its
             // pages now, so it is retired rather than endlessly "updated".
             if (FOLDED_INTO_COMMON.indexOf(id) !== -1) {
-              if (storedIds.common) { dropFoldedCaches(COMMON); }
+              // The worker never serves this cache; retired either way.
+              dropFoldedCaches(COMMON);
               return null;
             }
             return caches.open(name).then(function (c) {
@@ -1583,7 +1584,7 @@
     if (hit.id === 'download-cache-btn') {
       // Saving opts in to offline mode (pwa.js).
       if (window.ApOffline) { window.ApOffline.enable(); renderOfflineMode(); }
-      saveSelectedReal(undefined, true).catch(function (err) {
+      Promise.resolve(saveSelectedReal(undefined, true)).catch(function (err) {
         var out = el('cache-progress');
         if (out) {
           out.hidden = false;
@@ -1637,7 +1638,18 @@
 
   // pwa.js does the removing; this redraws what is left, which is nothing.
   function turnOff() {
-    if (busyWithWhat()) { hideTurnOff(); renderOfflineMode(); return Promise.resolve(); }
+    var busy = busyWithWhat();
+    if (busy) {
+      hideTurnOff();
+      renderOfflineMode();
+      var out = el('check-result');
+      if (out) {
+        out.hidden = false;
+        out.textContent = 'Still running: ' + busy +
+          '. Wait for it or cancel it, then turn off.';
+      }
+      return Promise.resolve();
+    }
     hideTurnOff();
     return Promise.resolve(global.ApOffline.disable()).then(function () {
       notifyWorkerCachesChanged();

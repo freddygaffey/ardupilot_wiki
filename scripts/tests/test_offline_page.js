@@ -2008,6 +2008,33 @@ async function main() {
           !(await dev.match('/evil.html')) && !(await dev.match('/dev/../evil.html')));
   }
 
+  console.log('\nthe Cancel click still cancels');
+  {
+    const cachesObj = makeCaches();
+    const { doc, w, sandbox } = load({ manifest: MANIFEST, caches: cachesObj });
+    await settle();
+    // Held open, but honouring the abort like a real fetch.
+    sandbox.fetch = (u, o) => new Promise((res, rej) => {
+      if (o && o.signal) {
+        o.signal.addEventListener('abort', () => {
+          const e = new Error('aborted'); e.name = 'AbortError'; rej(e);
+        });
+      }
+    });
+    sandbox.window.fetch = sandbox.fetch;
+    doc.querySelector('.wiki-check[value="copter"]').click(); await settle();
+    const click = () => $(doc, 'download-cache-btn')
+      .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    click(); await settle();
+    check('the button reads Cancel while downloading',
+          /Cancel/.test($(doc, 'download-cache-btn').textContent));
+    click(); await settle(); await settle();
+    check('a second click cancels without throwing',
+          !/Cancel/.test($(doc, 'download-cache-btn').textContent) &&
+          /cancelled/i.test($(doc, 'cache-progress').textContent || ''),
+          JSON.stringify($(doc, 'cache-progress').textContent));
+  }
+
   console.log('\nthree ways the panel used to lie');
   {
     // A legacy folded cache: healed by the check, never "updated" forever.
