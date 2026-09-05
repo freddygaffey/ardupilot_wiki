@@ -1638,6 +1638,13 @@ async function main() {
                                          'rover/_images/50%25off.png': 'png' }));
     check('names that are not valid percent-encoding still save',
           odd.ok && odd.keys === 2, JSON.stringify(odd));
+    // The fragment hides the climb from the guard but not from the URL parser.
+    const frag = await attempt(tarBytes({ '%2e%2e/%2e%2e/sw.js#%': 'evil' }));
+    check('a fragment cannot smuggle an encoded climb past the guard',
+          !frag.ok && /unsafe archive path/.test(frag.error), JSON.stringify(frag));
+    const qs = await attempt(tarBytes({ 'rover/x.html?%': 'evil' }));
+    check('a query in an entry name rejects the archive',
+          !qs.ok && /unsafe archive path/.test(qs.error), JSON.stringify(qs));
   }
 
   console.log('\nevery parameter version in one tick, or none');

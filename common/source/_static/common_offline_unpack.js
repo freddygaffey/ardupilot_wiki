@@ -179,6 +179,11 @@
     // The URL parser decodes %2e, so the check runs on the decoded form. A
     // URIError means the name is not valid percent-encoding, so it cannot be
     // an encoded climb; the literal checks run on what decoded so far.
+    // Neither is legal in a Sphinx output path, and a fragment or query
+    // would let the URL parser see a different path than this guard checks.
+    if (name.indexOf('#') !== -1 || name.indexOf('?') !== -1) {
+      throw new Error('unsafe archive path ' + name);
+    }
     var probe = name;
     try {
       var next = decodeURIComponent(probe);

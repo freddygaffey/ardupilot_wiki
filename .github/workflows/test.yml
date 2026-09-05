@@ -78,7 +78,7 @@ jobs:
       - name: Surface suite failures as annotations
         if: failure()
         run: |
-          for f in suite_output.txt browser_output.txt build_errors.txt; do
+          for f in suite_output.txt browser_output.txt; do
             if [ -f "$f" ]; then
               grep -aE "FAIL |CHECK\(S\) FAILED|Error:" "$f" | tail -15 | while read -r line; do
                 echo "::error::${f}: ${line}"
