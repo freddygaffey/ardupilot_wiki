@@ -1961,6 +1961,64 @@ async function main() {
           JSON.stringify($(doc, 'dl-single').textContent));
   }
 
+  console.log('\na malformed parameter version is skipped, not fatal');
+  {
+    // A build-side slip in one param_versions entry must cost that version
+    // alone, never the wiki.
+    const man = JSON.parse(JSON.stringify(MANIFEST));
+    man.wikis[2].param_versions = [
+      { file: 'docs/parameters-Dev-stable-V4.7.0.html', channel: 'stable',
+        version: '4.7.0', label: '4.7.0', bytes: 1000, 'default': true },
+      { file: '../evil.html', channel: 'stable',
+        version: '9.9.9', label: 'evil', bytes: 1000 },
+    ];
+    const cachesObj = makeCaches();
+    const { doc, w } = load({ manifest: man, caches: cachesObj,
+      archives: { 'dev/index.html': '<html>dev</html>' },
+      served: { '/dev/docs/parameters-Dev-stable-V4.7.0.html': '<html>params</html>' } });
+    await settle();
+    doc.querySelector('.wiki-check[value="dev"]').click(); await settle();
+    $(doc, 'download-cache-btn').click();
+    for (let i = 0; i < 15; i++) { await settle(); }
+    const dev = await cachesObj.open('ardupilot-offline-dev');
+    check('the wiki still saves when one version name is malformed',
+          !!(await dev.match('/__ap_complete__')),
+          JSON.stringify($(doc, 'cache-progress').textContent));
+    check('the good parameter version is stored',
+          !!(await dev.match('/dev/docs/parameters-Dev-stable-V4.7.0.html')));
+    check('the malformed one is not stored anywhere',
+          !(await dev.match('/evil.html')) && !(await dev.match('/dev/../evil.html')));
+  }
+
+  console.log('\na finishing check leaves the buttons with the download that owns them');
+  {
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'dev', OLD_BUILD, { 'dev/index.html': ['h1', 'x'] });
+    const { doc, w, sandbox } = load({ manifest: MANIFEST, caches: cachesObj });
+    await settle();
+    // The check's table fetch is held open; archives never resolve.
+    let releaseTable = null;
+    const orig = sandbox.fetch;
+    sandbox.fetch = (u, o) => {
+      if (String(u).indexOf('-files.json') !== -1 || String(u).indexOf('ap-update=') !== -1) {
+        return new Promise((res) => { releaseTable = () => res({ ok: false }); });
+      }
+      if (String(u).indexOf('.tar') !== -1) { return new Promise(() => {}); }
+      return orig(u, o);
+    };
+    sandbox.window.fetch = sandbox.fetch;
+    $(doc, 'check-btn').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    await settle();
+    // A download starts while the check is still on the network.
+    doc.querySelector('.wiki-check[value="copter"]').click(); await settle();
+    $(doc, 'download-cache-btn').click(); await settle();
+    check('the download disables the check button', $(doc, 'check-btn').disabled);
+    if (releaseTable) { releaseTable(); }
+    for (let i = 0; i < 6; i++) { await settle(); }
+    check('the finishing check leaves it with the download that owns it',
+          $(doc, 'check-btn').disabled);
+  }
+
   console.log('\na running export can be cancelled from its own button');
   {
     const cachesObj = makeCaches();

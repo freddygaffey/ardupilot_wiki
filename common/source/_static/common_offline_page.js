@@ -539,7 +539,12 @@
     var stored = 0;
     return wanted.reduce(function (chain, v) {
       return chain.then(function () {
-        var url = paramCacheKey(w, v);
+        var url;
+        try { url = paramCacheKey(w, v); } catch (err) {
+          // One malformed version must not fail the whole wiki.
+          console.warn('[offline] parameter version skipped', err && err.message);
+          return undefined;
+        }
         return fetch(url, { cache: 'no-cache' }).then(function (r) {
           if (!r.ok) { throw new Error(url + ' (' + r.status + ')'); }
           return r.arrayBuffer();
