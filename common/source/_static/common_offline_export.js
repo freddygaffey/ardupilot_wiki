@@ -68,10 +68,11 @@
             setTimeout(function () { frame.remove(); }, 2000);
           });
         },
-        // Erroring the stream cancels the browser-side download outright.
+        // Erroring the stream cancels the browser-side download outright;
+        // the frame goes only after the writer, mirroring close().
         abort: function () {
-          frame.remove();
-          return writer.abort(new Error('cancelled')).catch(function () {});
+          return writer.abort(new Error('cancelled')).catch(function () {})
+            .then(function () { frame.remove(); });
         }
       });
     }
