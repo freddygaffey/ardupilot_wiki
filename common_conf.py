@@ -80,7 +80,17 @@ def setup(app):
 
 
 # Consumed by each wiki's conf.py; the theme's offline hooks (manifest,
-# pwa.js, the Offline menu entry) stay off for any other consumer.
-html_theme_options = {
-    "offline_hooks": True,
-}
+# pwa.js, the Offline menu entry) stay off for any other consumer. Requested
+# only when the installed theme declares the option, so the wiki also builds
+# against a theme that predates sphinx_rtd_theme PR 24.
+def _theme_offers(option):
+    import configparser
+    import os
+
+    import sphinx_rtd_theme
+    conf = configparser.ConfigParser()
+    conf.read(os.path.join(os.path.dirname(sphinx_rtd_theme.__file__), "theme.conf"))
+    return conf.has_option("options", option)
+
+
+html_theme_options = {"offline_hooks": True} if _theme_offers("offline_hooks") else {}
