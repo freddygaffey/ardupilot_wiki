@@ -2019,6 +2019,163 @@ async function main() {
           $(doc, 'check-btn').disabled);
   }
 
+  console.log('\nthe repair keeps the selection the reader made');
+  {
+    const cachesObj = makeCaches();
+    for (const id of ['copter', 'rover', 'dev']) {
+      (await cachesObj.open('ardupilot-offline-' + id)).put('/__ap_complete__',
+        completeMarker(MANIFEST.generated, id));
+    }
+    // A cancelled common download: the export must repair it first.
+    (await cachesObj.open('ardupilot-offline-common')).put('/_common/_images/x.png',
+      new FakeResponse('png'));
+    const { doc, w } = load({ manifest: MANIFEST, caches: cachesObj,
+      archives: { '_images/shared.png': 'png' } });
+    await settle();
+    let exported = null;
+    w.ArduPilotExport = { exportHtml: (ids) => { exported = ids.slice();
+      return Promise.resolve({ pages: 1 }); } };
+    // The reader keeps copter and drops rover from the export.
+    doc.querySelector('.wiki-check[value="rover"]').click(); await settle();
+    $(doc, 'dl-single').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    for (let i = 0; i < 15; i++) { await settle(); }
+    check('the repair does not widen the selection back to every saved wiki',
+          exported !== null && exported.join(',') === 'copter,dev',
+          JSON.stringify(exported));
+    check('and rover stays unticked afterwards',
+          !doc.querySelector('.wiki-check[value="rover"]').checked);
+    check('and the select-all header follows the restored boxes',
+          !$(doc, 'select-all').checked);
+  }
+
+  console.log('\nthe repair keeps the parameter versions the reader picked');
+  {
+    const man = JSON.parse(JSON.stringify(MANIFEST));
+    const mkv = (ver, dflt) => ({
+      file: `docs/parameters-Copter-stable-V${ver}.html`, channel: 'stable',
+      version: ver, label: ver, bytes: 4e6, ...(dflt ? { 'default': true } : {}) });
+    man.wikis[0].param_versions = [mkv('4.7.0', true), mkv('4.6.3')];
+    const cachesObj = makeCaches();
+    (await cachesObj.open('ardupilot-offline-copter')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'copter'));
+    (await cachesObj.open('ardupilot-offline-common')).put('/_common/_images/x.png',
+      new FakeResponse('png'));
+    const { doc, w } = load({ manifest: man, caches: cachesObj,
+      archives: { '_images/shared.png': 'png' } });
+    for (let i = 0; i < 8; i++) { await settle(); }
+    w.ArduPilotExport = { exportHtml: () => Promise.resolve({ pages: 1 }) };
+    // The reader picks an extra version beyond the default head.
+    const extra = doc.querySelector('.param-check[value*="4.6.3"]');
+    extra.checked = true;
+    extra.dispatchEvent(new w.Event('change', { bubbles: true })); await settle();
+    $(doc, 'dl-single').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    for (let i = 0; i < 15; i++) { await settle(); }
+    check('a picked parameter version survives the repair',
+          doc.querySelector('.param-check[value*="4.6.3"]').checked);
+  }
+
+  console.log('\nthe export button cannot start a second export mid-flight');
+  {
+    const cachesObj = makeCaches();
+    (await cachesObj.open('ardupilot-offline-copter')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'copter'));
+    (await cachesObj.open('ardupilot-offline-common')).put('/_common/_images/x.png',
+      new FakeResponse('png'));
+    const { doc, w } = load({ manifest: MANIFEST, caches: cachesObj,
+      archives: { '_images/shared.png': 'png' } });
+    await settle();
+    let calls = 0; let finish = null;
+    w.ArduPilotExport = { exportHtml: () => { calls++;
+      return new Promise((res) => { finish = () => res({ pages: 1 }); }); } };
+    const click = () => $(doc, 'dl-single')
+      .dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    // Clicks land during the pre-save repair and during the pack itself.
+    click(); click(); await settle(); click();
+    for (let i = 0; i < 10; i++) { await settle(); }
+    click(); await settle();
+    check('re-entrant clicks run exactly one export', calls === 1, calls + ' exports');
+    if (finish) { finish(); } await settle(); await settle();
+  }
+
+  console.log('\na stale wiki found mid-pack defers instead of downloading');
+  {
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'dev', OLD_BUILD, { 'dev/index.html': ['h1', 'x'] });
+    (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'common'));
+    const { doc, w, sandbox, fetchCalls } = load({ manifest: MANIFEST, caches: cachesObj });
+    await settle();
+    let released = false; const pend = [];
+    const orig = sandbox.fetch;
+    sandbox.fetch = (u, o) => {
+      if (!released && /offline-manifest\.json/.test(String(u))) {
+        return new Promise((res) => { pend.push(() => orig(u, o).then(res)); });
+      }
+      return orig(u, o);
+    };
+    sandbox.window.fetch = sandbox.fetch;
+    const click = (id) => $(doc, id).dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    click('check-btn'); await settle();
+    let finishExport = null;
+    w.ArduPilotExport = { exportHtml: () =>
+      new Promise((res) => { finishExport = () => res({ pages: 1 }); }) };
+    click('dl-single'); await settle();
+    // The reader's own selection must survive the deferral untouched.
+    doc.querySelector('.wiki-check[value="copter"]').click(); await settle();
+    const tars = () => fetchCalls.filter((u) => u.indexOf('.tar') !== -1).length;
+    const before = tars();
+    released = true; pend.forEach((f) => f());
+    for (let i = 0; i < 8; i++) { await settle(); }
+    check('a stale wiki found mid-pack starts no download', tars() === before,
+          tars() + ' tar fetches, ' + before + ' before');
+    check('the deferral does not rewrite the selection',
+          doc.querySelector('.wiki-check[value="copter"]').checked);
+    check('the deferral says what will happen instead',
+          /after the export/i.test($(doc, 'check-result').textContent || ''),
+          JSON.stringify($(doc, 'check-result').textContent));
+    finishExport(); await settle(); await settle();
+    check('the deferred update leaves the panel usable after the export',
+          !$(doc, 'check-btn').disabled && !$(doc, 'dl-single').disabled &&
+          !$(doc, 'clear-btn').disabled,
+          'check ' + $(doc, 'check-btn').disabled + ' export ' +
+          $(doc, 'dl-single').disabled + ' clear ' + $(doc, 'clear-btn').disabled);
+  }
+
+  console.log('\nan export finishing under a busy check withholds only its button');
+  {
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'dev', MANIFEST.generated, { 'dev/index.html': ['h1', 'x'] });
+    (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'common'));
+    const { doc, w, sandbox } = load({ manifest: MANIFEST, caches: cachesObj });
+    await settle();
+    let released = false; const pend = [];
+    const orig = sandbox.fetch;
+    sandbox.fetch = (u, o) => {
+      if (!released && /offline-manifest\.json/.test(String(u))) {
+        return new Promise((res) => { pend.push(() => orig(u, o).then(res)); });
+      }
+      return orig(u, o);
+    };
+    sandbox.window.fetch = sandbox.fetch;
+    const click = (id) => $(doc, id).dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    click('check-btn'); await settle();
+    let finishExport = null;
+    w.ArduPilotExport = { exportHtml: () =>
+      new Promise((res) => { finishExport = () => res({ pages: 1 }); }) };
+    click('dl-single'); await settle();
+    // The export ends first; the check is still on the network.
+    finishExport();
+    for (let i = 0; i < 6; i++) { await settle(); }
+    check('the export hands back everything but the busy check button',
+          $(doc, 'check-btn').disabled && !$(doc, 'dl-single').disabled,
+          'check ' + $(doc, 'check-btn').disabled + ' export ' + $(doc, 'dl-single').disabled);
+    released = true; pend.forEach((f) => f());
+    for (let i = 0; i < 8; i++) { await settle(); }
+    check('the finished check then frees its own button',
+          !$(doc, 'check-btn').disabled);
+  }
+
   console.log('\na finishing check cannot take the panel from a packing export');
   {
     const cachesObj = makeCaches();

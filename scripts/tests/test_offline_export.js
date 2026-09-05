@@ -369,9 +369,9 @@ async function main() {
   const t0 = Date.now();
   // Cancellation: the abort signal stops the export and aborts the sink.
   {
-    let aborted = false;
+    let aborted = false; let writes = 0;
     const flag = { aborted: false };
-    const sink = { write: () => Promise.resolve(),
+    const sink = { write: () => { writes++; return Promise.resolve(); },
                    close: () => Promise.resolve(),
                    abort: () => { aborted = true; return Promise.resolve(); } };
     const outcome = await api.exportHtml(wikis, 'x.html',
@@ -381,6 +381,10 @@ async function main() {
           !!outcome && outcome !== 'resolved' && outcome.name === 'AbortError',
           String(outcome && (outcome.name || outcome)));
     check('the cancelled export aborts its sink', aborted);
+    // Cancelled at the first progress call (10 pages in): the pack must stop
+    // there, not run every remaining page and reject at the end.
+    check('the cancel stops the work where it lands', writes <= 15,
+          writes + ' writes for a ' + '44-page fixture');
   }
 
   // A cancel after the last page must still cancel, not quietly save.
