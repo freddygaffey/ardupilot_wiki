@@ -45,9 +45,9 @@ check("a bare comment marker hides its block too",
       flagged("..\n\n   " +
               RAW.format(src="https://youtu.be/x").replace("\n", "\n   ")) == [])
 check("the directive is matched whatever its case",
-      flagged(".. RAW:: HTML\n\n   <iframe src=\"https://youtu.be/x\"></iframe>\n") == [3])
+      flagged('.. RAW:: HTML\n\n   <iframe src="https://youtu.be/x"></iframe>\n') == [3])
 check("a substitution definition builds and is flagged",
-      flagged(".. |vid| raw:: html\n\n   <iframe src=\"https://youtu.be/x\"></iframe>\n") == [3])
+      flagged('.. |vid| raw:: html\n\n   <iframe src="https://youtu.be/x"></iframe>\n') == [3])
 check("a raw block shown in a literal block is an example, not an embed",
       flagged("For example::\n\n   " + RAW.format(src="https://www.youtube.com/embed/x").replace("\n", "\n   ")) == [])
 check("a raw block shown in a code-block is an example too",
