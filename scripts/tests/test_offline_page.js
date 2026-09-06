@@ -1982,7 +1982,7 @@ async function main() {
     // Entries but no marker: a cancelled common download left behind.
     (await cachesObj.open('ardupilot-offline-common')).put('/_common/_images/x.png',
       new FakeResponse('png'));
-    const { doc, w, fetchCalls } = load({ manifest: MANIFEST, caches: cachesObj,
+    const { doc, w, fetchCalls, apOffline } = load({ manifest: MANIFEST, caches: cachesObj,
       archives: { '_images/shared.png': 'png bytes' } });
     await settle();
     w.ArduPilotExport = { exportHtml: () => Promise.resolve({ pages: 3 }) };
@@ -1998,6 +1998,9 @@ async function main() {
     check('and the export then completes',
           /Saved .*copter/.test($(doc, 'dl-single').textContent || ''),
           JSON.stringify($(doc, 'dl-single').textContent));
+    check('the pre-save opted into offline mode like Save does',
+          apOffline.calls.indexOf('enable') !== -1,
+          JSON.stringify(apOffline.calls));
   }
 
   console.log('\na malformed parameter version is skipped, not fatal');
@@ -2123,6 +2126,26 @@ async function main() {
     check('and the panel does not claim an update completed',
           !/update complete|downloaded again/i.test($(doc, 'check-result').textContent || ''),
           JSON.stringify($(doc, 'check-result').textContent));
+  }
+
+  console.log('\na mid-save build rotation names itself');
+  {
+    // Correct hashes throughout: only the missing check can fire, so its
+    // mutation cannot hide behind the damaged message.
+    const cachesObj = makeCaches();
+    const body = '<html>a</html>';
+    const { doc } = load({ manifest: MANIFEST, caches: cachesObj,
+      archives: { 'copter/index.html': body },
+      tables: { 'copter-files.json': { 'copter/index.html': await fileHash(body),
+                                       'copter/docs/landed-later.html': 'h2' } } });
+    await settle();
+    doc.querySelector('.wiki-check[value="copter"]').click(); await settle();
+    $(doc, 'download-cache-btn').click();
+    for (let i = 0; i < 12; i++) { await settle(); }
+    check('a page the table names but the archive lacks says new build',
+          /published a new build/i.test($(doc, 'cache-progress').textContent || '') &&
+          !(await (await cachesObj.open('ardupilot-offline-copter')).match('/__ap_complete__')),
+          JSON.stringify($(doc, 'cache-progress').textContent));
   }
 
   console.log('\na table of null is not a table');
