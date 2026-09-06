@@ -14,7 +14,8 @@ self.addEventListener('activate', (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
     await Promise.all(names
-      .filter((name) => name.startsWith('ardupilot-'))
+      .filter((name) => name.startsWith('ardupilot-') ||
+                        name === 'ap-offline-off')
       .map((name) => caches.delete(name)));
 
     // The page that registered this worker is not controlled by it yet.

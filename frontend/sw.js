@@ -145,6 +145,15 @@ self.addEventListener('message', (event) => {
     // Pages this instance already controls keep it until they reload;
     // from here it neither caches nor answers, it only passes through.
     offlineOff = true;
+    const done = caches.open(OFF_SENTINEL).catch(() => undefined);
+    event.waitUntil(done.then(() => {
+      if (data.port) { data.port.postMessage({ type: 'OFFLINE_OFF_ACK' }); }
+    }));
+    return;
+  }
+  if (data.type === 'OFFLINE_ON') {
+    offlineOff = false;
+    event.waitUntil(caches.delete(OFF_SENTINEL).catch(() => undefined));
     return;
   }
   if (data.type === 'EXPORT_START') {
@@ -264,7 +273,9 @@ function inflate(response) {
 }
 
 // Exact matches only: ignoreSearch walks the whole cache (0.2 ms vs 300 ms).
-async function heldOffline(request, cache) {
+// savedOnly limits the search to complete saved wikis: their copies are
+// rewritten in place by updates, which is what makes them authoritative.
+async function heldOffline(request, cache, savedOnly) {
   const shapes = storedShapes(new URL(request.url));
 
   if (cache) {
@@ -290,6 +301,9 @@ async function heldOffline(request, cache) {
   // Not caches.match(): it would answer from a half-written download.
   const names = await caches.keys();
   for (const name of names) {
+    if (savedOnly && !name.startsWith(OFFLINE_CACHE_PREFIX)) {
+      continue;
+    }
     if (name.startsWith(OFFLINE_CACHE_PREFIX) && !(await isComplete(name))) {
       continue;
     }
@@ -374,8 +388,10 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
   // A saved wiki's page is rewritten and would always read as "changed".
   const fromPageCache = await heldOffline(request, cache);
   // The saved copy leads: updates rewrite it in place, while the browsing
-  // cache holds whatever was read last, which may be older.
-  const fromSaved = await heldOffline(request);
+  // cache holds whatever was read last, which may be older. savedOnly, or
+  // an ordinary browsing hit would masquerade as a saved one and silence
+  // the changed-page announcement for readers who never saved anything.
+  const fromSaved = await heldOffline(request, undefined, true);
   const cached = fromSaved || fromPageCache;
 
   // Clone before the browser consumes the body. Announced only when the
@@ -610,6 +626,7 @@ function sanitizeForCache(response) {
 
 async function keep(cacheName, key, response) {
   try {
+    await offRestored;
     if (offlineOff) { return; }
     const cache = await caches.open(cacheName);
     await cache.put(key, sanitizeForCache(response.clone()));
@@ -645,7 +662,15 @@ function safely(handler, request) {
 }
 
 // Set when the reader turns offline mode off while pages are still open.
+// The browser freely terminates and restarts idle workers, so the flag is
+// also persisted as a sentinel cache outside the ardupilot- wipe prefix,
+// and restored before anything is stored.
+const OFF_SENTINEL = 'ap-offline-off';
 let offlineOff = false;
+const offRestored = Promise.resolve()
+  .then(() => caches.has(OFF_SENTINEL))
+  .then((off) => { if (off) { offlineOff = true; } })
+  .catch(() => undefined);
 
 self.addEventListener('fetch', (event) => {
   const request = event.request;
