@@ -32,6 +32,7 @@ function liftLookup(src) {
   for (const re of [/const ASSET_EXT_RE\s*=\s*[\s\S]*?;/,
                     /const OFF_SENTINEL\s*=\s*[^;]*;/,
                     /let offlineOff\s*=\s*[^;]*;/,
+                    /let offCommanded\s*=\s*[^;]*;/,
                     /const offRestored[\s\S]*?catch\(\(\) => undefined\);/,
                     /const CONTENT_EXPECTATIONS\s*=\s*\[[\s\S]*?\n\];/,
                     /const OFFLINE_CACHE_PREFIX\s*=\s*[^;]*;/,
@@ -790,6 +791,25 @@ async function checkChangeAnnouncements() {
         JSON.stringify(w2.seen.posted));
 }
 
+async function checkCommandOutranksRestore() {
+  console.log('\nservice worker: an explicit ON outranks the startup restore\n');
+  const w = bootWorker({ existingCaches: ['ap-offline-off'],
+    serve: () => ({ ct: 'text/html', body: '<html>x</html>' }) });
+  let release;
+  const slow = new Promise((res) => { release = res; });
+  // The read began before the ON's delete: it answers from the old world.
+  w.setCachesHas(async () => { await slow; return true; });
+  // The page re-enables while the sentinel read is still in flight.
+  w.message({ type: 'OFFLINE_ON' });
+  release();
+  const a = w.ask('/dev/docs/back-on.html');
+  if (a) { await a; }
+  await Promise.all(w.seen.waited || []);
+  check('a re-enable during the restore is not overwritten by it',
+        (w.seen.putValues || []).length > 0 && a !== undefined,
+        'puts=' + (w.seen.putValues || []).length + ' answered=' + (a !== undefined));
+}
+
 async function checkOffRestoreWinsTheRace() {
   console.log('\nservice worker: a slow sentinel read still beats the first store\n');
   // The sentinel read resolves only after the first request is in flight:
@@ -1228,6 +1248,7 @@ async function main() {
   await checkStoredCopiesAreClean();
   await checkOfflineOffQuietsTheWorker();
   await checkChangeAnnouncements();
+  await checkCommandOutranksRestore();
   await checkOffRestoreWinsTheRace();
   await checkOffSurvivesRestart();
   await checkSavedCopyOutranksBrowsingCopy();

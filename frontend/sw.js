@@ -144,6 +144,7 @@ self.addEventListener('message', (event) => {
   if (data.type === 'OFFLINE_OFF') {
     // Pages this instance already controls keep it until they reload;
     // from here it neither caches nor answers, it only passes through.
+    offCommanded = true;
     offlineOff = true;
     const done = caches.open(OFF_SENTINEL).catch(() => undefined);
     event.waitUntil(done.then(() => {
@@ -152,6 +153,7 @@ self.addEventListener('message', (event) => {
     return;
   }
   if (data.type === 'OFFLINE_ON') {
+    offCommanded = true;
     offlineOff = false;
     event.waitUntil(caches.delete(OFF_SENTINEL).catch(() => undefined));
     return;
@@ -667,9 +669,12 @@ function safely(handler, request) {
 // and restored before anything is stored.
 const OFF_SENTINEL = 'ap-offline-off';
 let offlineOff = false;
+// An explicit command outranks the startup restore: an OFFLINE_ON landing
+// while the sentinel read is in flight must not be overwritten by it.
+let offCommanded = false;
 const offRestored = Promise.resolve()
   .then(() => caches.has(OFF_SENTINEL))
-  .then((off) => { if (off) { offlineOff = true; } })
+  .then((off) => { if (off && !offCommanded) { offlineOff = true; } })
   .catch(() => undefined);
 
 self.addEventListener('fetch', (event) => {
