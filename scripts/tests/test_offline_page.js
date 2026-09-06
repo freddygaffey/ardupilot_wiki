@@ -2068,6 +2068,37 @@ async function main() {
           !!(await c.match('/__ap_complete__')));
   }
 
+  console.log('\nan incremental save cannot hide a failure behind a stored sibling');
+  {
+    const man = JSON.parse(JSON.stringify(MANIFEST));
+    man.wikis[0].param_versions = [
+      { file: 'docs/parameters-Copter-stable-V4.7.0.html', channel: 'stable',
+        version: '4.7.0', label: '4.7.0', bytes: 4e6, 'default': true },
+      { file: 'docs/parameters-Copter-stable-V4.6.3.html', channel: 'stable',
+        version: '4.6.3', label: '4.6.3', bytes: 4e6 },
+    ];
+    const cachesObj = makeCaches();
+    for (const id of ['common', 'copter']) {
+      (await cachesObj.open('ardupilot-offline-' + id)).put('/__ap_complete__',
+        completeMarker(MANIFEST.generated, id));
+    }
+    // One version already stored and reachable; the newly picked one is not.
+    (await cachesObj.open('ardupilot-offline-copter')).put(
+      '/copter/docs/parameters-Copter-stable-V4.7.0.html', new FakeResponse('<html>v470</html>'));
+    const { doc, w } = load({ manifest: man, caches: cachesObj,
+      served: { '/copter/docs/parameters-Copter-stable-V4.7.0.html': '<html>v470</html>' } });
+    for (let i = 0; i < 8; i++) { await settle(); }
+    const box = doc.querySelector('.param-check[value*="4.6.3"]');
+    box.checked = true;
+    box.dispatchEvent(new w.Event('change', { bubbles: true })); await settle();
+    $(doc, 'download-cache-btn').dispatchEvent(
+      new w.MouseEvent('click', { bubbles: true }));
+    for (let i = 0; i < 12; i++) { await settle(); }
+    check('the unreachable pick fails the save instead of hiding',
+          /could not fetch the parameter pages/i.test($(doc, 'cache-progress').textContent || ''),
+          JSON.stringify($(doc, 'cache-progress').textContent));
+  }
+
   console.log('\na parameter page the storage refuses fails the save out loud');
   {
     const cachesObj = makeCaches();

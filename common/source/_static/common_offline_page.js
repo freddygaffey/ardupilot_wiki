@@ -562,9 +562,11 @@
            '</tr>';
   }
 
-  /** Fetch and store the versions chosen for one wiki. */
-  function storeParams(w, cache, report) {
-    var wanted = pickedFiles(w);
+  /** Fetch and store the versions chosen for one wiki; onlyMissing limits
+   * an incremental save to what the cache does not yet hold, so a failure
+   * cannot hide behind an already-stored sibling. */
+  function storeParams(w, cache, report, onlyMissing) {
+    var wanted = onlyMissing ? missingParams(w) : pickedFiles(w);
     if (!wanted.length) { return Promise.resolve(0); }
     var stored = 0;
     var attempted = 0, unreachable = 0;
@@ -977,7 +979,7 @@
               // are owed. They live outside the archive and its table.
               return caches.open(cacheName).then(function (cache) {
                 report('Saving ' + entry.name + ' parameter versions…');
-                return storeParams(entry, cache, report);
+                return storeParams(entry, cache, report, true);
               }).then(function () { rowProgress(entry.id, 100, 'done'); });
             }
             // Unpacked over the existing copy, which stays readable throughout;

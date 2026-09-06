@@ -30,6 +30,9 @@ function liftLookup(src) {
   let out = '';
   // Module-level state the matcher consults, taken with it.
   for (const re of [/const ASSET_EXT_RE\s*=\s*[\s\S]*?;/,
+                    /const OFF_SENTINEL\s*=\s*[^;]*;/,
+                    /let offlineOff\s*=\s*[^;]*;/,
+                    /const offRestored[\s\S]*?catch\(\(\) => undefined\);/,
                     /const CONTENT_EXPECTATIONS\s*=\s*\[[\s\S]*?\n\];/,
                     /const OFFLINE_CACHE_PREFIX\s*=\s*[^;]*;/,
                     /const FOLDED_INTO_COMMON\s*=\s*[^;]*;/,
@@ -132,6 +135,7 @@ function run(workerSrc, label) {
     console,
     caches: {
       match: async (r) => (store.has(keyOf(r)) ? asResponse(keyOf(r)) : undefined),
+      has: async () => false,
       // Every offline cache a reader would hold.
       keys: async () => [...new Set([...store].filter((k) => k.startsWith('/'))
         .map(holderOf))],
@@ -293,6 +297,7 @@ function bootWorker({ networkFails = false, serve = null,
       registration: { unregister: async () => { seen.unregistered = true; return true; } },
     },
     caches: {
+      has: async () => false,
       match: async (r) => {
         const k = String(r && r.url ? r.url : r);
         seen.cacheReads.push(k);
@@ -306,7 +311,11 @@ function bootWorker({ networkFails = false, serve = null,
         }
         return undefined;
       },
-      open: async (name) => cacheFor(name),
+      open: async (name) => {
+        if (cacheNames.indexOf(name) === -1) { cacheNames.push(name); }
+        return cacheFor(name);
+      },
+      has: async (name) => cacheNames.indexOf(name) !== -1,
       keys: async () => cacheNames.slice(),
       delete: async (n) => {
         seen.deleted.push(n);
@@ -363,7 +372,12 @@ function bootWorker({ networkFails = false, serve = null,
 
   /** Deliver one message event, as a page's postMessage would. */
   const message = (data) => {
-    if (listeners.message) { listeners.message({ data }); }
+    if (listeners.message) {
+      listeners.message({ data, waitUntil: (pr) => {
+        seen.waited = seen.waited || [];
+        seen.waited.push(pr);
+      } });
+    }
   };
 
   /** Dispatch one request and return what the worker answered with, if it did. */
@@ -735,7 +749,7 @@ async function checkSavedCopyOutranksBrowsingCopy() {
     offlineCopy: { path: '/dev/docs/page.html',
                    body: '<html>saved fresh</html>', ct: 'text/html' },
     existingCaches: ['ardupilot-pages-v11'],
-    runtimeImages: null,
+    runtimeImages: { '/dev/docs/page.html': '<html>stale browsing</html>' },
     networkFails: true,
   });
   const a = w.ask('/dev/docs/page.html', { mode: 'navigate', destination: 'document' });
@@ -743,6 +757,48 @@ async function checkSavedCopyOutranksBrowsingCopy() {
   const body = resp && resp.text ? await resp.text() : String(resp && resp.body || '');
   check('offline, the saved wiki copy is the one served',
         body.indexOf('saved fresh') !== -1, JSON.stringify(body.slice(0, 40)));
+}
+
+async function checkChangeAnnouncements() {
+  console.log('\nservice worker: change announcements know which cache spoke\n');
+  // An ordinary browsing reader with no saved wiki still hears of changes.
+  const w = bootWorker({
+    existingCaches: ['ardupilot-pages-v11'],
+    runtimeImages: { '/dev/docs/page.html': '<html>stale browsing</html>' },
+    serve: () => ({ ct: 'text/html', body: '<html>fresher</html>' }),
+  });
+  const a = w.ask('/dev/docs/page.html', { mode: 'navigate', destination: 'document' });
+  if (a) { await a; }
+  await Promise.all(w.seen.waited || []);
+  check('a browsing reader with no saved wiki is told the page changed',
+        (w.seen.posted || []).some((m) => m && m.type === 'PAGE_UPDATED'),
+        JSON.stringify(w.seen.posted));
+  // A saved-wiki answer must NOT announce: its copy is rewritten by design.
+  const w2 = bootWorker({
+    offlineCopy: { path: '/dev/docs/page.html',
+                   body: '<html>saved</html>', ct: 'text/html' },
+    serve: () => ({ ct: 'text/html', body: '<html>network</html>' }),
+  });
+  const b = w2.ask('/dev/docs/page.html', { mode: 'navigate', destination: 'document' });
+  if (b) { await b; }
+  await Promise.all(w2.seen.waited || []);
+  check('a saved-wiki answer announces nothing',
+        !(w2.seen.posted || []).some((m) => m && m.type === 'PAGE_UPDATED'),
+        JSON.stringify(w2.seen.posted));
+}
+
+async function checkOffSurvivesRestart() {
+  console.log('\nservice worker: offline-off survives a worker restart\n');
+  // A fresh instance finds the sentinel a previous instance persisted.
+  const w = bootWorker({ existingCaches: ['ap-offline-off'],
+    serve: () => ({ ct: 'text/html', body: '<html>x</html>' }) });
+  const a = w.ask('/dev/docs/one.html');
+  if (a) { await a; }
+  await Promise.all(w.seen.waited || []);
+  const b = w.ask('/dev/docs/two.html');
+  check('a restarted worker stores nothing and goes quiet',
+        (w.seen.putValues || []).length === 0 && b === undefined,
+        'puts=' + (w.seen.putValues || []).length + ' answered=' + (b !== undefined));
 }
 
 async function checkExportStreamOrigin() {
@@ -1147,6 +1203,8 @@ async function main() {
   await checkNoFalseUpdateToast();
   await checkStoredCopiesAreClean();
   await checkOfflineOffQuietsTheWorker();
+  await checkChangeAnnouncements();
+  await checkOffSurvivesRestart();
   await checkSavedCopyOutranksBrowsingCopy();
   await checkExportStreamOrigin();
   await checkFullStorageFailsOpen();

@@ -200,6 +200,13 @@
     } catch (err) {
       /* private browsing; the registration below still holds for this tab */
     }
+    // A leftover off sentinel would keep the next worker silent.
+    try {
+      if (window.caches) { window.caches.delete('ap-offline-off'); }
+      if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'OFFLINE_ON' });
+      }
+    } catch (err) { /* nothing stored, nothing to clear */ }
     registerServiceWorker();
   }
 
@@ -213,13 +220,24 @@
       /* private browsing */
     }
     // A worker already controlling open pages keeps them until they
-    // reload; told this, it stops caching and answering meanwhile.
+    // reload; told this, it stops caching and answering meanwhile. The
+    // wipe waits briefly for its acknowledgement, so an in-flight store
+    // cannot recreate what is about to be deleted.
+    var quieted = Promise.resolve();
     try {
       if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage({ type: 'OFFLINE_OFF' });
+        quieted = new Promise(function (resolve) {
+          var channel = new MessageChannel();
+          var timer = setTimeout(resolve, 500);
+          channel.port1.onmessage = function () { clearTimeout(timer); resolve(); };
+          navigator.serviceWorker.controller.postMessage(
+            { type: 'OFFLINE_OFF', port: channel.port2 }, [channel.port2]);
+        });
       }
     } catch (err) { /* no controller, nothing to quiet */ }
-    var wipe = window.caches ? window.caches.keys().then(function (names) {
+    var wipe = window.caches ? quieted.then(function () {
+      return window.caches.keys();
+    }).then(function (names) {
       return Promise.all(names.filter(function (name) {
         return name.indexOf('ardupilot-') === 0;
       }).map(function (name) { return window.caches.delete(name); }));
