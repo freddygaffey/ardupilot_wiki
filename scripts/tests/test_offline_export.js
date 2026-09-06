@@ -568,31 +568,31 @@ async function main() {
   const tabFns = liftFunctions(['showAllTabs'], EXPORTER);
   check('the tab reveal lifted from the exporter', tabFns !== null);
   if (tabFns) {
+    // Real Sphinx shape: a tablist of buttons, then the panels after it.
     const tabbed =
       '<div class="sphinx-tabs docutils container">' +
-      '<button class="sphinx-tabs-tab" id="tab-0-0-0">Latest</button>' +
-      '<button class="sphinx-tabs-tab" id="tab-0-0-1">Prior to 4.7</button>' +
-      '<div class="sphinx-tabs-panel" id="panel-0-0-0">new steps</div>' +
-      '<div class="sphinx-tabs-panel" hidden="true" id="panel-0-0-1">old steps</div>' +
+      '<div role="tablist" aria-label="Tabbed content">' +
+      '<button class="sphinx-tabs-tab" id="tab-0-0-0" name="0-0">Latest</button>' +
+      '<button class="sphinx-tabs-tab" id="tab-0-0-1" name="0-1">Prior to 4.7</button>' +
+      '</div>' +
+      '<div class="sphinx-tabs-panel" id="panel-0-0-0" name="0-0">new steps</div>' +
+      '<div class="sphinx-tabs-panel" hidden="true" id="panel-0-0-1" name="0-1">old steps</div>' +
       '</div>';
     const shown = tabFns.showAllTabs(tabbed);
     check('a non-default tab panel is no longer hidden after export',
           shown.indexOf('hidden') === -1 && shown.indexOf('old steps') !== -1,
           shown.indexOf('hidden') !== -1 ? 'still hidden' : 'revealed');
-    // The markup must stay balanced: adjacent tab buttons each become their
-    // own element, not swallow the siblings that follow them.
-    const strayButtons = (shown.match(/<\/button>/gi) || []).length;
+    check('the inert tablist of buttons is dropped',
+          shown.indexOf('<button') === -1 && shown.indexOf('role="tablist"') === -1);
     const opens = (shown.match(/<div\b/gi) || []).length;
     const closes = (shown.match(/<\/div>/gi) || []).length;
-    check('every tab button is closed, none left stray',
-          strayButtons === 0, strayButtons + ' stray </button>');
     check('the div tags balance after the reveal', opens === closes,
           opens + ' opens vs ' + closes + ' closes');
-    // The two labels stay siblings, not one nested in the other.
-    check('the two tab labels do not swallow each other',
-          shown.indexOf('Latest') < shown.indexOf('Prior to 4.7') &&
-          /Latest<\/div>[\s\S]*Prior to 4\.7/.test(shown),
-          'labels: ' + JSON.stringify(shown.slice(shown.indexOf('Latest'), shown.indexOf('Prior to 4.7') + 12)));
+    // Each label now sits immediately before its own panel's content.
+    check('each label reads directly before its own body',
+          /Latest<\/strong><\/p>new steps/.test(shown) &&
+          /Prior to 4\.7<\/strong><\/p>old steps/.test(shown),
+          JSON.stringify(shown));
     check('the panel with no tabs is left untouched',
           tabFns.showAllTabs('<p>plain page</p>') === '<p>plain page</p>');
   }

@@ -1146,10 +1146,15 @@ async function checkEvictPromotedSavedCopies() {
     ]),
     'ardupilot-images-v11': new Map([
       ['/plane/_images/board.png', ['promoted', true]],
-      ['/plane/_images/shared.png', ['promoted shared', true]],
+      // A shared image under dev, promoted from the common cache: marked,
+      // with no ardupilot-offline-dev present, so a prefix guess would miss it.
+      ['/dev/_images/shared.png', ['promoted shared', true]],
       ['/plane/_images/photo.png', ['browsed image', false]],
     ]),
-    'ardupilot-static-v11': new Map(),
+    'ardupilot-static-v11': new Map([
+      // A fingerprinted network asset: never promoted, so never marked.
+      ['/dev/_static/theme.css?v=abc', ['network build A', false]],
+    ]),
   };
   const bodyResp = ([b, promoted]) => ({
     headers: { get: (h) => (String(h).toLowerCase() === 'x-ap-promoted'
@@ -1200,12 +1205,14 @@ async function checkEvictPromotedSavedCopies() {
           !stores['ardupilot-pages-v11'].has('/plane/docs/x.html'));
     check('a marked promoted image is evicted',
           !stores['ardupilot-images-v11'].has('/plane/_images/board.png'));
-    check('a marked promoted shared image is evicted',
-          !stores['ardupilot-images-v11'].has('/plane/_images/shared.png'));
+    check('a marked shared image under dev, held in common, is evicted',
+          !stores['ardupilot-images-v11'].has('/dev/_images/shared.png'));
     check('an unmarked browsed page is kept',
           stores['ardupilot-pages-v11'].has('/plane/docs/parameters-Plane-stable-V4.7.9.html'));
     check('an unmarked browsed image is kept',
           stores['ardupilot-images-v11'].has('/plane/_images/photo.png'));
+    check('an unmarked fingerprinted network asset is kept',
+          stores['ardupilot-static-v11'].has('/dev/_static/theme.css?v=abc'));
   });
 }
 
