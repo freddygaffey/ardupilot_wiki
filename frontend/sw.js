@@ -247,9 +247,11 @@ async function offlineCacheFor(path) {
     const fresh = new Set(await caches.keys());
     if (generation === cacheNamesGeneration) {
       knownCacheNames = fresh;
-    } else if (!knownCacheNames) {
-      // Invalidated mid-read: answer from the fresh copy without keeping it.
-      return fresh.has(name) ? caches.open(name) : undefined;
+    } else {
+      // Invalidated mid-read: this snapshot predates the change, and
+      // answering from it could resurrect a cache the reader deleted.
+      // The exhaustive scan behind this lookup stays correct, just slower.
+      return undefined;
     }
   }
   if (!knownCacheNames.has(name)) {
