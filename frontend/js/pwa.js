@@ -314,7 +314,9 @@
               if (!there || healGeneration !== offlineGeneration) { return; }
               return clearOffSentinel();
             }, function () {
-              // The probe failed; clearOffSentinel's own retry is the point.
+              // The probe failed; clearOffSentinel's own retry is the point,
+              // but not on top of an opt-out that started meanwhile.
+              if (healGeneration !== offlineGeneration) { return; }
               return clearOffSentinel();
             })
           : Promise.resolve();

@@ -1120,38 +1120,65 @@ function checkEvictPromotedSavedCopies() {
   const lifted = liftLookup(src);
   if (lifted === null) { check('evict: lift', false); return; }
 
-  // A tailored cache store: named caches, each a Map of key -> body.
+  // Named caches, each a Map of key -> body. The saved wikis hold the
+  // authoritative copies; the browsing caches hold promotions plus one page
+  // the reader browsed to that no saved wiki carries.
   const stores = {
-    'ardupilot-pages-v11': new Map([['/plane/docs/x.html', 'stale promoted']]),
-    'ardupilot-images-v11': new Map([['/plane/_images/board.png', 'stale promoted']]),
-    'ardupilot-static-v11': new Map([['/dev/_static/theme.js', 'ordinary browsing']]),
-    'ardupilot-offline-plane': new Map([['/__ap_complete__', 'x'],
-                                        ['/plane/docs/x.html', 'fresh saved']]),
+    'ardupilot-pages-v11': new Map([
+      ['/plane/docs/x.html', 'stale promoted'],
+      ['/plane/docs/parameters-Plane-stable-V4.7.9.html', 'independently browsed'],
+    ]),
+    'ardupilot-images-v11': new Map([
+      ['/plane/_images/board.png', 'stale promoted'],
+      ['/plane/_images/shared.png', 'stale shared promoted'],
+    ]),
+    'ardupilot-offline-plane': new Map([
+      ['/__ap_complete__', 'x'],
+      ['/plane/docs/x.html', 'fresh saved'],
+      ['/plane/_images/board.png', 'fresh saved'],
+    ]),
+    // Shared images live in common under the /_common/ rewrite.
+    'ardupilot-offline-common': new Map([
+      ['/__ap_complete__', 'x'],
+      ['/_common/_images/shared.png', 'fresh shared'],
+    ]),
   };
+  const bodyResp = (b) => ({ headers: { get: () => null }, clone() { return this; },
+                             body: b, status: 200, ok: true });
   const cacheObj = (name) => ({
     keys: async () => [...(stores[name] || new Map()).keys()]
       .map((k) => ({ url: 'https://x' + k })),
     delete: async (r) => (stores[name] || new Map())
       .delete(String(r.url).replace(/^https?:\/\/[^/]+/, '')),
-    match: async () => undefined,
+    match: async (r) => {
+      const k = String(r && r.url ? r.url : r).replace(/^https?:\/\/[^/]+/, '');
+      const m = stores[name];
+      return m && m.has(k) ? bodyResp(m.get(k)) : undefined;
+    },
     put: async () => undefined,
   });
   const ctx = {
     URL, console: { warn() {}, log() {}, error() {} },
-    caches: { keys: async () => Object.keys(stores), open: async (n) => cacheObj(n) },
+    caches: {
+      keys: async () => Object.keys(stores),
+      open: async (n) => cacheObj(n),
+    },
   };
   vm.createContext(ctx);
   vm.runInContext(lifted + 'this.evict=evictPromotedSavedCopies;', ctx);
 
   return ctx.evict().then(() => {
-    check('the stale promoted page is evicted',
+    check('a promoted page a saved wiki holds is evicted',
           !stores['ardupilot-pages-v11'].has('/plane/docs/x.html'));
-    check('the stale promoted image is evicted',
+    check('a promoted own-wiki image is evicted',
           !stores['ardupilot-images-v11'].has('/plane/_images/board.png'));
-    check('an ordinary browsing entry for no saved wiki is kept',
-          stores['ardupilot-static-v11'].has('/dev/_static/theme.js'));
-    check('the saved wiki copy itself is untouched',
-          stores['ardupilot-offline-plane'].has('/plane/docs/x.html'));
+    check('a promoted shared image, held only in common, is evicted too',
+          !stores['ardupilot-images-v11'].has('/plane/_images/shared.png'));
+    check('a page the reader browsed that no saved wiki carries is kept',
+          stores['ardupilot-pages-v11'].has('/plane/docs/parameters-Plane-stable-V4.7.9.html'));
+    check('the saved wiki copies themselves are untouched',
+          stores['ardupilot-offline-plane'].has('/plane/docs/x.html') &&
+          stores['ardupilot-offline-common'].has('/_common/_images/shared.png'));
   });
 }
 

@@ -116,6 +116,9 @@ self.addEventListener('activate', (event) => {
         .map((name) => caches.delete(name))
     );
     await self.clients.claim();
+    // An update run by an uncontrolled Offline page leaves stale promoted
+    // copies no CACHES_CHANGED reached; a fresh worker clears them.
+    await evictPromotedSavedCopies();
     await warmTheme().catch(() => undefined);
     await warmThirdParty().catch(() => undefined);
   })());
@@ -225,15 +228,19 @@ function likelyCacheName(path) {
 // stale and must be dropped so the fresh saved bytes are promoted next time.
 async function evictPromotedSavedCopies() {
   try {
-    const savedNames = new Set(
-      (await caches.keys()).filter((n) => n.startsWith(OFFLINE_CACHE_PREFIX)));
-    if (!savedNames.size) { return; }
+    const hasSaved = (await caches.keys())
+      .some((n) => n.startsWith(OFFLINE_CACHE_PREFIX));
+    if (!hasSaved) { return; }
     for (const runtime of [PAGE_CACHE, IMAGE_CACHE, STATIC_CACHE]) {
       const cache = await caches.open(runtime);
       const requests = await cache.keys();
       await Promise.all(requests.map(async (request) => {
-        const name = likelyCacheName(new URL(request.url).pathname);
-        if (name && savedNames.has(name)) { await cache.delete(request); }
+        // Only a copy a complete saved wiki actually holds is a promotion;
+        // heldOffline resolves the shared-image rewrite too, so this catches
+        // /dev/_images paths served from the common cache, and spares a page
+        // the reader browsed to that no saved wiki carries.
+        const saved = await heldOffline(request, undefined, true);
+        if (saved) { await cache.delete(request); }
       }));
     }
   } catch (err) {
