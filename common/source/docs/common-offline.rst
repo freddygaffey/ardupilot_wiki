@@ -176,7 +176,8 @@ Turning it off removes everything saved in the browser.
      <div class="apo-subhead">Save as a static HTML page</div>
      <div class="apo-files">
        <p class="apo-hint" style="margin-top:0">Built on this device from the
-         wikis ticked above. Anything not saved yet is downloaded first, so
+         wikis ticked above. Anything not saved yet is downloaded first, which
+         turns offline mode on just as Save does, so
          one press is enough. Each file contains exactly the wikis you chose,
          shared images included.</p>
 

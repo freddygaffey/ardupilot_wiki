@@ -219,9 +219,24 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
       // A published file table, named the way the manifest asks for it.
       if (tables && String(u).indexOf('-files.json') !== -1) {
         const name = String(u).split('?')[0].split('/').pop();
-        return Promise.resolve(Object.prototype.hasOwnProperty.call(tables, name)
-          ? { ok: true, json: () => Promise.resolve(tables[name]) }
-          : { ok: false, json: () => Promise.reject(new Error('no table')) });
+        if (Object.prototype.hasOwnProperty.call(tables, name)) {
+          return Promise.resolve({ ok: true, json: () => Promise.resolve(tables[name]) });
+        }
+        // Scripted fixtures rarely script Common's table, yet Common is a
+        // required save; synthesize its truthful table so those fixtures
+        // stay internally consistent. Every other absence is a scripted
+        // failure and stays one.
+        if (name === 'common-files.json' && archives) {
+          const own = Object.entries(archives).filter(([n]) =>
+            n.startsWith('_images/') || n.startsWith('ardupilot/'));
+          return Promise.resolve({ ok: true, json: async () => {
+            const t = {};
+            for (const [n, b] of own) { t[n] = await fileHash(b); }
+            return t;
+          } });
+        }
+        return Promise.resolve({ ok: false,
+          json: () => Promise.reject(new Error('no table')) });
       }
       // No scripted tables: synthesize truthful ones from the archive
       // fixture, as the build always publishes a table beside an archive.
@@ -2022,6 +2037,81 @@ async function main() {
           !!(await dev.match('/dev/docs/parameters-Dev-stable-V4.7.0.html')));
     check('the malformed one is not stored anywhere',
           !(await dev.match('/evil.html')) && !(await dev.match('/dev/../evil.html')));
+  }
+
+  console.log('\na saved wiki can still take on more parameter versions');
+  {
+    const man = JSON.parse(JSON.stringify(MANIFEST));
+    man.wikis[0].param_versions = [
+      { file: 'docs/parameters-Copter-stable-V4.7.0.html', channel: 'stable',
+        version: '4.7.0', label: '4.7.0', bytes: 4e6, 'default': true },
+      { file: 'docs/parameters-Copter-stable-V4.6.3.html', channel: 'stable',
+        version: '4.6.3', label: '4.6.3', bytes: 4e6 },
+    ];
+    const cachesObj = makeCaches();
+    for (const id of ['common', 'copter']) {
+      (await cachesObj.open('ardupilot-offline-' + id)).put('/__ap_complete__',
+        completeMarker(MANIFEST.generated, id));
+    }
+    const { doc, w } = load({ manifest: man, caches: cachesObj,
+      served: { '/copter/docs/parameters-Copter-stable-V4.6.3.html': '<html>v463</html>' } });
+    for (let i = 0; i < 8; i++) { await settle(); }
+    // Everything saved: Save rests disabled until a new version is picked.
+    check('with nothing owed, Save rests disabled',
+          $(doc, 'download-cache-btn').disabled);
+    const box = doc.querySelector('.param-check[value*="4.6.3"]');
+    box.checked = true;
+    box.dispatchEvent(new w.Event('change', { bubbles: true })); await settle();
+    check('picking a version on a saved wiki arms Save',
+          !$(doc, 'download-cache-btn').disabled,
+          $(doc, 'download-cache-btn').title);
+    $(doc, 'download-cache-btn').dispatchEvent(
+      new w.MouseEvent('click', { bubbles: true }));
+    for (let i = 0; i < 12; i++) { await settle(); }
+    const c = await cachesObj.open('ardupilot-offline-copter');
+    check('the picked version is fetched and stored',
+          !!(await c.match('/copter/docs/parameters-Copter-stable-V4.6.3.html')));
+    check('the completed wiki keeps its marker throughout',
+          !!(await c.match('/__ap_complete__')));
+  }
+
+  console.log('\na parameter page the storage refuses fails the save out loud');
+  {
+    const cachesObj = makeCaches();
+    (await cachesObj.open('ardupilot-offline-common')).put('/__ap_complete__',
+      completeMarker(MANIFEST.generated, 'common'));
+    const man = JSON.parse(JSON.stringify(MANIFEST));
+    man.wikis[2].param_versions = [
+      { file: 'docs/parameters-Dev-stable-V4.7.0.html', channel: 'stable',
+        version: '4.7.0', label: '4.7.0', bytes: 1000, 'default': true },
+    ];
+    const { doc, w, sandbox } = load({ manifest: man, caches: cachesObj,
+      archives: { 'dev/index.html': '<html>dev</html>' },
+      served: { '/dev/docs/parameters-Dev-stable-V4.7.0.html': '<html>p</html>' } });
+    await settle();
+    // The parameter page arrives but the cache refuses to hold it.
+    const real = sandbox.caches.open.bind(sandbox.caches);
+    sandbox.caches.open = async (name) => {
+      const c = await real(name);
+      if (name === 'ardupilot-offline-dev') {
+        const put = c.put.bind(c);
+        c.put = async (k, v) => {
+          if (String(k && k.url ? k.url : k).indexOf('parameters-') !== -1) {
+            const e = new Error('quota'); e.name = 'QuotaExceededError'; throw e;
+          }
+          return put(k, v);
+        };
+      }
+      return c;
+    };
+    doc.querySelector('.wiki-check[value="dev"]').click(); await settle();
+    $(doc, 'download-cache-btn').dispatchEvent(
+      new w.MouseEvent('click', { bubbles: true }));
+    for (let i = 0; i < 12; i++) { await settle(); }
+    check('a stored-refused parameter page fails the save out loud',
+          /space|quota|failed/i.test($(doc, 'cache-progress').textContent || '') &&
+          !(await (await cachesObj.open('ardupilot-offline-dev')).match('/__ap_complete__')),
+          JSON.stringify($(doc, 'cache-progress').textContent));
   }
 
   console.log('\na refused refresh is honestly incomplete');

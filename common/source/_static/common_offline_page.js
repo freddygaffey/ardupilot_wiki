@@ -255,6 +255,10 @@
       if (w) { b += paramBytes(w); }
       selectedTotal += b;
       if (!storedIds[c.value]) { toDownload += b; }
+      else if (w) {
+        // A saved wiki can still owe newly picked parameter versions.
+        toDownload += paramBytesMissing(w);
+      }
     });
 
     var commonBytes = (COMMON.mb || 0) * 1048576;
@@ -374,6 +378,8 @@
         // All absent means the reader took none; honour that.
         var next = {};
         found.forEach(function (f) { next[f] = true; });
+        cachedParams[w.id] = {};
+        found.forEach(function (f) { cachedParams[w.id][f] = true; });
         var before = JSON.stringify(paramPicks[w.id] || {});
         paramPicks[w.id] = next;
         return before !== JSON.stringify(next);
@@ -414,6 +420,22 @@
   /** Bytes the chosen versions add to this wiki, before compression. */
   function paramBytes(w) {
     return pickedFiles(w).reduce(function (n, v) { return n + (v.bytes || 0); }, 0);
+  }
+
+  // What the last cache sync saw stored, per wiki; picks beyond it are owed.
+  var cachedParams = {};
+
+  function missingParams(w) {
+    var have = cachedParams[w.id] || {};
+    return pickedFiles(w).filter(function (v) { return !have[v.file]; });
+  }
+
+  function paramBytesMissing(w) {
+    return missingParams(w).reduce(function (n, v) { return n + (v.bytes || 0); }, 0);
+  }
+
+  function paramsMissing(w) {
+    return !!storedIds[w.id] && missingParams(w).length > 0;
   }
 
   // Promoted from the dropdown; once saved, syncPicksWithCache keeps it.
@@ -546,8 +568,10 @@
           console.warn('[offline] parameter version skipped', err && err.message);
           return undefined;
         }
+        var fetched = false;
         return fetch(url, { cache: 'no-cache' }).then(function (r) {
           if (!r.ok) { throw new Error(url + ' (' + r.status + ')'); }
+          fetched = true;
           return r.arrayBuffer();
         }).then(function (buf) {
           var body = new Uint8Array(buf);
@@ -555,7 +579,9 @@
           if (report) { report(w.name + ' · parameters ' + v.label); }
           return ApUnpack.storeEntry(cache, url, v.file, body);
         }).catch(function (err) {
-          // One retired version must not fail the whole wiki.
+          // A version retired upstream must not fail the whole wiki, but a
+          // page that ARRIVED and could not be stored is a failed save.
+          if (fetched) { throw err; }
           console.warn('[offline] parameter version skipped', err && err.message);
         });
       });
@@ -876,7 +902,8 @@
     var queue = WIKIS.filter(function (w) {
       return chosen.indexOf(w.id) !== -1;
     }).concat([COMMON]).filter(function (w) {
-      return !storedIds[w.id] || refresh.indexOf(w.id) !== -1;
+      return !storedIds[w.id] || refresh.indexOf(w.id) !== -1 ||
+             paramsMissing(w);
     });
 
     if (!queue.length) {
@@ -887,6 +914,9 @@
     }
 
     var totalBytes = queue.reduce(function (a, w) {
+      if (storedIds[w.id] && refresh.indexOf(w.id) === -1) {
+        return a + paramBytesMissing(w);
+      }
       return a + (w.mb || 0) * 1048576;
     }, 0);
 
@@ -920,6 +950,14 @@
         return queue.reduce(function (chain, entry) {
           return chain.then(function () {
             var cacheName = OFFLINE_CACHE_PREFIX + entry.id;
+            if (storedIds[entry.id] && refresh.indexOf(entry.id) === -1) {
+              // The wiki is complete; only newly picked parameter versions
+              // are owed. They live outside the archive and its table.
+              return caches.open(cacheName).then(function (cache) {
+                report('Saving ' + entry.name + ' parameter versions…');
+                return storeParams(entry, cache, report);
+              }).then(function () { rowProgress(entry.id, 100, 'done'); });
+            }
             // Unpacked over the existing copy, which stays readable throughout;
             // entries the new archive no longer carries are pruned at the end.
             return caches.open(cacheName).then(function (cache) {
@@ -968,7 +1006,8 @@
                     throw e;
                   });
               }).then(function (table) {
-                if (table) {
+                // The fetch above throws rather than yield a missing table.
+                {
                   // A build published mid-save leaves the table naming pages the
                   // archive lacked; marked complete, that mismatch would never
                   // heal. Nor would corrupt bytes under a right name: updates
@@ -982,8 +1021,15 @@
                     else if (!table[n] ||
                              (have[n] !== true && have[n] !== table[n])) { damaged.push(n); }
                   });
-                  // An entry the table does not name has no hash standing
-                  // behind it, so it is refused rather than kept.
+                  // A mid-save build rotation is the likelier story, so it
+                  // is told first; an unlisted extra has no hash behind it
+                  // and is refused rather than kept.
+                  if (missing.length) {
+                    var em = new Error('the server published a new build while saving ' +
+                                    entry.name + '; try again in a moment');
+                    em.apVerify = true;
+                    throw em;
+                  }
                   var unlisted = (unpacked || []).filter(function (e) {
                     return !Object.prototype.hasOwnProperty.call(table, e.name);
                   });
@@ -993,12 +1039,6 @@
                                     unlisted[0].name + '); nothing was marked saved. Try again.');
                     eu.apVerify = true;
                     throw eu;
-                  }
-                  if (missing.length) {
-                    var em = new Error('the server published a new build while saving ' +
-                                    entry.name + '; try again in a moment');
-                    em.apVerify = true;
-                    throw em;
                   }
                   if (damaged.length) {
                     var ed = new Error('part of ' + entry.name + ' arrived damaged (' +
@@ -1023,7 +1063,7 @@
                     return cache.delete(request);
                   }));
                 }).then(function () {
-                  return table ? ApUpdate.storeTable(cache, table) : null;
+                  return ApUpdate.storeTable(cache, table);
                 });
               }).catch(function (err) {
                 if (!err || !err.apVerify) { throw err; }
