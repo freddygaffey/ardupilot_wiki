@@ -42,6 +42,8 @@ function liftLookup(src) {
                     // Before STATIC_CACHE, which interpolates it.
                     /const CACHE_VERSION\s*=\s*[^;]*;/,
                     /const STATIC_CACHE\s*=\s*[^;]*;/,
+                    /const PAGE_CACHE\s*=\s*[^;]*;/,
+                    /const IMAGE_CACHE\s*=\s*[^;]*;/,
                     /const PARAM_INDEX\s*=\s*[^;]*;/,
                     /let knownCacheNames\s*=\s*[^;]*;/,
                     /const markerChecked\s*=\s*[^;]*;/,
@@ -52,8 +54,8 @@ function liftLookup(src) {
   // Every function heldOffline reaches; a missing one throws mid-run.
   for (const name of ['storedShapes', 'likelyCacheName', 'isComplete',
                       'offlineCacheFor', 'inflate', 'heldOffline', 'cacheFirst',
-                      'keep', 'sanitizeForCache', 'paramIndex',
-                      'plausibleBody']) {
+                      'keep', 'sanitizeForCache', 'evictPromotedSavedCopies',
+                      'paramIndex', 'plausibleBody']) {
     const at = src.indexOf('function ' + name + '(');
     if (at === -1) { return null; }
     const from = src.lastIndexOf('async ', at) === at - 6 ? at - 6 : at;
@@ -1112,6 +1114,47 @@ async function checkParamIndexFiltered() {
         labels.indexOf('Copter stable V4.6.3') === -1, JSON.stringify(labels));
 }
 
+function checkEvictPromotedSavedCopies() {
+  console.log('\nservice worker: an update evicts stale promoted copies\n');
+  const src = fs.readFileSync(WORKER, 'utf8');
+  const lifted = liftLookup(src);
+  if (lifted === null) { check('evict: lift', false); return; }
+
+  // A tailored cache store: named caches, each a Map of key -> body.
+  const stores = {
+    'ardupilot-pages-v11': new Map([['/plane/docs/x.html', 'stale promoted']]),
+    'ardupilot-images-v11': new Map([['/plane/_images/board.png', 'stale promoted']]),
+    'ardupilot-static-v11': new Map([['/dev/_static/theme.js', 'ordinary browsing']]),
+    'ardupilot-offline-plane': new Map([['/__ap_complete__', 'x'],
+                                        ['/plane/docs/x.html', 'fresh saved']]),
+  };
+  const cacheObj = (name) => ({
+    keys: async () => [...(stores[name] || new Map()).keys()]
+      .map((k) => ({ url: 'https://x' + k })),
+    delete: async (r) => (stores[name] || new Map())
+      .delete(String(r.url).replace(/^https?:\/\/[^/]+/, '')),
+    match: async () => undefined,
+    put: async () => undefined,
+  });
+  const ctx = {
+    URL, console: { warn() {}, log() {}, error() {} },
+    caches: { keys: async () => Object.keys(stores), open: async (n) => cacheObj(n) },
+  };
+  vm.createContext(ctx);
+  vm.runInContext(lifted + 'this.evict=evictPromotedSavedCopies;', ctx);
+
+  return ctx.evict().then(() => {
+    check('the stale promoted page is evicted',
+          !stores['ardupilot-pages-v11'].has('/plane/docs/x.html'));
+    check('the stale promoted image is evicted',
+          !stores['ardupilot-images-v11'].has('/plane/_images/board.png'));
+    check('an ordinary browsing entry for no saved wiki is kept',
+          stores['ardupilot-static-v11'].has('/dev/_static/theme.js'));
+    check('the saved wiki copy itself is untouched',
+          stores['ardupilot-offline-plane'].has('/plane/docs/x.html'));
+  });
+}
+
 async function main() {
   console.log('\nservice worker: offline lookup\n');
   checkWorkerEvaluates();
@@ -1246,6 +1289,7 @@ async function main() {
   await checkMarkerRespected();
   await checkDirectoryRedirect();
   await checkNoFalseUpdateToast();
+  await checkEvictPromotedSavedCopies();
   await checkStoredCopiesAreClean();
   await checkOfflineOffQuietsTheWorker();
   await checkChangeAnnouncements();
