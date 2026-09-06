@@ -191,10 +191,14 @@
   var memoryPreference = null;
 
   function offlineEnabled() {
+    // Once this tab has a choice on record it speaks first: a setItem that
+    // threw (quota, private browsing) leaves storage disagreeing with what
+    // the reader actually chose here.
+    if (memoryPreference !== null) { return memoryPreference; }
     try {
       return window.localStorage.getItem(OFFLINE_KEY) === '1';
     } catch (err) {
-      return memoryPreference === true;
+      return false;
     }
   }
 
@@ -240,6 +244,13 @@
     memoryPreference = false;
     offlineGeneration++;
     var generation = offlineGeneration;
+    // The sentinel is the opt-out's own record, page-created so it exists
+    // whether or not a worker controls this page; the worker's handler
+    // still provides the quiet and the ack when there is one.
+    var marked = Promise.resolve();
+    try {
+      if (window.caches) { marked = window.caches.open('ap-offline-off'); }
+    } catch (err) { /* storage refused; the wipe still proceeds */ }
     try {
       window.localStorage.removeItem(OFFLINE_KEY);
       window.localStorage.removeItem(SAVED_IDS_KEY);
@@ -262,7 +273,9 @@
         });
       }
     } catch (err) { /* no controller, nothing to quiet */ }
-    var wipe = window.caches ? quieted.then(function () {
+    var wipe = window.caches ? Promise.all([marked.catch(function () {
+      return undefined;
+    }), quieted]).then(function () {
       return window.caches.keys();
     }).then(function (names) {
       return Promise.all(names.filter(function (name) {
@@ -270,9 +283,11 @@
       }).map(function (name) { return window.caches.delete(name); }));
     }) : Promise.resolve();
     return wipe.catch(function () { /* storage gone already */ }).then(function () {
-      // An enable that landed while the wipe ran owns the registration now.
+      // An enable that landed while the wipe ran owns the registration now,
+      // and the lookup is another await, so currency is checked both sides.
       if (generation !== offlineGeneration) { return false; }
       return navigator.serviceWorker.getRegistration().then(function (registration) {
+        if (generation !== offlineGeneration) { return false; }
         return registration ? registration.unregister() : false;
       });
     }).catch(function () { return false; });
@@ -285,16 +300,25 @@
     if (offlineEnabled()) {
       // A sentinel a failed enable left behind heals here, or every
       // worker would stay silent while the switch says on; guarded and
-      // awaited exactly as enable does it.
+      // awaited exactly as enable does it, including standing down for an
+      // opt-out that starts while this load is in flight.
+      var healGeneration = offlineGeneration;
       var healed = Promise.resolve();
       try {
-        healed = clearOffSentinel();
+        healed = window.caches
+          ? window.caches.has('ap-offline-off').then(function (there) {
+              if (!there || healGeneration !== offlineGeneration) { return; }
+              return clearOffSentinel();
+            })
+          : Promise.resolve();
         if (navigator.serviceWorker && navigator.serviceWorker.controller) {
           navigator.serviceWorker.controller.postMessage({ type: 'OFFLINE_ON' });
         }
       } catch (err) { /* storage refused; register regardless */ }
       Promise.resolve(healed).catch(function () { return undefined; })
-        .then(registerServiceWorker);
+        .then(function () {
+          if (healGeneration === offlineGeneration) { registerServiceWorker(); }
+        });
       return;
     }
     // An existing registration without the flag is honoured, but only when
