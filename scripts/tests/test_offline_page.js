@@ -222,19 +222,9 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
         if (Object.prototype.hasOwnProperty.call(tables, name)) {
           return Promise.resolve({ ok: true, json: () => Promise.resolve(tables[name]) });
         }
-        // Scripted fixtures rarely script Common's table, yet Common is a
-        // required save; synthesize its truthful table so those fixtures
-        // stay internally consistent. Every other absence is a scripted
-        // failure and stays one.
-        if (name === 'common-files.json' && archives) {
-          const own = Object.entries(archives).filter(([n]) =>
-            n.startsWith('_images/') || n.startsWith('ardupilot/'));
-          return Promise.resolve({ ok: true, json: async () => {
-            const t = {};
-            for (const [n, b] of own) { t[n] = await fileHash(b); }
-            return t;
-          } });
-        }
+        // An absent scripted table is a scripted failure; nothing is
+        // synthesized here, or a future common-refusal test would be
+        // quietly vouched past its own point.
         return Promise.resolve({ ok: false,
           json: () => Promise.reject(new Error('no table')) });
       }

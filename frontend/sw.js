@@ -378,8 +378,11 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
   const fromSaved = await heldOffline(request);
   const cached = fromSaved || fromPageCache;
 
-  // Clone before the browser consumes the body.
-  const cachedForCompare = (announceChanges && fromPageCache) ? fromPageCache.clone() : null;
+  // Clone before the browser consumes the body. Announced only when the
+  // browsing copy was the one served: the saved copy is rewritten and
+  // would read as changed forever.
+  const cachedForCompare = (announceChanges && !fromSaved && fromPageCache)
+    ? fromPageCache.clone() : null;
 
   // Revalidate with the server, not the HTTP cache; see networkOnly.
   const refresh = cached
@@ -607,6 +610,7 @@ function sanitizeForCache(response) {
 
 async function keep(cacheName, key, response) {
   try {
+    if (offlineOff) { return; }
     const cache = await caches.open(cacheName);
     await cache.put(key, sanitizeForCache(response.clone()));
   } catch (err) {
