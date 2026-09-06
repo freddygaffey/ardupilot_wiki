@@ -702,6 +702,18 @@ async function checkStoredCopiesAreClean() {
   }
 }
 
+async function checkExportStreamOrigin() {
+  console.log('\nservice worker: the export stream answers its own origin only\n');
+  const w = bootWorker({});
+  const crossOrigin = w.ask('https://evil.example/__export__/abc');
+  check('a cross-origin export path passes through untouched',
+        crossOrigin === undefined);
+  const sameOrigin = w.ask('/__export__/abc');
+  const resp = sameOrigin ? await sameOrigin : undefined;
+  check('an unknown same-origin export id is answered 410',
+        !!resp && resp.status === 410, resp && resp.status);
+}
+
 async function checkFullStorageFailsOpen() {
   console.log('\nservice worker: no room to cache, still online\n');
 
@@ -1091,6 +1103,7 @@ async function main() {
   await checkDirectoryRedirect();
   await checkNoFalseUpdateToast();
   await checkStoredCopiesAreClean();
+  await checkExportStreamOrigin();
   await checkFullStorageFailsOpen();
   await checkImageRevalidation();
   await checkFingerprintNotPinned();

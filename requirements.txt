@@ -14,7 +14,7 @@ lxml
 Pillow
 
 # Install sphinx theme from ArduPilot repository, pinned for reproducible
-# builds; this is the sphinx_rtd_theme PR 24 merge commit, whose offline
+# builds; this is the squash-merged sphinx_rtd_theme PR 24, whose offline
 # hooks conf.py requests whenever the installed theme declares them.
 git+https://github.com/ArduPilot/sphinx_rtd_theme.git@75241a38a490b23695940b0d512ef79af93a8274
 

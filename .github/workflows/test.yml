@@ -66,16 +66,16 @@ jobs:
           npm test 2>&1 | tee suite_output.txt; exit ${PIPESTATUS[0]}
       - name: Offline browser suite (Chromium)
         run: |
-          # The suite drives pwa.js, which reaches pages via the theme's
-          # offline_hooks. Until sphinx_rtd_theme PR 24 merges and the pin is
-          # bumped, the pinned theme emits no hooks, so the suite cannot run.
+          # The pinned theme ships offline_hooks (sphinx_rtd_theme PR 24),
+          # so every built page must carry them; a hookless page means the
+          # pin or the conf gate broke, and the suite must not pass quietly.
           if [ ! -f copter/build/html/index.html ]; then
             echo "::error::copter/build/html/index.html is missing; the build step should have produced it"
             exit 1
           fi
           if ! grep -q 'js/pwa.js' copter/build/html/index.html; then
-            echo "::warning::Offline browser suite skipped: built pages carry no offline hooks (theme predates offline_hooks)"
-            exit 0
+            echo "::error::built pages carry no offline hooks; the pinned theme must provide offline_hooks"
+            exit 1
           fi
           npx playwright install --with-deps chromium
           node scripts/tests/test_offline_browsers.js --browsers chromium 2>&1 | tee browser_output.txt; exit ${PIPESTATUS[0]}

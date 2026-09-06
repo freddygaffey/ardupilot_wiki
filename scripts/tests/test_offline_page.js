@@ -225,6 +225,8 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
       }
       // No scripted tables: synthesize truthful ones from the archive
       // fixture, as the build always publishes a table beside an archive.
+      // CAUTION: a hostile-archive test written without `tables:` gets its
+      // smuggled entries vouched for here; refusal tests MUST script tables.
       if (!tables && archives && String(u).indexOf('-files.json') !== -1) {
         const m2 = String(u).split('?')[0].match(/([a-z0-9]+)-files\.json/);
         const id2 = m2 ? m2[1] : '';
@@ -2020,6 +2022,43 @@ async function main() {
           !!(await dev.match('/dev/docs/parameters-Dev-stable-V4.7.0.html')));
     check('the malformed one is not stored anywhere',
           !(await dev.match('/evil.html')) && !(await dev.match('/dev/../evil.html')));
+  }
+
+  console.log('\na refused refresh is honestly incomplete');
+  {
+    // The wiki was saved and complete; the refresh arrives damaged. The old
+    // marker must fall with it, or the mix would serve as complete forever.
+    const cachesObj = makeCaches();
+    await seedSaved(cachesObj, 'copter', OLD_BUILD, { 'copter/index.html': ['h1', 'old'] });
+    const { doc, w } = load({ manifest: MANIFEST, caches: cachesObj,
+      archives: { 'copter/index.html': '<html>new</html>' },
+      tables: { 'copter-files.json': { 'copter/index.html': 'deadbeefdeadbeef' } } });
+    await settle();
+    $(doc, 'check-btn').dispatchEvent(new w.MouseEvent('click', { bubbles: true }));
+    for (let i = 0; i < 14; i++) { await settle(); }
+    const c = await cachesObj.open('ardupilot-offline-copter');
+    check('the failed refresh takes the stale marker with it',
+          !(await c.match('/__ap_complete__')),
+          JSON.stringify($(doc, 'check-result').textContent || $(doc, 'cache-progress').textContent));
+    check('and the panel does not claim an update completed',
+          !/update complete|downloaded again/i.test($(doc, 'check-result').textContent || ''),
+          JSON.stringify($(doc, 'check-result').textContent));
+  }
+
+  console.log('\na table of null is not a table');
+  {
+    const cachesObj = makeCaches();
+    const { doc } = load({ manifest: MANIFEST, caches: cachesObj,
+      archives: { 'copter/index.html': '<html>a</html>' },
+      tables: { 'copter-files.json': null } });
+    await settle();
+    doc.querySelector('.wiki-check[value="copter"]').click(); await settle();
+    $(doc, 'download-cache-btn').click();
+    for (let i = 0; i < 12; i++) { await settle(); }
+    check('a JSON null table refuses the save',
+          !(await (await cachesObj.open('ardupilot-offline-copter')).match('/__ap_complete__')) &&
+          /could not verify/i.test($(doc, 'cache-progress').textContent || ''),
+          JSON.stringify($(doc, 'cache-progress').textContent));
   }
 
   console.log('\nno file table, no completed save');
