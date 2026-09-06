@@ -380,6 +380,13 @@
         found.forEach(function (f) { next[f] = true; });
         cachedParams[w.id] = {};
         found.forEach(function (f) { cachedParams[w.id][f] = true; });
+        // A promoted pick is a promise not yet kept: it survives the sync
+        // until the cache carries it, then the cache speaks for it.
+        var pending = paramPromoted[w.id] || {};
+        Object.keys(pending).forEach(function (f) {
+          if (next[f]) { delete pending[f]; }
+          else { next[f] = true; }
+        });
         var before = JSON.stringify(paramPicks[w.id] || {});
         paramPicks[w.id] = next;
         return before !== JSON.stringify(next);
@@ -560,6 +567,7 @@
     var wanted = pickedFiles(w);
     if (!wanted.length) { return Promise.resolve(0); }
     var stored = 0;
+    var attempted = 0, unreachable = 0;
     return wanted.reduce(function (chain, v) {
       return chain.then(function () {
         var url;
@@ -568,8 +576,12 @@
           console.warn('[offline] parameter version skipped', err && err.message);
           return undefined;
         }
+        attempted++;
         var fetched = false;
-        return fetch(url, { cache: 'no-cache' }).then(function (r) {
+        return fetch(url, {
+          cache: 'no-cache',
+          signal: activeDownload ? activeDownload.signal : undefined
+        }).then(function (r) {
           if (!r.ok) { throw new Error(url + ' (' + r.status + ')'); }
           fetched = true;
           return r.arrayBuffer();
@@ -579,13 +591,22 @@
           if (report) { report(w.name + ' · parameters ' + v.label); }
           return ApUnpack.storeEntry(cache, url, v.file, body);
         }).catch(function (err) {
-          // A version retired upstream must not fail the whole wiki, but a
-          // page that ARRIVED and could not be stored is a failed save.
+          // A cancel is a cancel, and a page that ARRIVED but could not be
+          // stored is a failed save. Only a version retired upstream is
+          // quietly skipped, and only while other versions still arrive.
+          if (err && err.name === 'AbortError') { throw err; }
           if (fetched) { throw err; }
+          unreachable++;
           console.warn('[offline] parameter version skipped', err && err.message);
         });
       });
-    }, Promise.resolve()).then(function () { return stored; });
+    }, Promise.resolve()).then(function () {
+      if (attempted && unreachable === attempted) {
+        throw new Error('could not fetch the parameter pages for ' + w.name +
+                        '; check your connection and try again.');
+      }
+      return stored;
+    });
   }
 
   // Common is images, plus the pages of any wiki folded into it.
@@ -923,6 +944,7 @@
     var progress = el('cache-progress');
     var button = el('download-cache-btn');
     var received = 0;
+    var failedWith = null;
 
     progress.hidden = false;
     activeDownload = new AbortController();
@@ -1100,6 +1122,12 @@
         } else {
           report((err && err.message) || 'Download failed');
         }
+        // Remembered past the cleanup: the caller must see the failure,
+        // or an update wrapper would announce success over it. A cancel is
+        // the reader's own decision, not a failure to escalate.
+        if (!err || err.name !== 'AbortError') {
+          failedWith = err || new Error('Download failed');
+        }
       })
       .then(function () {
         activeDownload = null;
@@ -1117,7 +1145,9 @@
         queue.forEach(function (w) {
           if (!storedIds[w.id]) { rowProgress(w.id, null); }
         });
-        return renderWikis().then(renderStorage);
+        return renderWikis().then(renderStorage).then(function () {
+          if (failedWith) { throw failedWith; }
+        });
       });
   }
 
@@ -1613,6 +1643,9 @@
       var w = wikiById(id);
       if (w) {
         picksFor(w)[e.target.value] = e.target.checked;
+        if (!paramPromoted[id]) { paramPromoted[id] = {}; }
+        if (e.target.checked) { paramPromoted[id][e.target.value] = true; }
+        else { delete paramPromoted[id][e.target.value]; }
         if (!e.target.checked) { delete picksFor(w)[e.target.value]; }
         syncParamAll(id);
         syncAllParamsHeader();
