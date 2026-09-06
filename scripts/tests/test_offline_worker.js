@@ -1128,7 +1128,7 @@ async function checkParamIndexFiltered() {
         labels.indexOf('Copter stable V4.6.3') === -1, JSON.stringify(labels));
 }
 
-function checkEvictPromotedSavedCopies() {
+async function checkEvictPromotedSavedCopies() {
   console.log('\nservice worker: an update evicts stale promoted copies\n');
   const src = fs.readFileSync(WORKER, 'utf8');
   const lifted = liftLookup(src);
@@ -1177,6 +1177,23 @@ function checkEvictPromotedSavedCopies() {
   };
   vm.createContext(ctx);
   vm.runInContext(lifted + 'this.evict=evictPromotedSavedCopies;', ctx);
+
+  // Absent runtime caches must never be created by the sweep.
+  const absentCreated = [];
+  const absentCtx = {
+    URL, console: { warn() {}, log() {}, error() {} }, Headers, Response,
+    caches: {
+      keys: async () => ['ardupilot-offline-plane'],
+      open: async (n) => { absentCreated.push(n);
+        return { keys: async () => [], match: async () => undefined,
+                 delete: async () => true, put: async () => undefined }; },
+    },
+  };
+  vm.createContext(absentCtx);
+  vm.runInContext(lifted + 'this.evict=evictPromotedSavedCopies;', absentCtx);
+  await absentCtx.evict();
+  check('the sweep opens no cache that does not already exist',
+        absentCreated.length === 0, JSON.stringify(absentCreated));
 
   return ctx.evict().then(() => {
     check('a marked promoted page is evicted',
