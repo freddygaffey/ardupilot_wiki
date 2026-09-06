@@ -951,10 +951,21 @@
                     if (!r.ok) { throw new Error('HTTP ' + r.status); }
                     return r.json();
                   })
+                  .then(function (table) {
+                    // A 200 whose body is null or not an object vouches for
+                    // nothing either.
+                    if (!table || typeof table !== 'object' ||
+                        Array.isArray(table)) {
+                      throw new Error('not a file table');
+                    }
+                    return table;
+                  })
                   .catch(function (err) {
-                    throw new Error('could not verify ' + entry.name + ' (' +
+                    var e = new Error('could not verify ' + entry.name + ' (' +
                                     ((err && err.message) || 'no file table') +
                                     '); nothing was marked saved. Try again.');
+                    e.apVerify = true;
+                    throw e;
                   });
               }).then(function (table) {
                 if (table) {
@@ -977,17 +988,23 @@
                     return !Object.prototype.hasOwnProperty.call(table, e.name);
                   });
                   if (unlisted.length) {
-                    throw new Error('the archive for ' + entry.name +
+                    var eu = new Error('the archive for ' + entry.name +
                                     ' held a file the server does not list (' +
                                     unlisted[0].name + '); nothing was marked saved. Try again.');
+                    eu.apVerify = true;
+                    throw eu;
                   }
                   if (missing.length) {
-                    throw new Error('the server published a new build while saving ' +
+                    var em = new Error('the server published a new build while saving ' +
                                     entry.name + '; try again in a moment');
+                    em.apVerify = true;
+                    throw em;
                   }
                   if (damaged.length) {
-                    throw new Error('part of ' + entry.name + ' arrived damaged (' +
+                    var ed = new Error('part of ' + entry.name + ' arrived damaged (' +
                                     damaged[0] + '); nothing was marked saved. Try again.');
+                    ed.apVerify = true;
+                    throw ed;
                   }
                 }
                 // Prune what the new archive no longer carries. Parameter
@@ -1008,6 +1025,14 @@
                 }).then(function () {
                   return table ? ApUpdate.storeTable(cache, table) : null;
                 });
+              }).catch(function (err) {
+                if (!err || !err.apVerify) { throw err; }
+                // The unpack already rewrote entries; with verification
+                // failed, an older marker would serve that mix as complete.
+                return cache.delete(COMPLETE_MARKER).then(function () {
+                  return cache.delete(ApUpdate.TABLE_KEY);
+                }).then(function () { throw err; },
+                        function () { throw err; });
               }).then(function () {
                 // The marker records the build an update check compares against.
                 return cache.put(COMPLETE_MARKER,
