@@ -162,9 +162,10 @@
         event.data.url === window.location.href.split('#')[0]) {
       showUpdateToast();
     }
-    // The kill switch has run; stay off so it is not registered again.
+    // The kill switch has run; stay off so it is not registered again. It
+    // has already wiped and unregistered, so leave no sentinel behind.
     if (event.data.type === 'OFFLINE_KILLED') {
-      disableOffline();
+      disableOffline(true);
     }
   });
 
@@ -189,16 +190,18 @@
   // When storage throws, this in-memory copy is the only record of the
   // reader's choice, and keeps the switch answerable to it.
   var memoryPreference = null;
+  // Set only when a localStorage write actually threw; until then the
+  // stored flag is authoritative and cross-tab agreement is preserved.
+  var storageBroken = false;
 
   function offlineEnabled() {
-    // Once this tab has a choice on record it speaks first: a setItem that
-    // threw (quota, private browsing) leaves storage disagreeing with what
-    // the reader actually chose here.
-    if (memoryPreference !== null) { return memoryPreference; }
+    // Storage leads while it works, so two tabs agree; only once a write
+    // has thrown here does this tab's own choice take over.
+    if (storageBroken && memoryPreference !== null) { return memoryPreference; }
     try {
       return window.localStorage.getItem(OFFLINE_KEY) === '1';
     } catch (err) {
-      return false;
+      return memoryPreference === true;
     }
   }
 
@@ -221,7 +224,7 @@
     try {
       window.localStorage.setItem(OFFLINE_KEY, '1');
     } catch (err) {
-      /* private browsing; the registration below still holds for this tab */
+      storageBroken = true;
     }
     var generation = offlineGeneration;
     var cleared = Promise.resolve();
@@ -240,22 +243,23 @@
 
   // The whole opt-out: flag, saved list, every cache, then the registration.
   // The switch on the offline page and the kill switch (sw-kill.js) both end here.
-  function disableOffline() {
+  function disableOffline(noSentinel) {
     memoryPreference = false;
     offlineGeneration++;
     var generation = offlineGeneration;
     // The sentinel is the opt-out's own record, page-created so it exists
     // whether or not a worker controls this page; the worker's handler
-    // still provides the quiet and the ack when there is one.
+    // still provides the quiet and the ack when there is one. The kill
+    // switch has already unregistered, so it wants no sentinel left.
     var marked = Promise.resolve();
     try {
-      if (window.caches) { marked = window.caches.open('ap-offline-off'); }
+      if (window.caches && !noSentinel) { marked = window.caches.open('ap-offline-off'); }
     } catch (err) { /* storage refused; the wipe still proceeds */ }
     try {
       window.localStorage.removeItem(OFFLINE_KEY);
       window.localStorage.removeItem(SAVED_IDS_KEY);
     } catch (err) {
-      /* private browsing */
+      storageBroken = true;
     }
     // A worker already controlling open pages keeps them until they
     // reload; told this, it stops caching and answering meanwhile. The
@@ -308,6 +312,9 @@
         healed = window.caches
           ? window.caches.has('ap-offline-off').then(function (there) {
               if (!there || healGeneration !== offlineGeneration) { return; }
+              return clearOffSentinel();
+            }, function () {
+              // The probe failed; clearOffSentinel's own retry is the point.
               return clearOffSentinel();
             })
           : Promise.resolve();

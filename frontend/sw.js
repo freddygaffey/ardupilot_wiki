@@ -140,6 +140,9 @@ self.addEventListener('message', (event) => {
     cacheNamesGeneration++;
     openedCaches.clear();
     markerChecked.clear();
+    // A saved wiki that just updated leaves stale promoted copies in the
+    // browsing caches; drop them so the next read re-promotes fresh bytes.
+    event.waitUntil(evictPromotedSavedCopies());
     return;
   }
   if (data.type === 'OFFLINE_OFF') {
@@ -215,6 +218,27 @@ function likelyCacheName(path) {
     return null;
   }
   return OFFLINE_CACHE_PREFIX + (FOLDED_INTO_COMMON.has(first) ? 'common' : first);
+}
+
+// A promoted copy is a saved-wiki page or image that cacheFirst copied into
+// a browsing cache for speed; once the saved wiki updates, those copies are
+// stale and must be dropped so the fresh saved bytes are promoted next time.
+async function evictPromotedSavedCopies() {
+  try {
+    const savedNames = new Set(
+      (await caches.keys()).filter((n) => n.startsWith(OFFLINE_CACHE_PREFIX)));
+    if (!savedNames.size) { return; }
+    for (const runtime of [PAGE_CACHE, IMAGE_CACHE, STATIC_CACHE]) {
+      const cache = await caches.open(runtime);
+      const requests = await cache.keys();
+      await Promise.all(requests.map(async (request) => {
+        const name = likelyCacheName(new URL(request.url).pathname);
+        if (name && savedNames.has(name)) { await cache.delete(request); }
+      }));
+    }
+  } catch (err) {
+    // Best-effort: a failure here only means a slower next read.
+  }
 }
 
 // caches.open() creates a missing cache, so real names are checked first.

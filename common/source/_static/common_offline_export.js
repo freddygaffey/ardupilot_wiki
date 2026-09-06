@@ -233,7 +233,7 @@
                     DOC.addNav(navState, html, p.path);
 
                     var m = html.match(/<div[^>]*itemprop="articleBody"[^>]*>([\s\S]*?)<\/div>\s*<footer/i);
-                    return referenceImages(m ? m[1] : html, assets, p.path,
+                    return referenceImages(showAllTabs(m ? m[1] : html), assets, p.path,
                                            imgIds, imgPaths);
                   })
                   .then(function (r) {
@@ -365,6 +365,21 @@
   }
 
   /** Point each <img> at a shared image block; returns the html and any new images. */
+  // The export ships no page JavaScript, so sphinx_tabs' non-selected panels
+  // would stay hidden forever. Reveal every panel, stacked under its own tab
+  // label, so all their content is reachable.
+  function showAllTabs(html) {
+    if (html.indexOf('sphinx-tabs-panel') === -1) { return html; }
+    return html
+      // Each panel: drop the hidden attribute so it renders.
+      .replace(/(<div[^>]*class="[^"]*sphinx-tabs-panel[^"]*"[^>]*?)\s+hidden(="[^"]*")?/gi, '$1')
+      // The tab buttons do nothing without JS; label each as a heading so the
+      // stacked panels stay readable, and drop their now-inert selected state.
+      .replace(/<button([^>]*)class="([^"]*sphinx-tabs-tab[^"]*)"([^>]*)>/gi,
+               '<div$1class="$2" role="presentation"$3>')
+      .replace(/<\/button>(\s*)(?=<div[^>]*sphinx-tabs-panel|<\/div>)/gi, '</div>$1');
+  }
+
   function referenceImages(html, assets, pagePath, imgIds, imgPaths) {
     var srcs = [];
     html.replace(/<img[^>]+src="([^"]+)"/gi, function (all, src) {

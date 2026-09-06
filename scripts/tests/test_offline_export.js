@@ -565,6 +565,24 @@ async function main() {
   }
 
   // The nav builders weave reader-reachable text into HTML: prove inert.
+  const tabFns = liftFunctions(['showAllTabs'], EXPORTER);
+  check('the tab reveal lifted from the exporter', tabFns !== null);
+  if (tabFns) {
+    const tabbed =
+      '<div class="sphinx-tabs docutils container">' +
+      '<button class="sphinx-tabs-tab" id="tab-0-0-0">Latest</button>' +
+      '<button class="sphinx-tabs-tab" id="tab-0-0-1">Prior to 4.7</button>' +
+      '<div class="sphinx-tabs-panel" id="panel-0-0-0">new steps</div>' +
+      '<div class="sphinx-tabs-panel" hidden="true" id="panel-0-0-1">old steps</div>' +
+      '</div>';
+    const shown = tabFns.showAllTabs(tabbed);
+    check('a non-default tab panel is no longer hidden after export',
+          shown.indexOf('hidden') === -1 && shown.indexOf('old steps') !== -1,
+          shown.indexOf('hidden') !== -1 ? 'still hidden' : 'revealed');
+    check('the panel with no tabs is left untouched',
+          tabFns.showAllTabs('<p>plain page</p>') === '<p>plain page</p>');
+  }
+
   const escFns = liftFunctions(['escapeHtml', 'listNav', 'renderNodes'], DOCUMENT);
   check('nav templates lifted from the document module', escFns !== null);
   if (escFns) {

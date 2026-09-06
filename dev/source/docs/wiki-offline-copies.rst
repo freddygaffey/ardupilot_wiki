@@ -75,9 +75,10 @@ retain saved data when the device runs short of space.
 
 .. note::
 
-   A saved wiki checks for changes only while a wiki page is open. It fetches
-   only files that have changed. You can turn the check off or run it on demand
-   on the :ref:`common-offline` page.
+   A saved wiki checks for changes only while the :ref:`common-offline` page
+   itself is open, since the update timer lives on that page. It fetches only
+   files that have changed. You can turn the check off or run it on demand
+   there.
 
 .. warning::
 
