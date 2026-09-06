@@ -141,6 +141,12 @@ self.addEventListener('message', (event) => {
     markerChecked.clear();
     return;
   }
+  if (data.type === 'OFFLINE_OFF') {
+    // Pages this instance already controls keep it until they reload;
+    // from here it neither caches nor answers, it only passes through.
+    offlineOff = true;
+    return;
+  }
   if (data.type === 'EXPORT_START') {
     // Hold this instance alive until the download is collected.
     let collected;
@@ -367,7 +373,10 @@ async function staleWhileRevalidate(request, cacheName, announceChanges, event) 
   const cache = await caches.open(cacheName);
   // A saved wiki's page is rewritten and would always read as "changed".
   const fromPageCache = await heldOffline(request, cache);
-  const cached = fromPageCache || (await heldOffline(request));
+  // The saved copy leads: updates rewrite it in place, while the browsing
+  // cache holds whatever was read last, which may be older.
+  const fromSaved = await heldOffline(request);
+  const cached = fromSaved || fromPageCache;
 
   // Clone before the browser consumes the body.
   const cachedForCompare = (announceChanges && fromPageCache) ? fromPageCache.clone() : null;
@@ -631,10 +640,13 @@ function safely(handler, request) {
   });
 }
 
+// Set when the reader turns offline mode off while pages are still open.
+let offlineOff = false;
+
 self.addEventListener('fetch', (event) => {
   const request = event.request;
 
-  if (request.method !== 'GET') {
+  if (offlineOff || request.method !== 'GET') {
     return;
   }
 

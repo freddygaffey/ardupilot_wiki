@@ -47,7 +47,7 @@ function liftLookup(src) {
   // Every function heldOffline reaches; a missing one throws mid-run.
   for (const name of ['storedShapes', 'likelyCacheName', 'isComplete',
                       'offlineCacheFor', 'inflate', 'heldOffline', 'cacheFirst',
-                      'keep', 'paramIndex',
+                      'keep', 'sanitizeForCache', 'paramIndex',
                       'plausibleBody']) {
     const at = src.indexOf('function ' + name + '(');
     if (at === -1) { return null; }
@@ -153,6 +153,13 @@ function run(workerSrc, label) {
     // Offline.
     fetch: async () => { throw new TypeError('Failed to fetch'); },
     Response: class { constructor(body, init) { this.body = body; Object.assign(this, init); } },
+    Headers: class {
+      constructor() { this._m = new Map(); }
+      append(k, v) { this._m.set(String(k).toLowerCase(), v); }
+      get(k) { const v = this._m.get(String(k).toLowerCase());
+               return v === undefined ? null : v; }
+      forEach(fn) { this._m.forEach((v, k) => fn(v, k)); }
+    },
   };
   vm.createContext(ctx);
   vm.runInContext(lifted +
@@ -354,6 +361,11 @@ function bootWorker({ networkFails = false, serve = null,
   vm.createContext(ctx);
   vm.runInContext(fs.readFileSync(file, 'utf8'), ctx);
 
+  /** Deliver one message event, as a page's postMessage would. */
+  const message = (data) => {
+    if (listeners.message) { listeners.message({ data }); }
+  };
+
   /** Dispatch one request and return what the worker answered with, if it did. */
   const ask = (path, req = {}) => {
     let answered;
@@ -373,7 +385,7 @@ function bootWorker({ networkFails = false, serve = null,
     if (waited) { await waited; }
     return cacheNames;
   };
-  return { ask, activate, seen, handled: !!listeners.fetch };
+  return { ask, activate, message, seen, handled: !!listeners.fetch };
 }
 
 async function checkUpdateRouting() {
@@ -700,6 +712,37 @@ async function checkStoredCopiesAreClean() {
           !(w.seen.deletedKeys || []).length,
           JSON.stringify(w.seen.deletedKeys || []));
   }
+}
+
+async function checkOfflineOffQuietsTheWorker() {
+  console.log('\nservice worker: told offline is off, it goes quiet\n');
+  const w = bootWorker({ serve: () => ({ ct: 'text/html', body: '<html>x</html>' }) });
+  const before = w.ask('/dev/docs/a-page.html');
+  if (before) { await before; }
+  check('before the message, pages are answered and stored',
+        (w.seen.putValues || []).length > 0);
+  w.message({ type: 'OFFLINE_OFF' });
+  const putsBefore = (w.seen.putValues || []).length;
+  const after = w.ask('/dev/docs/b-page.html');
+  check('after it, requests pass straight through',
+        after === undefined && (w.seen.putValues || []).length === putsBefore,
+        'answered=' + (after !== undefined));
+}
+
+async function checkSavedCopyOutranksBrowsingCopy() {
+  console.log('\nservice worker: the saved copy outranks the browsing copy\n');
+  const w = bootWorker({
+    offlineCopy: { path: '/dev/docs/page.html',
+                   body: '<html>saved fresh</html>', ct: 'text/html' },
+    existingCaches: ['ardupilot-pages-v11'],
+    runtimeImages: null,
+    networkFails: true,
+  });
+  const a = w.ask('/dev/docs/page.html', { mode: 'navigate', destination: 'document' });
+  const resp = a ? await a : undefined;
+  const body = resp && resp.text ? await resp.text() : String(resp && resp.body || '');
+  check('offline, the saved wiki copy is the one served',
+        body.indexOf('saved fresh') !== -1, JSON.stringify(body.slice(0, 40)));
 }
 
 async function checkExportStreamOrigin() {
@@ -1103,6 +1146,8 @@ async function main() {
   await checkDirectoryRedirect();
   await checkNoFalseUpdateToast();
   await checkStoredCopiesAreClean();
+  await checkOfflineOffQuietsTheWorker();
+  await checkSavedCopyOutranksBrowsingCopy();
   await checkExportStreamOrigin();
   await checkFullStorageFailsOpen();
   await checkImageRevalidation();

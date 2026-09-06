@@ -212,6 +212,13 @@
     } catch (err) {
       /* private browsing */
     }
+    // A worker already controlling open pages keeps them until they
+    // reload; told this, it stops caching and answering meanwhile.
+    try {
+      if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage({ type: 'OFFLINE_OFF' });
+      }
+    } catch (err) { /* no controller, nothing to quiet */ }
     var wipe = window.caches ? window.caches.keys().then(function (names) {
       return Promise.all(names.filter(function (name) {
         return name.indexOf('ardupilot-') === 0;
