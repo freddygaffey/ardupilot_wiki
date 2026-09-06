@@ -365,19 +365,32 @@
   }
 
   /** Point each <img> at a shared image block; returns the html and any new images. */
-  // The export ships no page JavaScript, so sphinx_tabs' non-selected panels
-  // would stay hidden forever. Reveal every panel, stacked under its own tab
-  // label, so all their content is reachable.
+  // The export ships no page JavaScript, so sphinx_tabs' tab buttons do
+  // nothing and its non-default panels stay hidden. The panels sit after
+  // their tablist, so revealing them in place would run every label first
+  // and every body after. Instead each panel is un-hidden and gets its own
+  // label heading, paired by the shared name attribute, and the now-inert
+  // tablist is dropped, so the export reads label-then-body per panel.
   function showAllTabs(html) {
     if (html.indexOf('sphinx-tabs-panel') === -1) { return html; }
+    var labels = {};
+    html.replace(
+      /<button[^>]*class="[^"]*sphinx-tabs-tab[^"]*"[^>]*\bname="([^"]*)"[^>]*>([\s\S]*?)<\/button>/gi,
+      function (all, name, text) { labels[name] = text.trim(); return all; });
     return html
-      // Each panel: drop the hidden attribute so it renders.
-      .replace(/(<div[^>]*class="[^"]*sphinx-tabs-panel[^"]*"[^>]*?)\s+hidden(="[^"]*")?/gi, '$1')
-      // The tab buttons do nothing without JS; turn each whole element into
-      // an inert label so the stacked panels read label-then-body, with the
-      // close tag consumed in the same match so none is left stray.
-      .replace(/<button([^>]*class="[^"]*sphinx-tabs-tab[^"]*"[^>]*)>([\s\S]*?)<\/button>/gi,
-               '<div role="presentation"$1>$2</div>');
+      // Drop the tablist wrapper and its buttons; they cannot switch anything.
+      .replace(/<div[^>]*role="tablist"[^>]*>[\s\S]*?<\/div>/gi, '')
+      // Un-hide each panel, wherever the attribute sits in the tag.
+      .replace(
+        /(<div[^>]*class="[^"]*sphinx-tabs-panel[^"]*"[^>]*?)\s+hidden(="[^"]*")?/gi, '$1')
+      // Prepend each panel's label, matched by the shared name attribute.
+      .replace(
+        /(<div[^>]*class="[^"]*sphinx-tabs-panel[^"]*"[^>]*\bname="([^"]*)"[^>]*>)/gi,
+        function (all, open, name) {
+          var label = labels[name];
+          return open +
+            (label ? '<p class="ap-tab-label"><strong>' + label + '</strong></p>' : '');
+        });
   }
 
   function referenceImages(html, assets, pagePath, imgIds, imgPaths) {
