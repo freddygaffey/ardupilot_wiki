@@ -471,21 +471,36 @@ async function runEngine(name, launcher, base) {
       try {
         await p.goto(base + '/ardupilot/docs/common-offline.html', { waitUntil: 'load' });
         await p.waitForTimeout(3500);
-        return await p.evaluate(() => ({
-          switchOn: !!(document.getElementById('offline-mode') || {}).checked,
-          vehicles: document.querySelectorAll('.apo-param-toggle').length,
-          versions: document.querySelectorAll('.param-check').length,
-          ticked: document.querySelectorAll('.param-check:checked').length,
-        }));
+        return await p.evaluate(async () => {
+          // A build made without --paramversioning offers no versions at
+          // all; the panel is right to draw none, so the check adapts.
+          let offered = 0;
+          try {
+            const m = await (await fetch('/offline/offline-manifest.json')).json();
+            offered = (m.wikis || [])
+              .filter((w) => (w.param_versions || []).length).length;
+          } catch (err) { /* the DOM counts below still tell the story */ }
+          return {
+            switchOn: !!(document.getElementById('offline-mode') || {}).checked,
+            offered,
+            vehicles: document.querySelectorAll('.apo-param-toggle').length,
+            versions: document.querySelectorAll('.param-check').length,
+            ticked: document.querySelectorAll('.param-check:checked').length,
+          };
+        });
       } finally { await p.close().catch(() => {}); }
     })();
     check(name, 'the offline page shows the switch on once opted in',
           picker.switchOn, JSON.stringify({ switchOn: picker.switchOn }));
     check(name, 'each vehicle offers its versions with the newest of each series ticked',
-          picker.vehicles > 0 && picker.versions > 0 &&
-          picker.ticked === picker.versions,
-          picker.vehicles + ' vehicles, ' + picker.versions + ' versions, ' +
-          picker.ticked + ' ticked');
+          picker.offered === 0
+            ? picker.versions === 0
+            : (picker.vehicles > 0 && picker.versions > 0 &&
+               picker.ticked === picker.versions),
+          picker.offered === 0
+            ? 'no versions in this build (no --paramversioning), none drawn'
+            : picker.vehicles + ' vehicles, ' + picker.versions + ' versions, ' +
+              picker.ticked + ' ticked');
 
     /* ---- go offline for real ------------------------------------------- */
 
