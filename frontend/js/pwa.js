@@ -186,11 +186,15 @@
   // Shared with common_offline_page.js.
   var SAVED_IDS_KEY = 'ap-saved-ids';
 
+  // When storage throws, this in-memory copy is the only record of the
+  // reader's choice, and keeps the switch answerable to it.
+  var memoryPreference = null;
+
   function offlineEnabled() {
     try {
       return window.localStorage.getItem(OFFLINE_KEY) === '1';
     } catch (err) {
-      return false;
+      return memoryPreference === true;
     }
   }
 
@@ -208,6 +212,8 @@
   }
 
   function enableOffline() {
+    memoryPreference = true;
+    offlineGeneration++;
     try {
       window.localStorage.setItem(OFFLINE_KEY, '1');
     } catch (err) {
@@ -231,7 +237,9 @@
   // The whole opt-out: flag, saved list, every cache, then the registration.
   // The switch on the offline page and the kill switch (sw-kill.js) both end here.
   function disableOffline() {
+    memoryPreference = false;
     offlineGeneration++;
+    var generation = offlineGeneration;
     try {
       window.localStorage.removeItem(OFFLINE_KEY);
       window.localStorage.removeItem(SAVED_IDS_KEY);
@@ -262,9 +270,11 @@
       }).map(function (name) { return window.caches.delete(name); }));
     }) : Promise.resolve();
     return wipe.catch(function () { /* storage gone already */ }).then(function () {
-      return navigator.serviceWorker.getRegistration();
-    }).then(function (registration) {
-      return registration ? registration.unregister() : false;
+      // An enable that landed while the wipe ran owns the registration now.
+      if (generation !== offlineGeneration) { return false; }
+      return navigator.serviceWorker.getRegistration().then(function (registration) {
+        return registration ? registration.unregister() : false;
+      });
     }).catch(function () { return false; });
   }
 
@@ -274,14 +284,29 @@
   function startWhenOptedIn() {
     if (offlineEnabled()) {
       // A sentinel a failed enable left behind heals here, or every
-      // worker would stay silent while the switch says on.
-      clearOffSentinel();
-      registerServiceWorker();
+      // worker would stay silent while the switch says on; guarded and
+      // awaited exactly as enable does it.
+      var healed = Promise.resolve();
+      try {
+        healed = clearOffSentinel();
+        if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage({ type: 'OFFLINE_ON' });
+        }
+      } catch (err) { /* storage refused; register regardless */ }
+      Promise.resolve(healed).catch(function () { return undefined; })
+        .then(registerServiceWorker);
       return;
     }
-    // An existing registration without the flag is honoured.
+    // An existing registration without the flag is honoured, but only when
+    // no opt-out is mid-flight: its sentinel stands for the whole wipe.
     navigator.serviceWorker.getRegistration().then(function (registration) {
-      if (registration) { enableOffline(); }
+      if (!registration) { return; }
+      var probe = window.caches
+        ? window.caches.has('ap-offline-off') : Promise.resolve(false);
+      return Promise.resolve(probe).catch(function () { return false; })
+        .then(function (optingOut) {
+          if (!optingOut) { enableOffline(); }
+        });
     }).catch(function () { /* nothing registered, nothing to honour */ });
   }
 

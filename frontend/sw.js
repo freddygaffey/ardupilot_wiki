@@ -137,6 +137,7 @@ self.addEventListener('message', (event) => {
   }
   if (data.type === 'CACHES_CHANGED') {
     knownCacheNames = null;
+    cacheNamesGeneration++;
     openedCaches.clear();
     markerChecked.clear();
     return;
@@ -218,6 +219,9 @@ function likelyCacheName(path) {
 
 // caches.open() creates a missing cache, so real names are checked first.
 let knownCacheNames = null;
+// Bumped by every invalidation, so a refresh that awaited across one
+// stands down instead of resurrecting the list it was told to forget.
+let cacheNamesGeneration = 0;
 const openedCaches = new Map();
 
 // A cache without its /__ap_complete__ marker is an aborted download.
@@ -239,7 +243,14 @@ async function offlineCacheFor(path) {
     return undefined;
   }
   if (!knownCacheNames) {
-    knownCacheNames = new Set(await caches.keys());
+    const generation = cacheNamesGeneration;
+    const fresh = new Set(await caches.keys());
+    if (generation === cacheNamesGeneration) {
+      knownCacheNames = fresh;
+    } else if (!knownCacheNames) {
+      // Invalidated mid-read: answer from the fresh copy without keeping it.
+      return fresh.has(name) ? caches.open(name) : undefined;
+    }
   }
   if (!knownCacheNames.has(name)) {
     return undefined;
