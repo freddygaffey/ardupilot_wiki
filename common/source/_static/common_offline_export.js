@@ -373,11 +373,11 @@
     return html
       // Each panel: drop the hidden attribute so it renders.
       .replace(/(<div[^>]*class="[^"]*sphinx-tabs-panel[^"]*"[^>]*?)\s+hidden(="[^"]*")?/gi, '$1')
-      // The tab buttons do nothing without JS; label each as a heading so the
-      // stacked panels stay readable, and drop their now-inert selected state.
-      .replace(/<button([^>]*)class="([^"]*sphinx-tabs-tab[^"]*)"([^>]*)>/gi,
-               '<div$1class="$2" role="presentation"$3>')
-      .replace(/<\/button>(\s*)(?=<div[^>]*sphinx-tabs-panel|<\/div>)/gi, '</div>$1');
+      // The tab buttons do nothing without JS; turn each whole element into
+      // an inert label so the stacked panels read label-then-body, with the
+      // close tag consumed in the same match so none is left stray.
+      .replace(/<button([^>]*class="[^"]*sphinx-tabs-tab[^"]*"[^>]*)>([\s\S]*?)<\/button>/gi,
+               '<div role="presentation"$1>$2</div>');
   }
 
   function referenceImages(html, assets, pagePath, imgIds, imgPaths) {

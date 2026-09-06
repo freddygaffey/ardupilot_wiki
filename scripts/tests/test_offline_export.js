@@ -579,6 +579,20 @@ async function main() {
     check('a non-default tab panel is no longer hidden after export',
           shown.indexOf('hidden') === -1 && shown.indexOf('old steps') !== -1,
           shown.indexOf('hidden') !== -1 ? 'still hidden' : 'revealed');
+    // The markup must stay balanced: adjacent tab buttons each become their
+    // own element, not swallow the siblings that follow them.
+    const strayButtons = (shown.match(/<\/button>/gi) || []).length;
+    const opens = (shown.match(/<div\b/gi) || []).length;
+    const closes = (shown.match(/<\/div>/gi) || []).length;
+    check('every tab button is closed, none left stray',
+          strayButtons === 0, strayButtons + ' stray </button>');
+    check('the div tags balance after the reveal', opens === closes,
+          opens + ' opens vs ' + closes + ' closes');
+    // The two labels stay siblings, not one nested in the other.
+    check('the two tab labels do not swallow each other',
+          shown.indexOf('Latest') < shown.indexOf('Prior to 4.7') &&
+          /Latest<\/div>[\s\S]*Prior to 4\.7/.test(shown),
+          'labels: ' + JSON.stringify(shown.slice(shown.indexOf('Latest'), shown.indexOf('Prior to 4.7') + 12)));
     check('the panel with no tabs is left untouched',
           tabFns.showAllTabs('<p>plain page</p>') === '<p>plain page</p>');
   }
