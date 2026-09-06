@@ -200,14 +200,17 @@
     } catch (err) {
       /* private browsing; the registration below still holds for this tab */
     }
-    // A leftover off sentinel would keep the next worker silent.
+    // A leftover off sentinel would keep the next worker silent; the
+    // registration waits for its deletion, mirroring the off handshake.
+    var cleared = Promise.resolve();
     try {
-      if (window.caches) { window.caches.delete('ap-offline-off'); }
+      if (window.caches) { cleared = window.caches.delete('ap-offline-off'); }
       if (navigator.serviceWorker && navigator.serviceWorker.controller) {
         navigator.serviceWorker.controller.postMessage({ type: 'OFFLINE_ON' });
       }
     } catch (err) { /* nothing stored, nothing to clear */ }
-    registerServiceWorker();
+    Promise.resolve(cleared).catch(function () { return undefined; })
+      .then(registerServiceWorker);
   }
 
   // The whole opt-out: flag, saved list, every cache, then the registration.

@@ -231,6 +231,7 @@ function bootWorker({ networkFails = false, serve = null,
                      holdNetwork = false, putFails = false,
                      runtimeImages = null, file = WORKER } = {}) {
   const seen = { fetches: [], cacheReads: [], puts: [], deleted: [], posted: [] };
+  let hasImpl = async (name) => cacheNames.indexOf(name) !== -1;
   let cacheNames = existingCaches.slice();
   // A completed download: named cache plus completion marker.
   const offlineName = offlineCopy
@@ -315,7 +316,7 @@ function bootWorker({ networkFails = false, serve = null,
         if (cacheNames.indexOf(name) === -1) { cacheNames.push(name); }
         return cacheFor(name);
       },
-      has: async (name) => cacheNames.indexOf(name) !== -1,
+      has: async (name) => hasImpl(name),
       keys: async () => cacheNames.slice(),
       delete: async (n) => {
         seen.deleted.push(n);
@@ -399,7 +400,9 @@ function bootWorker({ networkFails = false, serve = null,
     if (waited) { await waited; }
     return cacheNames;
   };
-  return { ask, activate, message, seen, handled: !!listeners.fetch };
+  const cachesHas = (name) => cacheNames.indexOf(name) !== -1;
+  const setCachesHas = (fn) => { hasImpl = fn; };
+  return { ask, activate, message, cachesHas, setCachesHas, seen, handled: !!listeners.fetch };
 }
 
 async function checkUpdateRouting() {
@@ -785,6 +788,27 @@ async function checkChangeAnnouncements() {
   check('a saved-wiki answer announces nothing',
         !(w2.seen.posted || []).some((m) => m && m.type === 'PAGE_UPDATED'),
         JSON.stringify(w2.seen.posted));
+}
+
+async function checkOffRestoreWinsTheRace() {
+  console.log('\nservice worker: a slow sentinel read still beats the first store\n');
+  // The sentinel read resolves only after the first request is in flight:
+  // keep()'s await is the only thing standing between it and a store.
+  const w = bootWorker({ existingCaches: ['ap-offline-off'],
+    serve: () => ({ ct: 'text/html', body: '<html>x</html>' }) });
+  let release;
+  const slow = new Promise((res) => { release = res; });
+  const realHas = w.cachesHas;
+  w.setCachesHas(async (name) => { await slow; return realHas(name); });
+  const a = w.ask('/dev/docs/raced.html');
+  // The store is now in flight while the sentinel read is still pending.
+  await new Promise((r) => setTimeout(r, 20));
+  release();
+  if (a) { await a; }
+  await Promise.all(w.seen.waited || []);
+  check('a store racing the sentinel read never lands',
+        (w.seen.putValues || []).length === 0,
+        'puts=' + (w.seen.putValues || []).length);
 }
 
 async function checkOffSurvivesRestart() {
@@ -1204,6 +1228,7 @@ async function main() {
   await checkStoredCopiesAreClean();
   await checkOfflineOffQuietsTheWorker();
   await checkChangeAnnouncements();
+  await checkOffRestoreWinsTheRace();
   await checkOffSurvivesRestart();
   await checkSavedCopyOutranksBrowsingCopy();
   await checkExportStreamOrigin();

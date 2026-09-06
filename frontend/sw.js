@@ -675,6 +675,11 @@ const offRestored = Promise.resolve()
 self.addEventListener('fetch', (event) => {
   const request = event.request;
 
+  // respondWith must be claimed synchronously, so this reads the flag as
+  // it stands; a restarted instance may answer its first request before
+  // the sentinel is read, but keep() awaits the restore, so nothing is
+  // ever stored during that window, and the wipe has usually left nothing
+  // to answer with anyway.
   if (offlineOff || request.method !== 'GET') {
     return;
   }
