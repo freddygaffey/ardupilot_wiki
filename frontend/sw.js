@@ -228,7 +228,11 @@ function likelyCacheName(path) {
 // stale and must be dropped so the fresh saved bytes are promoted next time.
 async function evictPromotedSavedCopies() {
   try {
+    // Only caches that already exist: caches.open() would create an empty
+    // one, resurrecting a browsing cache a just-completed opt-out deleted.
+    const present = new Set(await caches.keys());
     for (const runtime of [PAGE_CACHE, IMAGE_CACHE, STATIC_CACHE]) {
+      if (!present.has(runtime)) { continue; }
       const cache = await caches.open(runtime);
       const requests = await cache.keys();
       await Promise.all(requests.map(async (request) => {
