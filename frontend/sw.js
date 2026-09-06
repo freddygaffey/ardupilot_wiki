@@ -640,6 +640,16 @@ self.addEventListener('fetch', (event) => {
 
   const url = new URL(request.url);
 
+  if (url.origin !== self.location.origin) {
+    // User alerts must stay current.
+    if (THIRD_PARTY_STATIC.test(url.href)) {
+      event.respondWith(safely(cacheFirst(request, THIRD_PARTY_CACHE, event), request));
+    } else if (THIRD_PARTY_FRESH.test(url.href)) {
+      event.respondWith(safely(freshBehind(request, THIRD_PARTY_CACHE, event), request));
+    }
+    return;
+  }
+
   if (url.pathname.startsWith('/__export__/')) {
     const id = url.pathname.slice('/__export__/'.length);
     const entry = EXPORTS.get(id);
@@ -663,16 +673,6 @@ self.addEventListener('fetch', (event) => {
     }
     return;
   }
-  if (url.origin !== self.location.origin) {
-    // User alerts must stay current.
-    if (THIRD_PARTY_STATIC.test(url.href)) {
-      event.respondWith(safely(cacheFirst(request, THIRD_PARTY_CACHE, event), request));
-    } else if (THIRD_PARTY_FRESH.test(url.href)) {
-      event.respondWith(safely(freshBehind(request, THIRD_PARTY_CACHE, event), request));
-    }
-    return;
-  }
-
   // An update must reach the server and never fall back to the copy it replaces.
   if (url.searchParams.has(UPDATE_PARAM)) {
     event.respondWith(fetch(request));

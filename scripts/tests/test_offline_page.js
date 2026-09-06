@@ -223,6 +223,20 @@ function load({ manifest = null, caches = makeCaches(), persisted = false,
           ? { ok: true, json: () => Promise.resolve(tables[name]) }
           : { ok: false, json: () => Promise.reject(new Error('no table')) });
       }
+      // No scripted tables: synthesize truthful ones from the archive
+      // fixture, as the build always publishes a table beside an archive.
+      if (!tables && archives && String(u).indexOf('-files.json') !== -1) {
+        const m2 = String(u).split('?')[0].match(/([a-z0-9]+)-files\.json/);
+        const id2 = m2 ? m2[1] : '';
+        const own = Object.entries(archives).filter(([n]) =>
+          id2 === 'common' ? (n.startsWith('_images/') || n.startsWith('ardupilot/'))
+                           : n.startsWith(id2 + '/'));
+        return Promise.resolve({ ok: true, json: async () => {
+          const t = {};
+          for (const [n, b] of own) { t[n] = await fileHash(b); }
+          return t;
+        } });
+      }
       // The server refusing update traffic.
       if (rateLimit && String(u).indexOf('ap-update=') !== -1) {
         return Promise.resolve({ ok: false, status: 429,
@@ -2006,6 +2020,22 @@ async function main() {
           !!(await dev.match('/dev/docs/parameters-Dev-stable-V4.7.0.html')));
     check('the malformed one is not stored anywhere',
           !(await dev.match('/evil.html')) && !(await dev.match('/dev/../evil.html')));
+  }
+
+  console.log('\nno file table, no completed save');
+  {
+    const cachesObj = makeCaches();
+    const { doc } = load({ manifest: MANIFEST, caches: cachesObj,
+      archives: { 'copter/index.html': '<html>a</html>' },
+      tables: {} });
+    await settle();
+    doc.querySelector('.wiki-check[value="copter"]').click(); await settle();
+    $(doc, 'download-cache-btn').click();
+    for (let i = 0; i < 12; i++) { await settle(); }
+    check('a save whose table never arrives is not marked complete',
+          !(await (await cachesObj.open('ardupilot-offline-copter')).match('/__ap_complete__')) &&
+          /could not verify/i.test($(doc, 'cache-progress').textContent || ''),
+          JSON.stringify($(doc, 'cache-progress').textContent));
   }
 
   console.log('\nthe Cancel click still cancels');

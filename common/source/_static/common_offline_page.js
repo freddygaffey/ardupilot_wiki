@@ -944,10 +944,18 @@
                 return storeParams(entry, cache, report);
               }).then(function () {
                 rowProgress(entry.id, 100, 'done');
-                // The file table for differential updates; not fatal if missing.
+                // The file table both verifies this save and drives updates;
+                // without it nothing vouches for what just arrived.
                 return fetch(ApUpdate.tableUrl(entry, ARTIFACT_BASE, CURRENT_BUILD), { cache: 'no-cache' })
-                  .then(function (r) { return r.ok ? r.json() : null; })
-                  .catch(function () { return null; });
+                  .then(function (r) {
+                    if (!r.ok) { throw new Error('HTTP ' + r.status); }
+                    return r.json();
+                  })
+                  .catch(function (err) {
+                    throw new Error('could not verify ' + entry.name + ' (' +
+                                    ((err && err.message) || 'no file table') +
+                                    '); nothing was marked saved. Try again.');
+                  });
               }).then(function (table) {
                 if (table) {
                   // A build published mid-save leaves the table naming pages the
@@ -1331,6 +1339,12 @@
       ? 'Saving ' + toSave.join(', ') + '…'
       : 'Preparing…';
 
+    if (toSave.length && window.ApOffline) {
+      // A pre-save fills the same caches Save does; unserved caches would
+      // leave the panel listing wikis nothing answers for.
+      window.ApOffline.enable();
+      renderOfflineMode();
+    }
     var first = toSave.length ? saveSelectedReal() : Promise.resolve();
 
     // The repair re-renders the rows with every saved wiki ticked and syncs
