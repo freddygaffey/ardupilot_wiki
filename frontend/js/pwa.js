@@ -194,28 +194,44 @@
     }
   }
 
+  // Bumped by every disable, so an enable overtaken by a later opt-out
+  // notices and stands down instead of silently re-registering.
+  var offlineGeneration = 0;
+
+  // A leftover off sentinel would keep the next worker silent; one retry
+  // covers a transient storage refusal.
+  function clearOffSentinel() {
+    if (!window.caches) { return Promise.resolve(); }
+    return window.caches.delete('ap-offline-off').catch(function () {
+      return window.caches.delete('ap-offline-off');
+    }).catch(function () { return undefined; });
+  }
+
   function enableOffline() {
     try {
       window.localStorage.setItem(OFFLINE_KEY, '1');
     } catch (err) {
       /* private browsing; the registration below still holds for this tab */
     }
-    // A leftover off sentinel would keep the next worker silent; the
-    // registration waits for its deletion, mirroring the off handshake.
+    var generation = offlineGeneration;
     var cleared = Promise.resolve();
     try {
-      if (window.caches) { cleared = window.caches.delete('ap-offline-off'); }
+      cleared = clearOffSentinel();
       if (navigator.serviceWorker && navigator.serviceWorker.controller) {
         navigator.serviceWorker.controller.postMessage({ type: 'OFFLINE_ON' });
       }
     } catch (err) { /* nothing stored, nothing to clear */ }
-    Promise.resolve(cleared).catch(function () { return undefined; })
-      .then(registerServiceWorker);
+    Promise.resolve(cleared).then(function () {
+      // Registration waits for the sentinel, mirroring the off handshake,
+      // but never lands on top of a disable that finished meanwhile.
+      if (generation === offlineGeneration) { registerServiceWorker(); }
+    });
   }
 
   // The whole opt-out: flag, saved list, every cache, then the registration.
   // The switch on the offline page and the kill switch (sw-kill.js) both end here.
   function disableOffline() {
+    offlineGeneration++;
     try {
       window.localStorage.removeItem(OFFLINE_KEY);
       window.localStorage.removeItem(SAVED_IDS_KEY);
@@ -257,6 +273,9 @@
 
   function startWhenOptedIn() {
     if (offlineEnabled()) {
+      // A sentinel a failed enable left behind heals here, or every
+      // worker would stay silent while the switch says on.
+      clearOffSentinel();
       registerServiceWorker();
       return;
     }
