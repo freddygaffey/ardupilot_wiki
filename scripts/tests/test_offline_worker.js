@@ -33,6 +33,7 @@ function liftLookup(src) {
                     /const OFF_SENTINEL\s*=\s*[^;]*;/,
                     /let offlineOff\s*=\s*[^;]*;/,
                     /let offCommanded\s*=\s*[^;]*;/,
+                    /let cacheNamesGeneration\s*=\s*[^;]*;/,
                     /const offRestored[\s\S]*?catch\(\(\) => undefined\);/,
                     /const CONTENT_EXPECTATIONS\s*=\s*\[[\s\S]*?\n\];/,
                     /const OFFLINE_CACHE_PREFIX\s*=\s*[^;]*;/,
