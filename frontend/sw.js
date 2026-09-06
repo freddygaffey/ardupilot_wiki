@@ -99,7 +99,7 @@ async function warmTheme() {
     const held = await heldOffline(new Request(url));
     // A saved wiki is a source of bytes, not a trusted one.
     if (held && plausibleBody(new Request(url), held)) {
-      await cache.put(url, held.clone());
+      await keep(STATIC_CACHE, url, held, true);
     }
   })));
 }
@@ -228,19 +228,17 @@ function likelyCacheName(path) {
 // stale and must be dropped so the fresh saved bytes are promoted next time.
 async function evictPromotedSavedCopies() {
   try {
-    const hasSaved = (await caches.keys())
-      .some((n) => n.startsWith(OFFLINE_CACHE_PREFIX));
-    if (!hasSaved) { return; }
     for (const runtime of [PAGE_CACHE, IMAGE_CACHE, STATIC_CACHE]) {
       const cache = await caches.open(runtime);
       const requests = await cache.keys();
       await Promise.all(requests.map(async (request) => {
-        // Only a copy a complete saved wiki actually holds is a promotion;
-        // heldOffline resolves the shared-image rewrite too, so this catches
-        // /dev/_images paths served from the common cache, and spares a page
-        // the reader browsed to that no saved wiki carries.
-        const saved = await heldOffline(request, undefined, true);
-        if (saved) { await cache.delete(request); }
+        // Exactly the copies this worker promoted from a saved wiki carry
+        // the mark; a page the reader merely browsed does not, and a stale
+        // shared image does because it was promoted through the same path.
+        const hit = await cache.match(request);
+        if (hit && hit.headers && hit.headers.get(PROMOTED_HEADER)) {
+          await cache.delete(request);
+        }
       }));
     }
   } catch (err) {
@@ -590,7 +588,7 @@ async function cacheFirst(request, cacheName, event) {
     if (held) {
       // Promote into the named cache; a saved wiki is not a trusted source.
       if (plausibleBody(request, held)) {
-        await keep(cacheName, request, held);
+        await keep(cacheName, request, held, true);
       }
       return held;
     }
@@ -670,12 +668,23 @@ function sanitizeForCache(response) {
   });
 }
 
-async function keep(cacheName, key, response) {
+// Stamped on a copy promoted from a saved wiki, so eviction is an exact
+// test of what this worker put there rather than a guess from the path.
+const PROMOTED_HEADER = 'x-ap-promoted';
+
+async function keep(cacheName, key, response, promoted) {
   try {
     await offRestored;
     if (offlineOff) { return; }
     const cache = await caches.open(cacheName);
-    await cache.put(key, sanitizeForCache(response.clone()));
+    let toStore = sanitizeForCache(response.clone());
+    if (promoted) {
+      const headers = new Headers(toStore.headers);
+      headers.set(PROMOTED_HEADER, '1');
+      toStore = new Response(toStore.body, {
+        status: toStore.status, statusText: toStore.statusText, headers });
+    }
+    await cache.put(key, toStore);
   } catch (err) {
     console.warn('[sw] could not store', String(key && key.url ? key.url : key),
                  err && err.name);

@@ -39,6 +39,7 @@ function liftLookup(src) {
                     /const OFFLINE_CACHE_PREFIX\s*=\s*[^;]*;/,
                     /const FOLDED_INTO_COMMON\s*=\s*[^;]*;/,
                     /const AP_ENCODED\s*=\s*[^;]*;/,
+                    /const PROMOTED_HEADER\s*=\s*[^;]*;/,
                     // Before STATIC_CACHE, which interpolates it.
                     /const CACHE_VERSION\s*=\s*[^;]*;/,
                     /const STATIC_CACHE\s*=\s*[^;]*;/,
@@ -162,8 +163,12 @@ function run(workerSrc, label) {
     fetch: async () => { throw new TypeError('Failed to fetch'); },
     Response: class { constructor(body, init) { this.body = body; Object.assign(this, init); } },
     Headers: class {
-      constructor() { this._m = new Map(); }
+      constructor(init) {
+        this._m = new Map();
+        if (init && init.forEach) { init.forEach((v, k) => this._m.set(String(k).toLowerCase(), v)); }
+      }
       append(k, v) { this._m.set(String(k).toLowerCase(), v); }
+      set(k, v) { this._m.set(String(k).toLowerCase(), v); }
       get(k) { const v = this._m.get(String(k).toLowerCase());
                return v === undefined ? null : v; }
       forEach(fn) { this._m.forEach((v, k) => fn(v, k)); }
@@ -363,8 +368,12 @@ function bootWorker({ networkFails = false, serve = null,
       constructor(body, init) { this.body = body; Object.assign(this, init || {}); }
     },
     Headers: class {
-      constructor() { this._m = new Map(); }
+      constructor(init) {
+        this._m = new Map();
+        if (init && init.forEach) { init.forEach((v, k) => this._m.set(String(k).toLowerCase(), v)); }
+      }
       append(k, v) { this._m.set(String(k).toLowerCase(), v); }
+      set(k, v) { this._m.set(String(k).toLowerCase(), v); }
       get(k) { const v = this._m.get(String(k).toLowerCase());
                return v === undefined ? null : v; }
       forEach(fn) { this._m.forEach((v, k) => fn(v, k)); }
@@ -962,6 +971,11 @@ async function checkFingerprintNotPinned() {
   if (a) { await a; }
   check('a query-less asset is still promoted from the saved wiki',
         w.seen.puts.length === 1, JSON.stringify(w.seen.puts));
+  const promoted = (w.seen.putValues || [])[0];
+  check('the promoted copy carries the eviction mark',
+        !!promoted && promoted.headers && promoted.headers.get &&
+        promoted.headers.get('x-ap-promoted') === '1',
+        promoted && promoted.headers ? String(promoted.headers.get('x-ap-promoted')) : 'no headers');
 }
 
 // A republished file at the same URL must reach the reader without a bump,
@@ -1123,28 +1137,24 @@ function checkEvictPromotedSavedCopies() {
   // Named caches, each a Map of key -> body. The saved wikis hold the
   // authoritative copies; the browsing caches hold promotions plus one page
   // the reader browsed to that no saved wiki carries.
+  // Each browsing entry is [body, promoted]. Promoted copies carry the mark;
+  // a page the reader merely browsed does not.
   const stores = {
     'ardupilot-pages-v11': new Map([
-      ['/plane/docs/x.html', 'stale promoted'],
-      ['/plane/docs/parameters-Plane-stable-V4.7.9.html', 'independently browsed'],
+      ['/plane/docs/x.html', ['promoted', true]],
+      ['/plane/docs/parameters-Plane-stable-V4.7.9.html', ['browsed', false]],
     ]),
     'ardupilot-images-v11': new Map([
-      ['/plane/_images/board.png', 'stale promoted'],
-      ['/plane/_images/shared.png', 'stale shared promoted'],
+      ['/plane/_images/board.png', ['promoted', true]],
+      ['/plane/_images/shared.png', ['promoted shared', true]],
+      ['/plane/_images/photo.png', ['browsed image', false]],
     ]),
-    'ardupilot-offline-plane': new Map([
-      ['/__ap_complete__', 'x'],
-      ['/plane/docs/x.html', 'fresh saved'],
-      ['/plane/_images/board.png', 'fresh saved'],
-    ]),
-    // Shared images live in common under the /_common/ rewrite.
-    'ardupilot-offline-common': new Map([
-      ['/__ap_complete__', 'x'],
-      ['/_common/_images/shared.png', 'fresh shared'],
-    ]),
+    'ardupilot-static-v11': new Map(),
   };
-  const bodyResp = (b) => ({ headers: { get: () => null }, clone() { return this; },
-                             body: b, status: 200, ok: true });
+  const bodyResp = ([b, promoted]) => ({
+    headers: { get: (h) => (String(h).toLowerCase() === 'x-ap-promoted'
+                            ? (promoted ? '1' : null) : null) },
+    clone() { return this; }, body: b, status: 200, ok: true });
   const cacheObj = (name) => ({
     keys: async () => [...(stores[name] || new Map()).keys()]
       .map((k) => ({ url: 'https://x' + k })),
@@ -1159,6 +1169,7 @@ function checkEvictPromotedSavedCopies() {
   });
   const ctx = {
     URL, console: { warn() {}, log() {}, error() {} },
+    Headers, Response,
     caches: {
       keys: async () => Object.keys(stores),
       open: async (n) => cacheObj(n),
@@ -1168,17 +1179,16 @@ function checkEvictPromotedSavedCopies() {
   vm.runInContext(lifted + 'this.evict=evictPromotedSavedCopies;', ctx);
 
   return ctx.evict().then(() => {
-    check('a promoted page a saved wiki holds is evicted',
+    check('a marked promoted page is evicted',
           !stores['ardupilot-pages-v11'].has('/plane/docs/x.html'));
-    check('a promoted own-wiki image is evicted',
+    check('a marked promoted image is evicted',
           !stores['ardupilot-images-v11'].has('/plane/_images/board.png'));
-    check('a promoted shared image, held only in common, is evicted too',
+    check('a marked promoted shared image is evicted',
           !stores['ardupilot-images-v11'].has('/plane/_images/shared.png'));
-    check('a page the reader browsed that no saved wiki carries is kept',
+    check('an unmarked browsed page is kept',
           stores['ardupilot-pages-v11'].has('/plane/docs/parameters-Plane-stable-V4.7.9.html'));
-    check('the saved wiki copies themselves are untouched',
-          stores['ardupilot-offline-plane'].has('/plane/docs/x.html') &&
-          stores['ardupilot-offline-common'].has('/_common/_images/shared.png'));
+    check('an unmarked browsed image is kept',
+          stores['ardupilot-images-v11'].has('/plane/_images/photo.png'));
   });
 }
 
