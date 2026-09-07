@@ -276,6 +276,10 @@ async function checkOptOut(name, browser, base) {
       const state = await waitForClean(page);
       check(name, 'switch off leaves a never-opted-in browser',
             JSON.stringify(state) === CLEAN, JSON.stringify(state));
+      // The opt-out records itself in the off sentinel, which persists as the
+      // durable off state until the reader opts back in.
+      const sentinel = await page.evaluate(() => caches.has('ap-offline-off'));
+      check(name, 'switch off records the off sentinel', sentinel, String(sentinel));
     }
   } finally {
     await ctx.context.close().catch(() => {});
@@ -290,6 +294,8 @@ async function checkOptOut(name, browser, base) {
       const { page } = ctx;
       let loads = 0;
       page.on('load', () => { loads += 1; });
+      // An opted-out reader has an off sentinel; the kill must clear it too.
+      await page.evaluate(() => caches.open('ap-offline-off'));
       serveKill(true);
       await page.evaluate(async () => {
         const reg = await navigator.serviceWorker.getRegistration();
@@ -312,6 +318,10 @@ async function checkOptOut(name, browser, base) {
       check(name, 'the next visit after a kill registers nothing, and nothing reloaded by itself',
             JSON.stringify(after) === CLEAN && spontaneous === 0,
             JSON.stringify(after) + ', ' + spontaneous + ' spontaneous load(s)');
+      // The kill switch is the total opt-out: even the off sentinel is gone.
+      const killSentinel = await page.evaluate(() => caches.has('ap-offline-off'));
+      check(name, 'the kill switch leaves no sentinel behind', !killSentinel,
+            String(killSentinel));
     }
   } finally {
     serveKill(false);

@@ -330,15 +330,22 @@
         });
       return;
     }
-    // An existing registration without the flag is honoured, but only when
-    // no opt-out is mid-flight: its sentinel stands for the whole wipe.
+    // A registration without the flag is either a pre-flag opt-in to
+    // honour, or the leftover of an opt-out whose unregister did not finish
+    // (tab closed mid-wipe). The sentinel tells them apart: present means
+    // opt-out was recorded, so complete it instead of honouring it.
     navigator.serviceWorker.getRegistration().then(function (registration) {
       if (!registration) { return; }
       var probe = window.caches
         ? window.caches.has('ap-offline-off') : Promise.resolve(false);
       return Promise.resolve(probe).catch(function () { return false; })
         .then(function (optingOut) {
-          if (!optingOut) { enableOffline(); }
+          if (optingOut) {
+            // Finish the interrupted opt-out; the sentinel stays as the
+            // durable off record until the reader opts back in.
+            return registration.unregister().catch(function () { return false; });
+          }
+          enableOffline();
         });
     }).catch(function () { /* nothing registered, nothing to honour */ });
   }

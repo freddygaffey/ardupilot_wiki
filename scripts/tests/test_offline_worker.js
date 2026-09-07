@@ -415,7 +415,8 @@ function bootWorker({ networkFails = false, serve = null,
   };
   const cachesHas = (name) => cacheNames.indexOf(name) !== -1;
   const setCachesHas = (fn) => { hasImpl = fn; };
-  return { ask, activate, message, cachesHas, setCachesHas, seen, handled: !!listeners.fetch };
+  const cacheList = () => cacheNames;
+  return { ask, activate, message, cachesHas, setCachesHas, cacheList, seen, handled: !!listeners.fetch };
 }
 
 async function checkUpdateRouting() {
@@ -752,11 +753,22 @@ async function checkOfflineOffQuietsTheWorker() {
   check('before the message, pages are answered and stored',
         (w.seen.putValues || []).length > 0);
   w.message({ type: 'OFFLINE_OFF' });
+  await Promise.all(w.seen.waited || []);
   const putsBefore = (w.seen.putValues || []).length;
   const after = w.ask('/dev/docs/b-page.html');
   check('after it, requests pass straight through',
         after === undefined && (w.seen.putValues || []).length === putsBefore,
         'answered=' + (after !== undefined));
+  // OFFLINE_OFF records the durable off state as a sentinel cache.
+  check('OFFLINE_OFF creates the off sentinel',
+        w.cacheList().indexOf('ap-offline-off') !== -1,
+        JSON.stringify(w.cacheList()));
+  // OFFLINE_ON clears it, the reader's opt-in erasing the off record.
+  w.message({ type: 'OFFLINE_ON' });
+  await Promise.all(w.seen.waited || []);
+  check('OFFLINE_ON deletes the off sentinel',
+        w.cacheList().indexOf('ap-offline-off') === -1,
+        JSON.stringify(w.cacheList()));
 }
 
 async function checkSavedCopyOutranksBrowsingCopy() {
