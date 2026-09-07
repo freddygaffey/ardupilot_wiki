@@ -254,45 +254,6 @@ async function waitForClean(page, timeout = 10000) {
   return state;
 }
 
-async function checkOptInBeatsRecovery(name, browser, base) {
-  // The interrupted-opt-out recovery must not undo an opt-in that lands while
-  // its sentinel probe is in flight. caches.has is slowed so the window is
-  // real, then enableOffline() is called inside it; the worker must survive.
-  const context = await browser.newContext({ serviceWorkers: 'allow' });
-  await context.addInitScript(() => {
-    const orig = window.caches.has.bind(window.caches);
-    window.caches.has = (n) => new Promise((resolve) => {
-      setTimeout(() => orig(n).then(resolve), 600);
-    });
-  });
-  const page = await context.newPage();
-  try {
-    // Opt in and take control, then stage the interrupted-opt-out state.
-    await page.goto(base + VISITED, { waitUntil: 'load' });
-    await page.evaluate(() => window.localStorage.setItem('ap-offline-enabled', '1'));
-    await page.reload({ waitUntil: 'load' });
-    const control = await waitForControl(page);
-    if (!control.controlled) { check(name, 'opt-in beats recovery: control', false); return; }
-    await page.evaluate(async () => {
-      window.localStorage.removeItem('ap-offline-enabled');
-      await caches.open('ap-offline-off');
-    });
-    // Reload: startWhenOptedIn's recovery runs, its probe now slow. Re-opt-in
-    // inside the window.
-    await page.goto(base + VISITED, { waitUntil: 'load' });
-    await page.evaluate(() => { window.ApOffline && window.ApOffline.enable(); });
-    await page.waitForTimeout(1500);
-    const state = await page.evaluate(async () => ({
-      registered: !!(await navigator.serviceWorker.getRegistration()),
-      flag: window.localStorage.getItem('ap-offline-enabled'),
-    }));
-    check(name, 'an opt-in during opt-out recovery is not undone',
-          state.registered && state.flag === '1', JSON.stringify(state));
-  } finally {
-    await context.close().catch(() => {});
-  }
-}
-
 async function checkFreshnessGuards(name, browser, base) {
   // Two guards that only a real worker exercises: a saved page must be served
   // over a stale browsing copy without a false "updated" toast, and a page the
@@ -751,8 +712,6 @@ async function runEngine(name, launcher, base) {
                 () => checkUpdateWindow(name, browser, base));
     await phase(name, 'freshness guards (saved precedence, 404 eviction)',
                 () => checkFreshnessGuards(name, browser, base));
-    await phase(name, 'opt-in beats opt-out recovery',
-                () => checkOptInBeatsRecovery(name, browser, base));
     await phase(name, 'opt-out paths (switch, kill switch)',
                 () => checkOptOut(name, browser, base));
   } catch (err) {

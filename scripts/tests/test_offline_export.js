@@ -294,6 +294,8 @@ function bootShell(D, bodies) {
     '</script>').join('');
   const dom = new JSDOM(
     '<!DOCTYPE html><html><body class="wy-body-for-nav">' +
+    '<div id="ap-top"><a id="ap-top-brand" href="#/">ArduPilot</a>' +
+    '<span id="ap-top-nav"></span></div>' +
     '<div class="wy-menu wy-menu-vertical" id="ap-nav"></div>' +
     '<input id="ap-search">' +
     '<section class="wy-nav-content-wrap">' +
@@ -460,7 +462,7 @@ async function main() {
   const scan = scanFile(htmlPath, [
     /id="i\d+"/g, /data-ap-img=/g, /data:image\//g, /@font-face/g,
     /<img[^>]{0,200}src="\.\.\//g
-  ], ['.wy-nav-content', 'wy-body-for-nav', 'toctree-l1', '#/' + wikis[0] + '/',
+  ], ['.wy-nav-content', 'wy-body-for-nav', 'id="ap-top"', 'toctree-l1', '#/' + wikis[0] + '/',
       '#ap-toast.on{display:flex}',
       'if(mapped===null){e.preventDefault();toast(a.href);return;}',
       'go.target="_blank"',
@@ -489,6 +491,7 @@ async function main() {
   check('code highlighting css embedded', html.includes('td.linenos .normal'));
   check('the wiki style overrides embedded', html.includes('table.useralerts-table td'));
   check('theme markup emitted', html.includes('wy-body-for-nav'));
+  check('the export carries the black top bar', html.includes('id="ap-top"'));
   check('fonts inlined', scan.counts[3] > 0, scan.counts[3] + ' rules');
   check('images stored once (no per-page duplication)',
         inlineDataUris <= imgBlocks + 2,
@@ -740,6 +743,13 @@ async function main() {
   if (win) {
     const doc = win.document;
     const nav = doc.getElementById('ap-nav');
+    // The black global-nav bar is rebuilt at runtime from the wikis in the file.
+    const topLinks = [].map.call(
+      doc.querySelectorAll('#ap-top-nav a'), (a) => a.getAttribute('href'));
+    check('the black top bar lists every wiki in the file',
+          topLinks.length === D.homes.length &&
+          D.homes.every((h) => topLinks.indexOf('#' + h.path) !== -1),
+          topLinks.join(', ') + ' vs ' + D.homes.map((h) => h.path).join(', '));
     const inFile = new Set(D.pages.map((p) => p.p));
     // The export's own wiki order, where the reading order has to stop.
     const wiki0 = D.wikis[0];
@@ -915,8 +925,48 @@ async function main() {
           check('a bare fragment hash never shows the missing panel',
                 typed.indexOf('Not in this offline copy') === -1,
                 JSON.stringify(typed.slice(0, 60)));
+          // CLICKING a generated nav link (href="#/path") must route, not be
+          // swallowed as an in-page anchor. This is the click path shellGo
+          // bypasses, and the one that broke export navigation.
+          const dest = D.pages.find((q) => q.p !== from.p) || D.pages[0];
+          shellGo(w3, from.p);
+          const doc3 = w3.document.getElementById('ap-doc');
+          doc3.innerHTML = '<a id="navlink" href="#' + dest.p + '">go</a>';
+          w3.document.getElementById('navlink').dispatchEvent(
+            new w3.MouseEvent('click', { bubbles: true, cancelable: true }));
+          check('clicking a #/path nav link routes to that page',
+                w3.location.hash === '#' + dest.p,
+                w3.location.hash + ' wanted #' + dest.p);
         } else {
           check('anchor shell booted', false);
+        }
+      }
+      // Opening the file the ordinary way leaves no hash, so the landing page
+      // is the home page with current() empty. A relative content link clicked
+      // there must still resolve against home and keep its wiki prefix, not
+      // route to the missing panel for a page the file actually holds.
+      if (D.home) {
+        const home = D.home;
+        const homeWiki = home.split('/')[1];
+        const dest = D.pages.find(
+          (p) => p.p !== home && p.p.split('/')[1] === homeWiki);
+        if (dest) {
+          const homeDir = home.replace(/\/[^/]*$/, '');
+          const rel = dest.p.slice(homeDir.length + 1) + '.html';
+          const w5 = bootShell(D, {});
+          if (w5) {
+            const doc5 = w5.document.getElementById('ap-doc');
+            doc5.innerHTML = '<a id="rel" href="' + rel + '">go</a>';
+            w5.document.getElementById('rel').dispatchEvent(
+              new w5.MouseEvent('click', { bubbles: true, cancelable: true }));
+            const miss = w5.document.getElementById('ap-doc').textContent || '';
+            check('a relative link on the landing page keeps the wiki prefix',
+                  w5.location.hash === '#' + dest.p &&
+                  miss.indexOf('Not in this offline copy') === -1,
+                  w5.location.hash + ' wanted #' + dest.p);
+          } else {
+            check('landing-page relative link shell booted', false);
+          }
         }
       }
 

@@ -18,6 +18,18 @@
   var SHELL_CSS =
     'html,body{height:100%}' +
     '.wy-nav-side{overflow-y:auto}' +
+    // The site's black global-nav bar, rebuilt for the wikis in this file.
+    '#ap-top{position:fixed;top:0;left:0;right:0;height:45px;z-index:300;' +
+    'display:flex;align-items:center;gap:18px;padding:0 16px;' +
+    'background:#171717;color:#fff;font-size:14px}' +
+    '#ap-top a{color:#fff;text-decoration:none;white-space:nowrap}' +
+    '#ap-top-brand{font-weight:700;font-size:15px}' +
+    '#ap-top-nav{display:flex;gap:16px;flex-wrap:wrap;overflow:hidden}' +
+    '#ap-top-nav a{opacity:.82}' +
+    '#ap-top-nav a:hover{opacity:1;text-decoration:underline}' +
+    // Clear the fixed bar; border-box keeps the 100% height from overflowing.
+    '.wy-nav-side{top:45px}' +
+    '.wy-nav-content-wrap{box-sizing:border-box;padding-top:45px}' +
     '#ap-search{margin:12px;padding:8px 10px;border:0;border-radius:3px;' +
     'font:inherit;width:calc(100% - 24px)}' +
     '#ap-miss{display:none;padding:10px 16px;color:#a8620f;background:#ffedcc;' +
@@ -68,8 +80,11 @@
     'var orderAt={};(D.order||[]).forEach(function(p,n){',
     'if(orderAt[p]===undefined)orderAt[p]=n;});',
     'nav.innerHTML=D.nav;',
+    'var topNav=document.getElementById("ap-top-nav");',
+    'if(topNav&&D.homes){topNav.innerHTML=D.homes.map(function(h){',
+    'return \'<a href="#\'+h.path+\'">\'+esc(h.name||h.id)+\'</a>\';}).join("");}',
     'var links=[].slice.call(nav.querySelectorAll("a[href^=\\"#\\"]"));',
-    'function current(){return (location.hash||"").replace(/^#/,"");}',
+    'function current(){var h=(location.hash||"").replace(/^#/,"");return (h&&h!=="/")?h:(D.home||"");}',
     // Accept #/rover, a trailing slash, a leftover .html, a missing slash.
     'function lookup(raw){',
     'if(!raw)return undefined;',
@@ -300,9 +315,10 @@
     'var href=a.getAttribute("href");',
     'if(a.getAttribute("data-ap-external")!==null)return;',
     'if(!href||/^mailto:/.test(href))return;',
-    // A bare fragment is an in-page anchor: scroll to it, never route.
+    // "#/..." is a route into the file; "#section" is an in-page anchor.
     'if(href.charAt(0)==="#"){',
     'e.preventDefault();',
+    'if(href.charAt(1)==="/"){go(href.slice(1));return;}',
     'var fid=href.slice(1);',
     'if(fid){var ft=document.getElementById(fid)||',
     'doc.querySelector(\'[id="\'+fid.replace(/"/g,"")+\'"]\');',
@@ -822,6 +838,8 @@
       '<title>ArduPilot wiki (offline)</title>' +
       '<style>' + themeCss + '</style><style>' + SHELL_CSS + '</style>' +
       '</head><body class="wy-body-for-nav">' +
+      '<div id="ap-top"><a id="ap-top-brand" href="#/">ArduPilot</a>' +
+      '<span id="ap-top-nav"></span></div>' +
       '<div class="wy-grid-for-nav">' +
       '<nav data-toggle="wy-nav-shift" class="wy-nav-side">' +
       '<div id="ap-brand">ArduPilot<small>offline copy &middot; ' +

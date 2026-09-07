@@ -348,11 +348,15 @@
           if (honourGeneration !== offlineGeneration) { return; }
           if (optingOut) {
             // Complete the interrupted opt-out fully: unregister and remove
-            // the saved wikis and cached pages the wipe never reached.
+            // the saved wikis and cached pages the wipe never reached. The
+            // generation is re-checked before the destructive delete, since
+            // unregister and keys() are two more awaits an opt-in could land
+            // inside, and its caches must not be wiped.
             return registration.unregister().catch(function () { return false; })
               .then(function () {
-                if (!window.caches) { return; }
+                if (!window.caches || honourGeneration !== offlineGeneration) { return; }
                 return window.caches.keys().then(function (names) {
+                  if (honourGeneration !== offlineGeneration) { return undefined; }
                   return Promise.all(names
                     .filter(function (n) { return n.indexOf('ardupilot-') === 0; })
                     .map(function (n) { return window.caches.delete(n); }));
