@@ -333,17 +333,31 @@
     // A registration without the flag is either a pre-flag opt-in to
     // honour, or the leftover of an opt-out whose unregister did not finish
     // (tab closed mid-wipe). The sentinel tells them apart: present means
-    // opt-out was recorded, so complete it instead of honouring it.
+    // opt-out was recorded, so complete it instead of honouring it. The
+    // generation is captured before the probe so an enable landing while it
+    // is in flight is never undone (the mirror of the heal branch above).
+    var honourGeneration = offlineGeneration;
     navigator.serviceWorker.getRegistration().then(function (registration) {
       if (!registration) { return; }
       var probe = window.caches
         ? window.caches.has('ap-offline-off') : Promise.resolve(false);
       return Promise.resolve(probe).catch(function () { return false; })
         .then(function (optingOut) {
+          // An enable (or another disable) landed while the probe ran; it
+          // owns the state now, so this stale recovery stands down.
+          if (honourGeneration !== offlineGeneration) { return; }
           if (optingOut) {
-            // Finish the interrupted opt-out; the sentinel stays as the
-            // durable off record until the reader opts back in.
-            return registration.unregister().catch(function () { return false; });
+            // Complete the interrupted opt-out fully: unregister and remove
+            // the saved wikis and cached pages the wipe never reached.
+            return registration.unregister().catch(function () { return false; })
+              .then(function () {
+                if (!window.caches) { return; }
+                return window.caches.keys().then(function (names) {
+                  return Promise.all(names
+                    .filter(function (n) { return n.indexOf('ardupilot-') === 0; })
+                    .map(function (n) { return window.caches.delete(n); }));
+                }).catch(function () { return undefined; });
+              });
           }
           enableOffline();
         });

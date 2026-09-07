@@ -1146,26 +1146,39 @@ async function checkEvictPromotedSavedCopies() {
   const lifted = liftLookup(src);
   if (lifted === null) { check('evict: lift', false); return; }
 
-  // Named caches, each a Map of key -> body. The saved wikis hold the
-  // authoritative copies; the browsing caches hold promotions plus one page
-  // the reader browsed to that no saved wiki carries.
-  // Each browsing entry is [body, promoted]. Promoted copies carry the mark;
-  // a page the reader merely browsed does not.
+  // Each browsing entry is [body, promoted]; promoted copies carry the mark.
+  // A complete saved dev wiki is present too, holding the same paths as the
+  // unmarked browsing entries, so the old predicate (which asked whether a
+  // saved wiki held the path) would wrongly evict them while the mark-based
+  // one keeps them. That is what makes the "kept" assertions discriminate.
   const stores = {
     'ardupilot-pages-v11': new Map([
-      ['/plane/docs/x.html', ['promoted', true]],
-      ['/plane/docs/parameters-Plane-stable-V4.7.9.html', ['browsed', false]],
+      ['/dev/docs/x.html', ['promoted', true]],
+      ['/dev/docs/browsed-only.html', ['browsed', false]],
     ]),
     'ardupilot-images-v11': new Map([
-      ['/plane/_images/board.png', ['promoted', true]],
-      // A shared image under dev, promoted from the common cache: marked,
-      // with no ardupilot-offline-dev present, so a prefix guess would miss it.
+      ['/dev/_images/board.png', ['promoted', true]],
       ['/dev/_images/shared.png', ['promoted shared', true]],
-      ['/plane/_images/photo.png', ['browsed image', false]],
+      ['/dev/_images/photo.png', ['browsed image', false]],
     ]),
     'ardupilot-static-v11': new Map([
-      // A fingerprinted network asset: never promoted, so never marked.
+      // A fingerprinted network asset: never promoted, so never marked, yet
+      // the saved wiki holds an unversioned theme.css, so the old predicate
+      // would evict this one by path.
       ['/dev/_static/theme.css?v=abc', ['network build A', false]],
+    ]),
+    // The saved wiki: its presence is what the old predicate keyed on.
+    'ardupilot-offline-dev': new Map([
+      ['/__ap_complete__', ['x', false]],
+      ['/dev/docs/x.html', ['saved', false]],
+      ['/dev/docs/browsed-only.html', ['saved', false]],
+      ['/dev/_images/board.png', ['saved', false]],
+      ['/dev/_images/photo.png', ['saved', false]],
+      ['/dev/_static/theme.css', ['saved', false]],
+    ]),
+    'ardupilot-offline-common': new Map([
+      ['/__ap_complete__', ['x', false]],
+      ['/_common/_images/shared.png', ['saved', false]],
     ]),
   };
   const bodyResp = ([b, promoted]) => ({
@@ -1214,17 +1227,22 @@ async function checkEvictPromotedSavedCopies() {
 
   return ctx.evict().then(() => {
     check('a marked promoted page is evicted',
-          !stores['ardupilot-pages-v11'].has('/plane/docs/x.html'));
+          !stores['ardupilot-pages-v11'].has('/dev/docs/x.html'));
     check('a marked promoted image is evicted',
-          !stores['ardupilot-images-v11'].has('/plane/_images/board.png'));
-    check('a marked shared image under dev, held in common, is evicted',
+          !stores['ardupilot-images-v11'].has('/dev/_images/board.png'));
+    check('a marked promoted shared image is evicted',
           !stores['ardupilot-images-v11'].has('/dev/_images/shared.png'));
-    check('an unmarked browsed page is kept',
-          stores['ardupilot-pages-v11'].has('/plane/docs/parameters-Plane-stable-V4.7.9.html'));
-    check('an unmarked browsed image is kept',
-          stores['ardupilot-images-v11'].has('/plane/_images/photo.png'));
-    check('an unmarked fingerprinted network asset is kept',
+    // These three the old predicate would have wrongly evicted, since the
+    // saved dev wiki holds each path; the mark keeps them.
+    check('an unmarked browsed page a saved wiki also holds is kept',
+          stores['ardupilot-pages-v11'].has('/dev/docs/browsed-only.html'));
+    check('an unmarked browsed image a saved wiki also holds is kept',
+          stores['ardupilot-images-v11'].has('/dev/_images/photo.png'));
+    check('an unmarked fingerprinted asset whose base a saved wiki holds is kept',
           stores['ardupilot-static-v11'].has('/dev/_static/theme.css?v=abc'));
+    check('the saved wiki copies themselves are untouched',
+          stores['ardupilot-offline-dev'].has('/dev/docs/x.html') &&
+          stores['ardupilot-offline-common'].has('/_common/_images/shared.png'));
   });
 }
 
