@@ -62,6 +62,14 @@ repos:
 
   - repo: local
     hooks:
+      - id: check-raw-images
+        name: Check images used by raw html are declared to Sphinx
+        entry: python scripts/check_raw_images.py
+        language: python
+        types: [rst]
+
+  - repo: local
+    hooks:
       - id: check-raw-iframes
         name: Check video embeds use the youtube or vimeo directive, not a raw iframe
         entry: python scripts/check_raw_iframes.py
