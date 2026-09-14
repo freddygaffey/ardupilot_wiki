@@ -1,0 +1,7 @@
+zstd.wasm and the Emscripten glue in zstd-delta.js
+
+zstd: Copyright (c) Meta Platforms, Inc. and affiliates. BSD 3-Clause licence.
+https://github.com/facebook/zstd/blob/dev/LICENSE
+
+WebAssembly build and glue: @bokuweb/zstd-wasm 0.0.27, MIT licence.
+https://github.com/bokuweb/zstd-wasm/blob/master/LICENSE
