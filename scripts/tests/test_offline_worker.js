@@ -604,6 +604,14 @@ async function checkRevalidationIsAwaited() {
 
   // _static is cache-first and must not wait for anything.
   w = bootWorker({ serve: () => ({ ct: 'application/javascript', body: '//' }) });
+  // Archives and their tables are fetched by the page while it unpacks
+  // them. The worker leaves those requests to the browser: Firefox cannot
+  // stream a half-gigabyte gzip body through a fetch handler and gives up
+  // part-way with "Error in input stream".
+  for (const p of ['/offline/common-offline.tar', '/offline/copter-offline.tar?v=1',
+                   '/offline/copter-files.json', '/offline/offline-manifest.json']) {
+    check('the worker leaves ' + p + ' to the browser', w.ask(p) === undefined);
+  }
   a = w.ask('/js/pwa.js');
   if (a) { await a; }
   check('pwa.js does the same',

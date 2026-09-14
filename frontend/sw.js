@@ -801,6 +801,13 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
+  // The archives and their file tables are streamed by the offline page
+  // as it unpacks them. Left to the browser: Firefox cannot stream a
+  // half-gigabyte gzip body through a fetch handler and gives up part-way.
+  if (url.pathname.startsWith('/offline/')) {
+    return;
+  }
+
   if (APP_ASSET.test(url.pathname)) {
     event.respondWith(safely(networkOnly(request), request));
     return;
