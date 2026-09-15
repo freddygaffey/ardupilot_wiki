@@ -39,6 +39,9 @@ old_params_mversion/
 # build refills it.
 /.image-cache/
 
+# Wrangler local state, created when deploying the demo
+/.wrangler/
+
 # Vagrant
 /.vagrant
 
@@ -79,5 +82,6 @@ build_options.py
 #   npm install --no-save jsdom
 /node_modules/
 /package-lock.json
+.claude/
 build.lck
 build.lck.log

@@ -1,0 +1,20 @@
+# Cloudflare Pages header rules.
+#
+# sw.js must never be served from a cache. Browsers re-check the service worker
+# script on navigation, and that check is the only mechanism by which a fixed -
+# or deliberately self-destructing - worker reaches devices that already have
+# one installed. A cached sw.js means a stuck sw.js, and no way to recover
+# except waiting for the cache to expire.
+/sw.js
+  Cache-Control: no-cache
+  Service-Worker-Allowed: /
+
+/manifest.json
+  Cache-Control: no-cache
+
+# The archives live in object storage; all Pages serves under /offline/ is the
+# manifest, which every build rewrites. An immutable rule here pinned it at the
+# edge for a year, along with a page that had already been deleted.
+/offline/*
+  Cache-Control: no-cache
+  Access-Control-Allow-Origin: *
