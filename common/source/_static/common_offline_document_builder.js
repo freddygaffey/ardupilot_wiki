@@ -763,17 +763,15 @@
 
   /* -------------------------------------- versioned parameter pages */
 
-  // Parameter-list history to carry: SERIES major.minor lines, PER_SERIES each.
-
-
   // The plain /rover/docs/parameters is the latest, unversioned, always kept.
   var PARAM_PAGE = /^\/([^/]+)\/docs\/parameters-([^/]+)$/;
 
-  /** The versioned parameter pages the file carries, labelled from filenames. */
-  // Every saved version is carried: the reader chose each one at save time,
-  // and silently thinning them here would lose pages they asked for.
+  /** The versioned parameter pages the file carries, labelled from filenames.
+   * A saved wiki holds every release; at 4 to 6 MB a page the file keeps the
+   * newest stable of each major.minor series and the newest beta, and drops
+   * the point releases behind them. */
   function parameterVersions(paths) {
-    var found = {}, byWiki = {};
+    var found = {}, byWiki = {}, drop = {};
 
     paths.forEach(function (p) {
       var m = PARAM_PAGE.exec(p);
@@ -784,18 +782,31 @@
       found[m[1]].push({
         p: p,
         n: m[2].split('-').join(' '),
+        beta: /-beta-/i.test(m[2]),
         v: [+v[1], +v[2], +v[3]]
       });
     });
 
     Object.keys(found).forEach(function (w) {
-      byWiki[w] = found[w].sort(function (a, b) {
+      var sorted = found[w].sort(function (a, b) {
         return b.v[0] - a.v[0] || b.v[1] - a.v[1] || b.v[2] - a.v[2] ||
-               (a.n < b.n ? -1 : 1);
+               (a.beta === b.beta ? (a.n < b.n ? -1 : 1) : (a.beta ? 1 : -1));
+      });
+      var seenSeries = {}, seenBeta = false;
+      byWiki[w] = sorted.filter(function (e) {
+        var keep;
+        if (e.beta) { keep = !seenBeta; seenBeta = true; }
+        else {
+          var series = e.v[0] + '.' + e.v[1];
+          keep = !seenSeries[series];
+          seenSeries[series] = true;
+        }
+        if (!keep) { drop[e.p] = true; }
+        return keep;
       }).map(function (e) { return { n: e.n, p: e.p }; });
     });
 
-    return { byWiki: byWiki, drop: {} };
+    return { byWiki: byWiki, drop: drop };
   }
 
   /* -------------------------------------------------------- the front page */

@@ -36,7 +36,14 @@ function check(name, ok, detail) {
 /* ---------------------------------------------------------- cache shim ---- */
 
 class FakeResponse {
-  constructor(buf) { this._buf = buf; }
+  constructor(buf, init) {
+    this._buf = buf;
+    // Headers as the unpacker sets them, case-insensitive as in a browser.
+    const h = new Map(Object.entries((init && init.headers) || {})
+      .map(([k, v]) => [k.toLowerCase(), String(v)]));
+    this.headers = { get: (k) => (h.has(String(k).toLowerCase())
+      ? h.get(String(k).toLowerCase()) : null) };
+  }
   arrayBuffer() { return Promise.resolve(this._buf.buffer.slice(
     this._buf.byteOffset, this._buf.byteOffset + this._buf.byteLength)); }
   text() { return Promise.resolve(this._buf.toString('utf8')); }
@@ -151,16 +158,54 @@ function loadParameterVersions(wiki, vehicle, versions) {
   return made;
 }
 
+/** A parameter version stored as the unpacker stores a delta: the base page
+ * plain beside it, the delta marked, rebuilt only when read. */
+function loadDeltaVersion(wiki, vehicle) {
+  const FIX = path.join(__dirname, 'fixtures');
+  const base = fs.readFileSync(path.join(FIX, 'param-delta-base.html'));
+  const page = fs.readFileSync(path.join(FIX, 'param-delta-page.html'));
+  const frame = fs.readFileSync(path.join(FIX, 'param-delta-page.zst'));
+  const baseName = 'parameters-' + vehicle + '-stable-V4.2.0.html';
+  const container = Buffer.concat([Buffer.from('APDELTA1 ' + baseName + '\n'), frame]);
+  const cache = caches._all.get('ardupilot-offline-' + wiki);
+  const dir = '/' + wiki + '/docs/';
+  cache.put(dir + baseName, new FakeResponse(base, { headers: { 'Content-Type': 'text/html' } }));
+  cache.put(dir + 'parameters-' + vehicle + '-stable-V4.1.0.html',
+            new FakeResponse(container, { headers: {
+              'Content-Type': 'text/html', 'x-ap-encoding': 'zstd-delta' } }));
+  return {
+    basePath: (dir + baseName).replace(/\.html$/, ''),
+    deltaPath: (dir + 'parameters-' + vehicle + '-stable-V4.1.0').replace(/\.html$/, ''),
+    baseBody: base.toString('utf8'), pageBody: page.toString('utf8'),
+    pageMark: 'This is a complete list of the parameters of ' + vehicle + ' stable V4.1.0.',
+  };
+}
+
 /* --------------------------------------------------------- module load ---- */
 
 function loadExporter() {
-  // The modules the page loads, in its order.
-  const src = [DOCUMENT, UNPACK, EXPORTER]
+  // The modules the page loads, in its order, the delta decoder first as
+  // the page's own script tags have it.
+  const ZSTD = path.join(REPO, 'frontend', 'js', 'zstd-delta.js');
+  const src = [ZSTD, DOCUMENT, UNPACK, EXPORTER]
     .map((f) => fs.readFileSync(f, 'utf8')).join('\n');
+  const wasm = fs.readFileSync(path.join(REPO, 'frontend', 'js', 'zstd.wasm'));
   const sandbox = {
     caches,
-    TextEncoder, TextDecoder, URL, btoa, console,
+    TextEncoder, TextDecoder, URL, btoa, console, WebAssembly, Uint8Array,
     setTimeout, clearTimeout,
+    // The decoder's wasm is the one thing the exporter fetches.
+    fetch: (u) => (String(u).indexOf('zstd.wasm') !== -1
+      ? Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(
+          wasm.buffer.slice(wasm.byteOffset, wasm.byteOffset + wasm.byteLength)) })
+      : Promise.reject(new Error('unexpected fetch ' + u))),
+    Response: class {
+      constructor(body, init) { this._buf = Buffer.from(body); this.headers = {
+        get: (k) => ((init && init.headers) || {})[k] || null }; }
+      text() { return Promise.resolve(this._buf.toString('utf8')); }
+      arrayBuffer() { return Promise.resolve(this._buf.buffer.slice(
+        this._buf.byteOffset, this._buf.byteOffset + this._buf.byteLength)); }
+    },
     navigator: {},                 // no service worker: forces the sink we pass
     document: { createElement: () => ({ style: {}, click() {}, remove() {} }),
                 body: { appendChild() {} } },
@@ -353,15 +398,20 @@ async function main() {
     const r = loadWiki(w, cap);
     totals.pages += r.pages; totals.images += r.images; totals.css += r.css;
   }
-  // Six releases across four lines: the reader saved every one of them,
-  // and every one of them must survive into the file.
+  // Six releases across five lines, as a saved wiki holds them: the file
+  // keeps the newest of each line and leaves the point release behind it.
   const PARAM_ALL = ['V4.7.1', 'V4.7.0', 'V4.6.0', 'V4.5.2', 'V4.4.0', 'V4.3.0'];
+  const PARAM_KEPT = ['V4.7.1', 'V4.6.0', 'V4.5.2', 'V4.4.0', 'V4.3.0'];
   const paramWiki = wikis.includes('rover') ? 'rover' : wikis[0];
   const paramVehicle = paramWiki.charAt(0).toUpperCase() + paramWiki.slice(1);
   const paramPages = loadParameterVersions(paramWiki, paramVehicle, PARAM_ALL);
-  totals.pages += PARAM_ALL.length;
+  // Two more lines, one of them stored as a delta against the other.
+  const delta = loadDeltaVersion(paramWiki, paramVehicle);
+  totals.pages += PARAM_KEPT.length + 2;
   const paramBodies = {};
   paramPages.forEach((p) => { paramBodies[p.path] = p.body; });
+  paramBodies[delta.basePath] = delta.baseBody;
+  paramBodies[delta.deltaPath] = delta.pageBody;
 
   const loaded = totals;
   console.log('\ncache: ' + loaded.pages + ' pages, ' + loaded.images +
@@ -486,6 +536,8 @@ async function main() {
       'href="#\'+esc(p)+\'" class="btn btn-neutral float-right"',
       // A single backslash in a SHELL_JS literal vanishes from the built file.
       '.replace(/\\s+/g," ")',
+      // A delta-held version is rebuilt into the file, never written raw.
+      delta.pageMark, 'APDELTA1',
       'id="selectPicker"',
       'td.linenos .normal',
       'table.useralerts-table td']);
@@ -568,21 +620,27 @@ async function main() {
     check('image index built', Object.keys(D.imgs || {}).length > 0,
           Object.keys(D.imgs || {}).length + ' image paths');
 
-    // Every saved version is offered, newest first: what the reader chose
-    // to save is not thinned behind their back.
+    // The newest of each release line is offered, newest first; the point
+    // release behind one is left out of a file this size.
     const offered = (D.params || {})[paramWiki] || [];
-    const want = PARAM_ALL.map((v) =>
-      '/' + paramWiki + '/docs/parameters-' + paramVehicle + '-stable-' + v);
-    check('the switcher offers every saved version, newest first',
+    const want = PARAM_KEPT.map((v) =>
+      '/' + paramWiki + '/docs/parameters-' + paramVehicle + '-stable-' + v)
+      .concat([delta.basePath, delta.deltaPath]);
+    check('the switcher offers the newest of each series, newest first',
           offered.map((v) => v.p).join() === want.join(),
           offered.map((v) => v.p).join(' ') || 'none');
     check('the labels are the ones the site shows',
           offered.length > 0 &&
-          offered[0].n === paramVehicle + ' stable ' + PARAM_ALL[0],
+          offered[0].n === paramVehicle + ' stable ' + PARAM_KEPT[0],
           offered.length ? offered[0].n : 'none');
     const carried = new Set(D.pages.map((p) => p.p));
-    check('every saved version is carried into the file',
+    check('every kept version is carried into the file',
           want.every((p) => carried.has(p)), want.length + ' versions');
+    const dropped = '/' + paramWiki + '/docs/parameters-' + paramVehicle + '-stable-V4.7.0';
+    check('the superseded point release is not', !carried.has(dropped), dropped);
+    check('a version stored as a delta is rebuilt into the file',
+          scan.found[delta.pageMark] === true &&
+          scan.found['APDELTA1'] === false, delta.pageMark);
   }
 
   // The nav builders weave reader-reachable text into HTML: prove inert.
