@@ -4,7 +4,10 @@
  * Downloads one wiki archive and unpacks it into Cache Storage. The archive is
  * a tar served as a gzip content coding, so the browser decompresses it; the
  * tar is walked as a stream and each entry is stored under the URL the site
- * serves it at, text entries gzipped. Exposes window.ApUnpack.
+ * serves it at, text entries gzipped. Historical parameter pages arrive as
+ * zstd deltas against the base page beside them and are stored that way;
+ * readFrom rebuilds one with the decoder in zstd-delta.js. Exposes
+ * window.ApUnpack.
  */
 (function (global) {
   'use strict';
@@ -161,6 +164,25 @@
     return new Response(stream).arrayBuffer();
   }
 
+  // A delta entry opens with this, the base page's filename and a newline,
+  // then a zstd frame whose dictionary is that base, stored beside it.
+  var DELTA_MAGIC = 'APDELTA1 ';
+  var AP_DELTA = 'zstd-delta';
+  var WASM_URL = '/js/zstd.wasm';
+
+  /** { base, frame } for a delta entry's bytes, or null for anything else. */
+  function deltaHeader(bytes) {
+    for (var i = 0; i < DELTA_MAGIC.length; i++) {
+      if (bytes[i] !== DELTA_MAGIC.charCodeAt(i)) { return null; }
+    }
+    var end = bytes.indexOf(10, DELTA_MAGIC.length);
+    if (end === -1 || end > DELTA_MAGIC.length + 200) { return null; }
+    var base = textField(bytes, DELTA_MAGIC.length, end - DELTA_MAGIC.length);
+    // A bare filename: the base is the page next door, never anywhere else.
+    if (!base || /[\/\\]/.test(base) || base === '.' || base === '..') { return null; }
+    return { base: base, frame: bytes.subarray(end + 1) };
+  }
+
   /** Write one entry, gzipped when that helps; any failure stores plain bytes. */
   function storeEntry(cache, path, entryName, body) {
     var type = mimeFor(entryName);
@@ -168,6 +190,11 @@
       return cache.put(new Request(path),
         new Response(body, { headers: { 'Content-Type': type } }));
     };
+    if (deltaHeader(body)) {
+      var marked = { 'Content-Type': type };
+      marked[AP_ENCODED] = AP_DELTA;
+      return cache.put(new Request(path), new Response(body, { headers: marked }));
+    }
     if (!canCompress() || !COMPRESSIBLE.test(entryName) || body.length < 1024) {
       return plain();
     }
@@ -224,9 +251,64 @@
     return url.pathname;
   }
 
+  // The decoder, initialised once; a failed load is forgotten so the next
+  // read can try again.
+  var zstdReady = null;
+
+  function fetchWasm() {
+    return fetch(WASM_URL).then(function (r) {
+      if (!r.ok) { throw new Error('could not fetch ' + WASM_URL + ' (' + r.status + ')'); }
+      return r.arrayBuffer();
+    });
+  }
+
+  function decoder(loadWasm) {
+    if (!zstdReady) {
+      zstdReady = Promise.resolve().then(function () {
+        var zstd = global.ApZstd;
+        if (!zstd) { throw new Error('zstd-delta.js is not loaded'); }
+        return (loadWasm || fetchWasm)().then(function (buf) {
+          return zstd.init(buf);
+        }).then(function () { return zstd; });
+      });
+      zstdReady.catch(function () { zstdReady = null; });
+    }
+    return zstdReady;
+  }
+
+  /** The stored response as its page: inflated, or rebuilt from its delta
+   * and the base page in the same cache. opts.loadWasm supplies the decoder's
+   * bytes when a plain fetch would not do. */
+  function restore(response, cache, path, opts) {
+    if (!response || !response.headers ||
+        response.headers.get(AP_ENCODED) !== AP_DELTA) {
+      return Promise.resolve(inflate(response));
+    }
+    return response.arrayBuffer().then(function (buf) {
+      var head = deltaHeader(new Uint8Array(buf));
+      if (!head) { throw new Error('malformed delta entry ' + path); }
+      var basePath = path.slice(0, path.lastIndexOf('/') + 1) + head.base;
+      return Promise.all([
+        readFrom(cache, basePath, opts),
+        decoder(opts && opts.loadWasm)
+      ]).then(function (r) {
+        if (!r[0]) { throw new Error('base page ' + basePath + ' missing for ' + path); }
+        return r[0].arrayBuffer().then(function (base) {
+          var page = r[1].patch(head.frame, new Uint8Array(base));
+          return new Response(page, {
+            status: 200, statusText: 'OK',
+            headers: { 'Content-Type': mimeFor(path) }
+          });
+        });
+      });
+    });
+  }
+
   /** cache.match, but readable. */
-  function readFrom(cache, path) {
-    return cache.match(path).then(inflate);
+  function readFrom(cache, path, opts) {
+    return cache.match(path).then(function (hit) {
+      return restore(hit, cache, path, opts);
+    });
   }
 
   /** Fetch one archive and unpack it into `cache`. opts: base, build, signal. */
@@ -273,6 +355,8 @@
     untarToCache: untarToCache,
     fetchArchive: fetchArchive,
     inflate: inflate,
+    restore: restore,
+    deltaHeader: deltaHeader,
     readFrom: readFrom,
     storeEntry: storeEntry
   };

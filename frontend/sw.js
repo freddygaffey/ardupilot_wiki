@@ -6,6 +6,17 @@
  * caches. It also streams single-file exports to disk via /__export__/<id>.
  */
 
+// The delta decoder for saved parameter versions, imported now: a worker
+// may not import a new script once it is installed. Without it those
+// versions are simply not held; everything else is unaffected.
+if (typeof importScripts === 'function') {
+  try {
+    importScripts('/js/zstd-delta.js');
+  } catch (err) {
+    console.warn('[sw] zstd-delta.js did not load', err && err.message);
+  }
+}
+
 // Bump when cached content can no longer be trusted; saved wikis are unaffected.
 const CACHE_VERSION = 'v11';
 const PAGE_CACHE = `ardupilot-pages-${CACHE_VERSION}`;
@@ -35,6 +46,7 @@ const SHELL = [
   '/android-icon-192x192.png',
   '/icon-512x512.png',
   '/js/pwa.js',
+  '/js/zstd.wasm',
 ];
 
 // Network wait for a page that is not cached yet.
@@ -319,17 +331,91 @@ function inflate(response) {
   );
 }
 
+// A saved parameter version is a zstd delta against the base page stored
+// beside it: this marker, the base's filename, a newline, then the frame.
+// Mirrors deltaHeader in common_offline_unpack.js.
+const AP_DELTA = 'zstd-delta';
+const DELTA_MAGIC = 'APDELTA1 ';
+const ZSTD_WASM = '/js/zstd.wasm';
+
+function deltaHeader(bytes) {
+  for (let i = 0; i < DELTA_MAGIC.length; i++) {
+    if (bytes[i] !== DELTA_MAGIC.charCodeAt(i)) { return null; }
+  }
+  const end = bytes.indexOf(10, DELTA_MAGIC.length);
+  if (end === -1 || end > DELTA_MAGIC.length + 200) { return null; }
+  let base = '';
+  for (let i = DELTA_MAGIC.length; i < end; i++) { base += String.fromCharCode(bytes[i]); }
+  if (!base || /[/\\]/.test(base) || base === '.' || base === '..') { return null; }
+  return { base, frame: bytes.subarray(end + 1) };
+}
+
+// Initialised once from the precached wasm; a failure is forgotten so the
+// next read tries again.
+let zstdReady = null;
+
+function deltaDecoder() {
+  if (!zstdReady) {
+    zstdReady = (async () => {
+      if (typeof ApZstd === 'undefined') {
+        throw new Error('zstd-delta.js is not loaded');
+      }
+      let hit = await (await caches.open(STATIC_CACHE)).match(ZSTD_WASM);
+      if (!hit) {
+        hit = await fetch(ZSTD_WASM);
+        if (!hit || !hit.ok) { throw new Error('could not fetch ' + ZSTD_WASM); }
+        await keep(STATIC_CACHE, ZSTD_WASM, hit.clone());
+      }
+      await ApZstd.init(await hit.arrayBuffer());
+      return ApZstd;
+    })();
+    zstdReady.catch(() => { zstdReady = null; });
+  }
+  return zstdReady;
+}
+
+// A stored response as its page: inflated, or rebuilt from its delta and
+// the base beside it. A delta that cannot be rebuilt counts as not held.
+async function restore(hit, cache, path) {
+  if (!hit || !hit.headers || hit.headers.get(AP_ENCODED) !== AP_DELTA) {
+    return inflate(hit);
+  }
+  try {
+    const head = deltaHeader(new Uint8Array(await hit.arrayBuffer()));
+    if (!head) { throw new Error('malformed delta'); }
+    const basePath = path.slice(0, path.lastIndexOf('/') + 1) + head.base;
+    const base = inflate(await cache.match(basePath));
+    if (!base) { throw new Error('base page ' + basePath + ' missing'); }
+    const [decoder, baseBytes] = await Promise.all([deltaDecoder(), base.arrayBuffer()]);
+    const page = decoder.patch(head.frame, new Uint8Array(baseBytes));
+    return new Response(page, {
+      status: 200, statusText: 'OK',
+      headers: { 'Content-Type': 'text/html; charset=utf-8' }
+    });
+  } catch (err) {
+    console.warn('[sw] could not rebuild', path, err && err.message);
+    return undefined;
+  }
+}
+
 // Exact matches only: ignoreSearch walks the whole cache (0.2 ms vs 300 ms).
 // savedOnly limits the search to complete saved wikis: their copies are
 // rewritten in place by updates, which is what makes them authoritative.
 async function heldOffline(request, cache, savedOnly) {
+  const found = await heldRaw(request, cache, savedOnly);
+  return found ? restore(found.hit, found.cache, found.path) : undefined;
+}
+
+// The stored entry as it lies, with the cache and key it was found under,
+// for callers that only need to know it is there.
+async function heldRaw(request, cache, savedOnly) {
   const shapes = storedShapes(new URL(request.url));
 
   if (cache) {
     for (const path of shapes) {
       const hit = await cache.match(path);
       if (hit) {
-        return inflate(hit);
+        return { hit, cache, path };
       }
     }
     return undefined;
@@ -340,7 +426,7 @@ async function heldOffline(request, cache, savedOnly) {
     if (only) {
       const hit = await only.match(path);
       if (hit) {
-        return inflate(hit);
+        return { hit, cache: only, path };
       }
     }
   }
@@ -358,7 +444,7 @@ async function heldOffline(request, cache, savedOnly) {
     for (const path of shapes) {
       const hit = await candidate.match(path);
       if (hit) {
-        return inflate(hit);
+        return { hit, cache: candidate, path };
       }
     }
   }
@@ -402,7 +488,8 @@ async function paramIndex(request, url) {
   for (const label of Object.keys(index)) {
     // Values are bare filenames relative to docs/.
     const target = new URL('/' + wiki + '/docs/' + index[label], url.origin);
-    if (await heldOffline(new Request(target.href))) {
+    // Presence is enough; a delta-held version is not rebuilt to be listed.
+    if (await heldRaw(new Request(target.href))) {
       out[label] = index[label];
     }
   }
