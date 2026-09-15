@@ -231,8 +231,14 @@ async function checkDeltaVersionRebuilt() {
     [BASE]: { body: base, ct: 'text/html; charset=utf-8' },
     [DELTA]: { body: container, ct: 'text/html; charset=utf-8', apEncoded: 'zstd-delta' },
   };
-  const bodyOf = (res) => (res && res.body && !res.error
-    ? Buffer.from(res.body.buffer ? res.body : Buffer.from(String(res.body))) : null);
+  // A worker-built Response carries .body; a stored entry served as-is
+  // carries text(), read the same way a browser would.
+  const bodyOf = async (res) => {
+    if (!res || res.error) { return null; }
+    if (res.body) { return Buffer.from(res.body.buffer ? res.body : Buffer.from(String(res.body))); }
+    if (typeof res.text === 'function') { return Buffer.from(await res.text()); }
+    return null;
+  };
   const header = (res, name) => (res && res.headers
     ? (res.headers.get ? res.headers.get(name) : res.headers[name]) : null);
 
@@ -249,7 +255,7 @@ async function checkDeltaVersionRebuilt() {
   check('the decoder was imported', (w.seen.imported || []).length === 1);
   let a = w.ask(DELTA, { mode: 'navigate', destination: 'document' });
   let res = a ? await a.catch((e) => ({ error: e.message })) : null;
-  let body = bodyOf(res);
+  let body = await bodyOf(res);
   check('offline, the delta is served rebuilt into its page',
         !!body && Buffer.compare(body, page) === 0,
         res && res.error ? res.error : (body ? body.length + ' bytes' : 'no answer'));
@@ -263,7 +269,7 @@ async function checkDeltaVersionRebuilt() {
   // Served twice: the decoder is initialised once and reused.
   a = w.ask(DELTA, { mode: 'navigate', destination: 'document' });
   res = a ? await a.catch((e) => ({ error: e.message })) : null;
-  body = bodyOf(res);
+  body = await bodyOf(res);
   check('a second read is rebuilt too', !!body && Buffer.compare(body, page) === 0);
 
   a = w.ask(BASE, { mode: 'navigate', destination: 'document' });
@@ -299,16 +305,26 @@ async function checkDeltaVersionRebuilt() {
                               '/js/zstd.wasm': { body: wasm, cache: 'static' } } });
   a = w.ask(DELTA, { mode: 'navigate', destination: 'document' });
   res = a ? await a.catch((e) => ({ error: e.message })) : null;
-  body = bodyOf(res);
+  body = await bodyOf(res);
   check('a delta without its base is not served as a page',
         !body || (body.indexOf('APDELTA1') !== 0 && Buffer.compare(body, page) !== 0),
         res && res.status ? 'status ' + res.status : String(res && res.error));
   w = bootWorker({ networkFails: true, decoder: false, entries: saved });
   a = w.ask(DELTA, { mode: 'navigate', destination: 'document' });
   res = a ? await a.catch((e) => ({ error: e.message })) : null;
-  body = bodyOf(res);
+  body = await bodyOf(res);
   check('without the decoder the raw delta is never served as the page',
         !body || body.indexOf('APDELTA1') !== 0,
+        body ? body.length + ' bytes' : String(res && (res.error || res.status)));
+
+  // The fallback stores the plain page over the delta: served with no decoder.
+  w = bootWorker({ networkFails: true, decoder: false, entries: {
+    [DELTA]: { body: page, ct: 'text/html; charset=utf-8' } } });
+  a = w.ask(DELTA, { mode: 'navigate', destination: 'document' });
+  res = a ? await a.catch((e) => ({ error: e.message })) : null;
+  body = await bodyOf(res);
+  check('a plain page stored over the delta is served without the decoder',
+        !!body && Buffer.compare(body, page) === 0,
         body ? body.length + ' bytes' : String(res && (res.error || res.status)));
 }
 
