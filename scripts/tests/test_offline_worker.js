@@ -62,13 +62,15 @@ function liftLookup(src) {
                     /const PARAM_INDEX\s*=\s*[^;]*;/,
                     /let knownCacheNames\s*=\s*[^;]*;/,
                     /const markerChecked\s*=\s*[^;]*;/,
-                    /const openedCaches\s*=\s*[^;]*;/]) {
+                    /const openedCaches\s*=\s*[^;]*;/,
+                    /const CRC_TABLE\s*=[\s\S]*?\}\)\(\);/]) {
     const m = src.match(re);
     if (m) { out += m[0] + '\n'; }
   }
   // Every function heldOffline reaches; a missing one throws mid-run.
   for (const name of ['storedShapes', 'likelyCacheName', 'isComplete',
                       'offlineCacheFor', 'inflate', 'heldOffline', 'cacheFirst',
+                      'crc32', 'heldMatchingFingerprint',
                       'keep', 'sanitizeForCache', 'evictPromotedSavedCopies',
                       'paramIndex', 'plausibleBody']) {
     const at = src.indexOf('function ' + name + '(');
@@ -209,6 +211,57 @@ function canonical(p) {
   return p.replace(/\.html$/, '');
 }
 
+/** A fingerprinted asset whose saved copy matches its checksum is served at once. */
+async function checkFingerprintVerifiedFromSaved() {
+  console.log('\nservice worker: a fingerprinted asset the saved wiki holds\n');
+
+  const zlib = require('zlib');
+  const body = 'var theme = "' + 'x'.repeat(200) + '";';
+  const v = (zlib.crc32(Buffer.from(body)) >>> 0).toString(16).padStart(8, '0');
+  const PATH = '/copter/_static/js/theme.js';
+
+  // The network stalls; the saved copy's checksum is the one asked for.
+  let w = bootWorker({ holdNetwork: true,
+                       offlineCopy: { path: PATH, body, ct: 'text/javascript' } });
+  let a = w.ask(PATH + '?v=' + v);
+  const raced = await Promise.race([
+    a ? a.then(() => 'answered').catch((e) => 'rejected ' + e.message) : Promise.resolve('no handler'),
+    new Promise((r) => setTimeout(() => r('still waiting on the network'), 1500)),
+  ]);
+  check('a saved copy matching its fingerprint is served without waiting on the network',
+        raced === 'answered', raced);
+  check('nothing was asked of the network for it', w.seen.fetches.length === 0,
+        JSON.stringify(w.seen.fetches));
+  const promotedAt = w.seen.puts.indexOf(w.seen.puts.find((k) => k.indexOf('?v=' + v) !== -1));
+  const promoted = promotedAt !== -1 && w.seen.putValues && w.seen.putValues[promotedAt];
+  check('the verified copy is promoted into the static cache under its exact key',
+        !!promoted && promoted.headers && promoted.headers.get('x-ap-promoted') === '1',
+        JSON.stringify(w.seen.puts));
+  if (w.seen.releaseNetwork) { w.seen.releaseNetwork(); }
+
+  // A saved copy from another build: the network still answers first.
+  w = bootWorker({ serve: () => ({ ct: 'text/javascript', body: 'var theme = "fresh";' }),
+                   offlineCopy: { path: PATH, body, ct: 'text/javascript' } });
+  a = w.ask(PATH + '?v=00000000');
+  let res = a ? await a : null;
+  check('a saved copy whose checksum differs does not answer a fingerprinted request',
+        !!res && res !== w.seen.servedCopy && w.seen.fetches.length === 1,
+        w.seen.fetches.length + ' fetches');
+  const wrongAt = w.seen.puts.indexOf(w.seen.puts.find((k) => k.indexOf('?v=00000000') !== -1));
+  const wrong = wrongAt !== -1 && w.seen.putValues && w.seen.putValues[wrongAt];
+  check('and the network answer, not the saved copy, is what gets stored',
+        !!wrong && !(wrong.headers && wrong.headers.get && wrong.headers.get('x-ap-promoted')),
+        JSON.stringify(w.seen.puts));
+
+  // Offline with a mismatching copy: the old fallback, better than nothing.
+  w = bootWorker({ networkFails: true,
+                   offlineCopy: { path: PATH, body, ct: 'text/javascript' } });
+  a = w.ask(PATH + '?v=00000000');
+  res = a ? await a.catch(() => null) : null;
+  check('offline, a mismatching saved copy is still the fallback',
+        !!res && res === w.seen.servedCopy);
+}
+
 /** The worker must evaluate, not merely parse. */
 function checkWorkerEvaluates() {
   const ctx = {
@@ -244,6 +297,11 @@ function bodyAwareResponse(text) {
       return bodyAwareResponse(text);
     },
     async text() { this._used = true; return text; },
+    async arrayBuffer() {
+      this._used = true;
+      const b = Buffer.from(text);
+      return b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength);
+    },
   };
 }
 
@@ -1404,6 +1462,7 @@ async function main() {
   await checkUpdateRouting();
   await checkPoisonGuard();
   await checkVersionBump();
+  await checkFingerprintVerifiedFromSaved();
   await checkArchiveFallback();
   await checkDownloadBypass();
   await checkRevalidationIsAwaited();
