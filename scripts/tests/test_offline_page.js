@@ -337,6 +337,9 @@ async function fileHash(text) {
 }
 
 const settle = () => new Promise(r => setTimeout(r, 60));
+// The build's delta header carries the page's content hash: sha256, first eight bytes.
+const hash16 = (b) => require('crypto').createHash('sha256').update(b).digest('hex').slice(0, 16);
+
 const $ = (doc, id) => doc.getElementById(id);
 const rows = (doc) => [...doc.querySelectorAll('.wiki-check')];
 
@@ -1516,13 +1519,17 @@ async function main() {
     const frame = fs.readFileSync(path.join(FIXTURES, 'delta-page.zst'));
     const wasm = fs.readFileSync(path.join(FRONTEND_JS, 'zstd.wasm'));
     const BASE = 'parameters-Rover-stable-V4.7.0.html';
-    const container = Buffer.concat([Buffer.from('APDELTA1 ' + BASE + '\n'), frame]);
-    const climb = Buffer.concat([Buffer.from('APDELTA1 ../../sw.js\n'), frame]);
+    const container = Buffer.concat([Buffer.from('APDELTA1 ' + BASE + ' ' + hash16(page) + '\n'), frame]);
+    const climb = Buffer.concat([Buffer.from('APDELTA1 ../../sw.js ' + hash16(page) + '\n'), frame]);
+    const wrongHash = Buffer.concat([Buffer.from('APDELTA1 ' + BASE + ' 0123456789abcdef\n'), frame]);
+    const noHash = Buffer.concat([Buffer.from('APDELTA1 ' + BASE + '\n'), frame]);
     const cache = await sandbox.caches.open('delta-test');
     const tar = tarBytes({
       ['rover/docs/' + BASE]: base,
       'rover/docs/parameters-Rover-stable-V4.6.0.html': container,
       'rover/docs/parameters-Rover-stable-V4.5.0.html': climb,
+      'rover/docs/parameters-Rover-stable-V4.4.0.html': wrongHash,
+      'rover/docs/parameters-Rover-stable-V4.3.0.html': noHash,
     });
     let wasmFetches = 0;
     sandbox.fetch = (u) => {
@@ -1559,6 +1566,28 @@ async function main() {
     const bad = await cache.match('/rover/docs/parameters-Rover-stable-V4.5.0.html');
     check('a delta naming a base outside its own directory is not treated as a delta',
           !!bad && !bad.headers.get('x-ap-encoding'));
+    const unhashed = await cache.match('/rover/docs/parameters-Rover-stable-V4.3.0.html');
+    check('a delta header without the page hash is not treated as a delta',
+          !!unhashed && !unhashed.headers.get('x-ap-encoding'));
+    let hashErr = null;
+    try { await sandbox.ApUnpack.readFrom(cache, '/rover/docs/parameters-Rover-stable-V4.4.0.html'); }
+    catch (e) { hashErr = e.message; }
+    check('a rebuilt page that does not match its hash is refused',
+          !!hashErr && /does not match its hash/.test(hashErr), hashErr || 'no error');
+
+    // No wasm to be had: the JavaScript decoder rebuilds the same page.
+    const jsOnly = load({ manifest: MANIFEST });
+    await settle();
+    const c2 = await jsOnly.sandbox.caches.open('delta-js');
+    jsOnly.sandbox.fetch = (u) => (String(u).indexOf('zstd.wasm') !== -1
+      ? Promise.resolve({ ok: false, status: 404 })
+      : Promise.resolve({ ok: true, body: streamOf(tar) }));
+    await jsOnly.sandbox.ApUnpack.fetchArchive(
+      { id: 'rover', name: 'Rover', archive: 'rover-offline.tar' }, c2, () => {}, { base: '/offline' });
+    const jsOut = await jsOnly.sandbox.ApUnpack.readFrom(c2, DELTA);
+    check('without a wasm the JavaScript decoder rebuilds the page',
+          !!jsOut && (await jsOut.text()) === page.toString('utf8') &&
+          jsOnly.sandbox.ApZstd.mode() === 'js', String(jsOnly.sandbox.ApZstd.mode()));
 
     await cache.delete('/rover/docs/' + BASE);
     let err = null;
@@ -1731,7 +1760,8 @@ async function main() {
     const DELTA = 'parameters-Copter-stable-V4.6.0.html';
     const base = fs.readFileSync(path.join(FIXTURES, 'delta-base.html'));
     const frame = fs.readFileSync(path.join(FIXTURES, 'delta-page.zst'));
-    const container = Buffer.concat([Buffer.from('APDELTA1 ' + BASE + '\n'), frame]);
+    const container = Buffer.concat([Buffer.from('APDELTA1 ' + BASE + ' ' +
+      hash16(fs.readFileSync(path.join(FIXTURES, 'delta-page.html'))) + '\n'), frame]);
     const archives = {
       'copter/index.html': '<html>new index</html>',
       ['copter/docs/' + BASE]: base,
@@ -1765,7 +1795,8 @@ async function main() {
     const DELTA = 'parameters-Copter-stable-V4.6.0.html';
     const base = fs.readFileSync(path.join(FIXTURES, 'delta-base.html'));
     const frame = fs.readFileSync(path.join(FIXTURES, 'delta-page.zst'));
-    const container = Buffer.concat([Buffer.from('APDELTA1 ' + BASE + '\n'), frame]);
+    const container = Buffer.concat([Buffer.from('APDELTA1 ' + BASE + ' ' +
+      hash16(fs.readFileSync(path.join(FIXTURES, 'delta-page.html'))) + '\n'), frame]);
     await seedSaved(cachesObj, 'common', OLD_BUILD, {
       '_images/shared.png': ['c1', 'shared bytes']
     });
@@ -1815,7 +1846,7 @@ async function main() {
       const c = await cachesObj.open('ardupilot-offline-copter');
       for (const ver of ['4.7.0', '4.6.3']) {
         await c.put('/copter/docs/parameters-Copter-stable-V' + ver + '.html',
-          new FakeResponse(Buffer.from('APDELTA1 parameters-Copter-stable-V4.7.0.html\nxx'),
+          new FakeResponse(Buffer.from('APDELTA1 parameters-Copter-stable-V4.7.0.html 0123456789abcdef\nxx'),
                            { headers: { 'Content-Type': 'text/html',
                                         'x-ap-encoding': 'zstd-delta' } }));
       }

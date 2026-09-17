@@ -373,20 +373,24 @@ of the site. Each vehicle builds a full parameter list for every 4.x release,
 4 to 6 MB apiece and nearly identical from one release to the next. The archive
 carries the newest stable of them as an ordinary page and every other carried
 version (the 4.x stables and the newest beta) as a zstd delta against it: a
-short header naming the base, then a zstd frame written with the base as its
-dictionary, 20 to 40 KB in place of 300 KB gzipped. The unpacker stores a delta
-as it arrives, marked ``x-ap-encoding: zstd-delta``; the service worker, the
-export and anything else that reads through ``ApUnpack.readFrom`` rebuild the
-page on first use with the decoder in ``frontend/js/zstd-delta.js`` (zstd
-compiled to WebAssembly, imported by the worker at start-up and precached with
-its ``zstd.wasm``). Because the base is a stable release rather than the
+short header naming the base and the content hash of the page, then a zstd
+frame written with the base as its dictionary, 20 to 40 KB in place of 300 KB
+gzipped. The unpacker stores a delta as it arrives, marked
+``x-ap-encoding: zstd-delta``; the service worker, the export and anything else
+that reads through ``ApUnpack.readFrom`` rebuild the page on first use with
+``frontend/js/zstd-delta.js``, which holds two decoders behind one surface:
+zstd compiled to WebAssembly (imported by the worker at start-up and precached
+with its ``zstd.wasm``), and fzstd, a pure JavaScript decoder that takes over
+when WebAssembly is unavailable, about 150 ms for a 4 MB page against 3 ms.
+Either way the rebuilt page is checked against the hash in the header before
+it is served. Because the base is a stable release rather than the
 nightly master list, the deltas only change when a new stable lands, so a
 differential update rarely has to fetch them again.
 
 The plain pages stay on the site at their usual URLs, so the fallback needs no
 server support. Once a saved wiki carries versions, the Offline page runs the
-decoder against a tiny built-in delta; if that fails (no WebAssembly, or the
-decoder could not load) it says so and offers one button that fetches every
+decoder against a tiny built-in delta; if even the JavaScript decoder cannot
+run it says so and offers one button that fetches every
 carried version as a plain page and stores it over the delta, about 0.3 MB
 each over the wire. A worker that cannot rebuild a delta treats that version
 as not held rather than serving the raw bytes.

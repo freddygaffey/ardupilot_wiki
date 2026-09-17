@@ -400,8 +400,9 @@ PARAM_VERSION_RE = re.compile(
     r"V?(?P<version>[0-9][0-9A-Za-z.\-]*)\.html$"
 )
 
-# A delta entry: this line, then a zstd frame whose dictionary is the base
-# page, which lives beside the delta under the name given here.
+# A delta entry: this line with the base page's filename and the content
+# hash of the page it rebuilds, then a zstd frame whose dictionary is that
+# base, which lives beside the delta. The hash is checked after rebuilding.
 DELTA_MAGIC = b"APDELTA1 "
 DELTA_LEVEL = 19
 
@@ -512,11 +513,14 @@ def add_param_versions(tar, wiki: str, html_root: Path, out_dir: Path,
     add_bytes(tar, f"{wiki}/{base['file']}", base_bytes, files,
               loose_dir=out_dir / "files")
     base["bytes"] = len(base_bytes)
-    header = DELTA_MAGIC + Path(base["file"]).name.encode("ascii") + b"\n"
+    base_name = Path(base["file"]).name.encode("ascii")
     for v in versions:
         if v is base:
             continue
-        data = header + delta_against(base_bytes, page_bytes(v))
+        page = page_bytes(v)
+        header = (DELTA_MAGIC + base_name + b" " +
+                  content_hash(page).encode("ascii") + b"\n")
+        data = header + delta_against(base_bytes, page)
         add_bytes(tar, f"{wiki}/{v['file']}", data, files,
                   loose_dir=out_dir / "files")
         v["bytes"] = len(data)

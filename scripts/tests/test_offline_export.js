@@ -166,7 +166,8 @@ function loadDeltaVersion(wiki, vehicle) {
   const page = fs.readFileSync(path.join(FIX, 'param-delta-page.html'));
   const frame = fs.readFileSync(path.join(FIX, 'param-delta-page.zst'));
   const baseName = 'parameters-' + vehicle + '-stable-V4.2.0.html';
-  const container = Buffer.concat([Buffer.from('APDELTA1 ' + baseName + '\n'), frame]);
+  const hash16 = (b) => require('crypto').createHash('sha256').update(b).digest('hex').slice(0, 16);
+  const container = Buffer.concat([Buffer.from('APDELTA1 ' + baseName + ' ' + hash16(page) + '\n'), frame]);
   const cache = caches._all.get('ardupilot-offline-' + wiki);
   const dir = '/' + wiki + '/docs/';
   cache.put(dir + baseName, new FakeResponse(base, { headers: { 'Content-Type': 'text/html' } }));
@@ -193,7 +194,7 @@ function loadExporter() {
   const sandbox = {
     caches,
     TextEncoder, TextDecoder, URL, btoa, console, WebAssembly, Uint8Array,
-    setTimeout, clearTimeout,
+    setTimeout, clearTimeout, crypto: require('crypto').webcrypto,
     // The decoder's wasm is the one thing the exporter fetches.
     fetch: (u) => (String(u).indexOf('zstd.wasm') !== -1
       ? Promise.resolve({ ok: true, arrayBuffer: () => Promise.resolve(

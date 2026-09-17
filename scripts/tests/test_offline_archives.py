@@ -367,8 +367,9 @@ def check_param_versions_are_deltas(wikis):
             if v.get("default"):
                 continue
             head, _, frame = data.partition(b"\n")
-            if not head.startswith(b"APDELTA1 ") or head[9:] != Path(base_name).name.encode():
-                bad.append(f"{v['label']}: header {head[:40]!r}")
+            fields = head[9:].split(b" ") if head.startswith(b"APDELTA1 ") else []
+            if len(fields) != 2 or fields[0] != Path(base_name).name.encode():
+                bad.append(f"{v['label']}: header {head[:60]!r}")
                 continue
             if v.get("bytes") != len(data) or table.get(name) is None:
                 bad.append(f"{v['label']}: manifest bytes or table row wrong")
@@ -382,6 +383,10 @@ def check_param_versions_are_deltas(wikis):
             if b"Full Parameter List" not in page or b"<iframe" in page.lower() \
                     or abs(len(page) - len(source)) > len(source) // 50:
                 bad.append(f"{v['label']}: rebuilt {len(page)} B against {len(source)} B built")
+                continue
+            import hashlib
+            if hashlib.sha256(page).hexdigest()[:16].encode() != fields[1]:
+                bad.append(f"{v['label']}: header hash is not the rebuilt page's")
                 continue
             rebuilt += 1
         check(f"{wiki}: every delta names the base and rebuilds its page",

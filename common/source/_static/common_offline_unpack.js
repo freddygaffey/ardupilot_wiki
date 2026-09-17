@@ -164,23 +164,37 @@
     return new Response(stream).arrayBuffer();
   }
 
-  // A delta entry opens with this, the base page's filename and a newline,
-  // then a zstd frame whose dictionary is that base, stored beside it.
+  // A delta entry opens with this, the base page's filename, the content
+  // hash of the page it rebuilds and a newline, then a zstd frame whose
+  // dictionary is that base, stored beside it. The hash is checked after
+  // rebuilding, so neither decoder can hand back a wrong page unnoticed.
   var DELTA_MAGIC = 'APDELTA1 ';
   var AP_DELTA = 'zstd-delta';
   var WASM_URL = '/js/zstd.wasm';
 
-  /** { base, frame } for a delta entry's bytes, or null for anything else. */
+  /** { base, hash, frame } for a delta entry's bytes, or null for anything else. */
   function deltaHeader(bytes) {
     for (var i = 0; i < DELTA_MAGIC.length; i++) {
       if (bytes[i] !== DELTA_MAGIC.charCodeAt(i)) { return null; }
     }
     var end = bytes.indexOf(10, DELTA_MAGIC.length);
-    if (end === -1 || end > DELTA_MAGIC.length + 200) { return null; }
-    var base = textField(bytes, DELTA_MAGIC.length, end - DELTA_MAGIC.length);
+    if (end === -1 || end > DELTA_MAGIC.length + 220) { return null; }
+    var fields = textField(bytes, DELTA_MAGIC.length, end - DELTA_MAGIC.length).split(' ');
+    var base = fields[0], hash = fields[1];
     // A bare filename: the base is the page next door, never anywhere else.
     if (!base || /[\/\\]/.test(base) || base === '.' || base === '..') { return null; }
-    return { base: base, frame: bytes.subarray(end + 1) };
+    if (!/^[0-9a-f]{16}$/.test(hash || '')) { return null; }
+    return { base: base, hash: hash, frame: bytes.subarray(end + 1) };
+  }
+
+  // Exactly as the build computes it: sha256, first eight bytes, hex.
+  function contentHash(bytes) {
+    return crypto.subtle.digest('SHA-256', bytes).then(function (d) {
+      var v = new Uint8Array(d);
+      var out = '';
+      for (var i = 0; i < 8; i++) { out += (v[i] < 16 ? '0' : '') + v[i].toString(16); }
+      return out;
+    });
   }
 
   /** Write one entry, gzipped when that helps; any failure stores plain bytes. */
@@ -262,6 +276,7 @@
     });
   }
 
+  // The wasm when it can be had, the JavaScript decoder when it cannot.
   function decoder(loadWasm) {
     if (!zstdReady) {
       zstdReady = Promise.resolve().then(function () {
@@ -269,6 +284,9 @@
         if (!zstd) { throw new Error('zstd-delta.js is not loaded'); }
         return (loadWasm || fetchWasm)().then(function (buf) {
           return zstd.init(buf);
+        }, function (err) {
+          console.warn('[offline] no wasm for the delta decoder, using JavaScript:', err && err.message);
+          return zstd.init(null);
         }).then(function () { return zstd; });
       });
       zstdReady.catch(function () { zstdReady = null; });
@@ -295,9 +313,14 @@
         if (!r[0]) { throw new Error('base page ' + basePath + ' missing for ' + path); }
         return r[0].arrayBuffer().then(function (base) {
           var page = r[1].patch(head.frame, new Uint8Array(base));
-          return new Response(page, {
-            status: 200, statusText: 'OK',
-            headers: { 'Content-Type': mimeFor(path) }
+          return contentHash(page).then(function (got) {
+            if (got !== head.hash) {
+              throw new Error('the rebuilt page for ' + path + ' does not match its hash');
+            }
+            return new Response(page, {
+              status: 200, statusText: 'OK',
+              headers: { 'Content-Type': mimeFor(path) }
+            });
           });
         });
       });
@@ -378,6 +401,7 @@
     restore: restore,
     deltaHeader: deltaHeader,
     decoderWorks: decoderWorks,
+    contentHash: contentHash,
     readFrom: readFrom,
     storeEntry: storeEntry
   };

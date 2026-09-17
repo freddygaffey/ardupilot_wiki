@@ -332,8 +332,9 @@ function inflate(response) {
 }
 
 // A saved parameter version is a zstd delta against the base page stored
-// beside it: this marker, the base's filename, a newline, then the frame.
-// Mirrors deltaHeader in common_offline_unpack.js.
+// beside it: this marker, the base's filename, the content hash of the
+// page it rebuilds, a newline, then the frame. Mirrors deltaHeader in
+// common_offline_unpack.js.
 const AP_DELTA = 'zstd-delta';
 const DELTA_MAGIC = 'APDELTA1 ';
 const ZSTD_WASM = '/js/zstd.wasm';
@@ -343,15 +344,25 @@ function deltaHeader(bytes) {
     if (bytes[i] !== DELTA_MAGIC.charCodeAt(i)) { return null; }
   }
   const end = bytes.indexOf(10, DELTA_MAGIC.length);
-  if (end === -1 || end > DELTA_MAGIC.length + 200) { return null; }
-  let base = '';
-  for (let i = DELTA_MAGIC.length; i < end; i++) { base += String.fromCharCode(bytes[i]); }
+  if (end === -1 || end > DELTA_MAGIC.length + 220) { return null; }
+  let line = '';
+  for (let i = DELTA_MAGIC.length; i < end; i++) { line += String.fromCharCode(bytes[i]); }
+  const [base, hash] = line.split(' ');
   if (!base || /[/\\]/.test(base) || base === '.' || base === '..') { return null; }
-  return { base, frame: bytes.subarray(end + 1) };
+  if (!/^[0-9a-f]{16}$/.test(hash || '')) { return null; }
+  return { base, hash, frame: bytes.subarray(end + 1) };
 }
 
-// Initialised once from the precached wasm; a failure is forgotten so the
-// next read tries again.
+// Exactly as the build computes it: sha256, first eight bytes, hex.
+async function contentHash(bytes) {
+  const v = new Uint8Array(await crypto.subtle.digest('SHA-256', bytes));
+  let out = '';
+  for (let i = 0; i < 8; i++) { out += (v[i] < 16 ? '0' : '') + v[i].toString(16); }
+  return out;
+}
+
+// Initialised once: the precached wasm when it can be had, the JavaScript
+// decoder when it cannot. A failure is forgotten so the next read tries again.
 let zstdReady = null;
 
 function deltaDecoder() {
@@ -360,13 +371,21 @@ function deltaDecoder() {
       if (typeof ApZstd === 'undefined') {
         throw new Error('zstd-delta.js is not loaded');
       }
-      let hit = await (await caches.open(STATIC_CACHE)).match(ZSTD_WASM);
-      if (!hit) {
-        hit = await fetch(ZSTD_WASM);
-        if (!hit || !hit.ok) { throw new Error('could not fetch ' + ZSTD_WASM); }
-        await keep(STATIC_CACHE, ZSTD_WASM, hit.clone());
+      let bytes = null;
+      try {
+        let hit = await (await caches.open(STATIC_CACHE)).match(ZSTD_WASM);
+        if (!hit) {
+          hit = await fetch(ZSTD_WASM);
+          if (hit && hit.ok) { await keep(STATIC_CACHE, ZSTD_WASM, hit.clone()); } else { hit = null; }
+        }
+        if (hit) { bytes = await hit.arrayBuffer(); }
+      } catch (err) {
+        bytes = null;
       }
-      await ApZstd.init(await hit.arrayBuffer());
+      const mode = await ApZstd.init(bytes);
+      if (mode !== 'wasm') {
+        console.warn('[sw] rebuilding parameter versions in JavaScript; the WebAssembly decoder is unavailable');
+      }
       return ApZstd;
     })();
     zstdReady.catch(() => { zstdReady = null; });
@@ -388,6 +407,9 @@ async function restore(hit, cache, path) {
     if (!base) { throw new Error('base page ' + basePath + ' missing'); }
     const [decoder, baseBytes] = await Promise.all([deltaDecoder(), base.arrayBuffer()]);
     const page = decoder.patch(head.frame, new Uint8Array(baseBytes));
+    if ((await contentHash(page)) !== head.hash) {
+      throw new Error('the rebuilt page does not match its hash');
+    }
     return new Response(page, {
       status: 200, statusText: 'OK',
       headers: { 'Content-Type': 'text/html; charset=utf-8' }

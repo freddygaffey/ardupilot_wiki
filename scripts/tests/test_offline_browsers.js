@@ -552,13 +552,15 @@ async function runEngine(name, launcher, base) {
       await cache.put('/__ap_complete__', new Response('1'));
       await cache.put(fx.basePath, new Response(bytes(fx.base), {
         headers: { 'Content-Type': 'text/html; charset=utf-8' } }));
-      const container = new Blob(['APDELTA1 ' + fx.basePath.split('/').pop() + '\n',
+      const container = new Blob(['APDELTA1 ' + fx.basePath.split('/').pop() + ' ' + fx.hash + '\n',
                                   bytes(fx.frame)]);
       await cache.put(fx.probePath, new Response(container, {
         headers: { 'Content-Type': 'text/html; charset=utf-8',
                    'x-ap-encoding': 'zstd-delta' } }));
       return { delta: container.size, base: fx.base.length };
     }, { basePath: DELTA_BASE, probePath: DELTA_PROBE,
+         hash: require('crypto').createHash('sha256')
+           .update(fs.readFileSync(path.join(DELTA_FIXTURES, 'param-delta-page.html'))).digest('hex').slice(0, 16),
          base: fs.readFileSync(path.join(DELTA_FIXTURES, 'param-delta-base.html')).toString('base64'),
          frame: fs.readFileSync(path.join(DELTA_FIXTURES, 'param-delta-page.zst')).toString('base64') });
 

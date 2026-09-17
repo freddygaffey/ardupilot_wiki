@@ -73,7 +73,7 @@ function liftLookup(src) {
   // Every function heldOffline reaches; a missing one throws mid-run.
   for (const name of ['storedShapes', 'likelyCacheName', 'isComplete',
                       'offlineCacheFor', 'inflate', 'heldOffline', 'heldRaw',
-                      'restore', 'deltaHeader', 'deltaDecoder', 'cacheFirst',
+                      'restore', 'deltaHeader', 'deltaDecoder', 'contentHash', 'cacheFirst',
                       'keep', 'sanitizeForCache', 'evictPromotedSavedCopies',
                       'paramIndex', 'plausibleBody']) {
     const at = src.indexOf('function ' + name + '(');
@@ -157,6 +157,7 @@ function run(workerSrc, label) {
   const ctx = {
     URL,
     console,
+    crypto: require('crypto').webcrypto,
     caches: {
       match: async (r) => (store.has(keyOf(r)) ? asResponse(keyOf(r)) : undefined),
       has: async () => false,
@@ -225,8 +226,11 @@ async function checkDeltaVersionRebuilt() {
   const wasm = fs.readFileSync(path.join(REPO, 'frontend', 'js', 'zstd.wasm'));
   const BASE = '/rover/docs/parameters-Rover-stable-V4.7.0.html';
   const DELTA = '/rover/docs/parameters-Rover-stable-V4.6.0.html';
+  const hash16 = (b) => require('crypto').createHash('sha256').update(b).digest('hex').slice(0, 16);
   const container = Buffer.concat([
-    Buffer.from('APDELTA1 parameters-Rover-stable-V4.7.0.html\n'), frame]);
+    Buffer.from('APDELTA1 parameters-Rover-stable-V4.7.0.html ' + hash16(page) + '\n'), frame]);
+  const wrongHash = Buffer.concat([
+    Buffer.from('APDELTA1 parameters-Rover-stable-V4.7.0.html 0123456789abcdef\n'), frame]);
   const saved = {
     [BASE]: { body: base, ct: 'text/html; charset=utf-8' },
     [DELTA]: { body: container, ct: 'text/html; charset=utf-8', apEncoded: 'zstd-delta' },
@@ -316,6 +320,27 @@ async function checkDeltaVersionRebuilt() {
   check('without the decoder the raw delta is never served as the page',
         !body || body.indexOf('APDELTA1') !== 0,
         body ? body.length + ' bytes' : String(res && (res.error || res.status)));
+
+  // No wasm anywhere and no network: the JavaScript decoder rebuilds it.
+  w = bootWorker({ networkFails: true, decoder: true, entries: saved });
+  a = w.ask(DELTA, { mode: 'navigate', destination: 'document' });
+  res = a ? await a.catch((e) => ({ error: e.message })) : null;
+  body = await bodyOf(res);
+  check('with no wasm to be had the JavaScript decoder rebuilds the page',
+        !!body && Buffer.compare(body, page) === 0,
+        body ? body.length + ' bytes' : String(res && (res.error || res.status)));
+
+  // A rebuilt page that does not match the hash in its header is not served.
+  w = bootWorker({ networkFails: true, decoder: true, entries: {
+    [BASE]: saved[BASE],
+    [DELTA]: { body: wrongHash, ct: 'text/html; charset=utf-8', apEncoded: 'zstd-delta' },
+    '/js/zstd.wasm': { body: wasm, cache: 'static' } } });
+  a = w.ask(DELTA, { mode: 'navigate', destination: 'document' });
+  res = a ? await a.catch((e) => ({ error: e.message })) : null;
+  body = await bodyOf(res);
+  check('a rebuilt page that does not match its hash is not served as the page',
+        !body || Buffer.compare(body, page) !== 0,
+        res && res.status ? 'status ' + res.status : String(res && res.error));
 
   // The fallback stores the plain page over the delta: served with no decoder.
   w = bootWorker({ networkFails: true, decoder: false, entries: {
@@ -505,6 +530,7 @@ function bootWorker({ networkFails = false, serve = null,
       },
     },
     console: { warn() {}, log() {}, error() {} },
+    crypto: require('crypto').webcrypto,
     fetch: async (req) => {
       const url = String(req && req.url ? req.url : req);
       seen.fetches.push(url);
