@@ -6,7 +6,7 @@
 When you are debuging a vercal out at the flying field in the hot sun beging your phone hotsopt to load quicker before your vtx drains your battery. This is a situation that I have personaly never found my self if but I heard of it from a friend wink wink. That friend tells me how horable that is. 
 
 ?????????
-So to slove this I decided trying to aply what I learned in my year 12 sofwhere corse a PWA this Portable Web App this is a way of baciclay 
+So to slove this I decided trying to aply what I learned in my year 12 sofwhere corse a PWA this Progresive Web App this is a way of baciclay 
 ?????????
 
 # The solution
@@ -29,17 +29,14 @@ So to fix this self DoS I fist had to bundle the whole wiki in to a single compr
 - Pramater compresion 
     I needed to find a effcent way to copress +700mb of pramates down to under 20mb so that I could simplifi the UI and also have them all there as this makes the product more complete. One of the biggest tricks wilth compresion alrythons is to pic one that suits your data. My data is html but more impotalny mulable nealy identical html files. There is a varry minmal amount of diffrence between each vertion so this ment the I needed to pick a compresion alrythome that can leavrage this. I new this type of agrytom was out there as it is a verry common uase case such as differancahl bacups. After some reashearch I found zstd this compresion algrythm is used by Arch luinx to compress its pacages because dispite it having slighly worse compression ratio then .gz it is 16x faster this suits the goals of this progect well. But more impotalny it has the abliy to do patch from 
     https://github.com/facebook/zstd/wiki/Zstandard-as-a-patching-engine
-    This site goes in to the details but it is sopira in almost evlry way. By using the --patch-form flag this allow the size of the archve for all pramaters to go from xxxxx to 10 mb for all vertions from 3.9.x to present day on all vercals sub, rover, blim, plane, copter ... . This mealy 10mb now can be distrubuted effcently and included to the large tars by default. This has conciderable beinift. 
+    This site goes in to the details but it is sopira in almost evlry way. By using the the python liberry equvelnt to --patch-form flag this allow the size of the archve for all pramaters to go from xxxxx to 2.8 mb for all vertions from 4.0 to present day on all vercals sub, rover, blim, plane, copter ... . This mealy 10mb now can be distrubuted effcently and included to the large tars by default. This has conciderable beinift. 
 
+Now I had the backend worked out it was time to do the fount end. This is where I had to make it noninvase and also intuitive to use. I chose to add the offline to the banner as it is part of the nomal wiki. I also made that page be a normal sphinx (the exiting wiki liberry to build) page then it pulled in the js but the CSS and the html was all standers sphinx this increases the maintablity. 
+In adtion to this I added a page to the dev wiki this contains how it works so that anyone maintaingin it can learn how this works before making changes to it. I have also inclued some more tecnical details in there there that go in to greater depth then here https://ardupilot.org/dev/docs/wiki-offline-copies.html .
 
-
-
-
-
-Unfutonaly i cant make this to tecnical so this is the full how this works artical on the ardupilo dev wiki https://ardupilot.org/dev/docs/wiki-offline-copies.html
-
-
-
+# Limitaion/futher work
+There is duplication of the common wikis html this html is saved with duplication this is bad not the bese desgin as it will mean that if there is a update pused to common pages and you have all the wikis downloaded there as is currentl is you will need to download the same common file up to 10x this is not that iniffcent as the images for common wikis are all cashed so it is just the html. 
+At the moment there the amount of storage that is used is primalry used for images there are som verry large images these are taking up a lot of space about 400 mb this can be reduesed but doing a traul now to rencode all the images then as new PR come in to keep them at a resonbal size. We have allready make a github action that will enfoce this.
 
 
 
