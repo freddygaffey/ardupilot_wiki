@@ -10,18 +10,21 @@ When you are debugging a vehicle out in the field, under the hot sun or freezing
 
 # The solution
 
-To solve this I can implement a PWA this is a piece of new web magic this will let you many things but relevant to us it enables a website to work offline by intercepting your web requests with JavaScript.
-So my mental model for how this works is as follows.
-There is something called a service worker (SW) in a sw.js file. NOTE: this is restricted to be only served with https:// and localhost:// NOT http:// (otherwise a bad actor could spoof then give you bad SW this could let them pull from their origin while appearing to be on the website that you are on).
-This service worker will allow the normal js/html on the site to send requests normally so for example if let's say `fetch ardupilot.org/index.html` this can be called by normal js or html then the sw will intercept this request then it can do what ever you want it to do.
-For example this could include say fetching that 
-1. Fetching this from cache then validating it asynchronously (this is what offline wiki does)
+To solve this I can implement a PWA (porotable web app), which is a piece of modern web magic that allows us to do many things. Importantly, it enables a website to work offline by intercepting the web requests with JavaScript.
+
+So my mental model for how this technology works is as follows:
+
+There is something called a service worker (SW) in a sw.js file. NOTE: this is restricted to be only served with https:// and localhost:// NOT http:// (otherwise a bad actor could spoof then give you bad SW which could let them pull from their origin while appearing to be on your origin).
+This service worker will allow the normal js/html on the site to send requests normally. For example, let's say your js `fetch ardupilot.org/index.html` which can be called normaly, then the sw will intercept this request acting as an abstraction layer allowing you to process web requests in the two follong ways:
+
+1. Fetching this from the cache retuning to the user then validating it asynchronously (this is what offline wiki does)
 2. Just showing you the cache and not validating and trust on cache expiry
-3. There are almost endless other possibilities and I don't know them all
 
-This mental model despite being useful and cool but it will help you understand how this works better.
+This mental model is intresting and also helps you understand how these sites work.
 
-So first I needed some way to fill up the cache without DoSing (this is where you send so many requests that the server dies under the load). If I wrote some JS to just scan recursively download each page manually it would work for me but if I scaled this we would 100% go down and it would be unstoppable as an issue I have had in previous projects where a bad SW would not allow updates this meant that I had to hard reload the browser and on iOS it was an even bigger pain. But if this was to happen on the wiki we would have caused an unstoppable DoS attack amusing if it happened to someone else but a really bad day for us all if it happened to us.
+To solve the problem I needed a way to fill up the cache in the client's borwser without DoSing the wiki server (dosing is where you send so many requests that the server dies under the load). If I wrote some JS to scan recursively and download each page manually, it would work for me, one user, but if sacled we whould go down. It could be unstoppable because if the browser doenst coreclty update the js then these infected clients would be perpetualy dosing us.
+
+
 So to do this I made sure that I made it to regularly check that there was a new SW and if there was it would update itself. I made a second SW that can be dropped in to place of the first and this `kill-switch.js` will delete the cache. This was a last resort in case of a catastrophic failure. 
 So to fix this self DoS I first had to bundle the whole wiki in to a single compressed blob and send it to the user. So there were some optimisations that I did ...
 - One bundle per wiki
