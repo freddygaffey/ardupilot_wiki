@@ -1,12 +1,12 @@
 # The problem
 
-The problem is two fold primarily that we often fly, drive, sail, sub, blimp in remote locations. This means that there is poor reception this means that if we want to use the wiki here we need to hotspot this not the end of the world but in common use cases we often need to connect a laptop to a LAN that is not the phone's access point. This is VERY annoying as switching is time consuming and painful! This catastrophically degrades the UX of working on the project. The second issue is that the wiki is slow not unmanageably slow about 1000 ms this is not that bad for a normal user but to have to wait 1s for a page to load is very frustrating. This is not good enough modern web can comfortably have less than 100ms and we should be asking more from our technology.
+The problem is two fold, primarily that we often fly, drive, sail, sub or blimp in remote locations. This means if there is poor reception and we want to use the wiki in the field we often need to hotspot from a phone. This connection is high latency, expensive, and unreliable in addition to inconvenient, as commonly we often connect our laptop to a LAN that is not the phone's access point for telemetry. This is VERY annoying as switching the AP is time consuming and painful! This catastrophically degrades the UX (user experience) of working on the project.
 
-When you are debugging a vehicle out in the field under the hot sun or freezing wind begging your phone's hotspot to load quicker before your VTX drains your battery. This is a situation that I have personally never found myself as I always read the docs and do the configuration on the bench :). But a friend told me that this happened to them once.
 
-?????????
-So to solve this I decided trying to apply what I learned in my year 12 software course a PWA this Progressive Web App this is a way of basically 
-?????????
+The second issue is that the wiki is slow, not unmanageably slow, but about 1000 ms which is not that bad for a normal user but to have to wait 1s for a page to load is jarringly slow interrupting your flow while waiting for the wiki to load. We should demand better from our technology as modern web frameworks can comfortably support less than 100ms, which is a 10x improvement.
+
+
+When you are debugging a vehicle out in the field, under the hot sun or freezing wind, begging your phone's hotspot to load quicker before your VTX drains your battery, a situation that I have personally never found myself in as I always read the docs and do the configuration on the bench :). But a 'friend' told me that this happened to them once and to fix that 'friend's' issue is why I decided to make these changes.
 
 # The solution
 
